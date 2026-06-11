@@ -1,0 +1,75 @@
+# isidet/configs/train_pallet.yaml
+# 3-class warehouse SEGMENTATION — palette / carton / polybag (YOLO26-seg, masks).
+#
+# Run FROM trainer/isidet/ :
+#   conda activate isi-train
+#   python scripts/run_train.py --config configs/train_pallet.yaml
+#
+# Paths are relative to PROJECT_ROOT (trainer/isidet) for optimizer_config and
+# to CWD for dataset_path/output — so always launch from trainer/isidet/.
+
+project_name: "pallet3_seg"
+nc: 3
+class_names: ["palette", "carton", "polybag"]
+hooks:
+  - "IndustrialLogger"
+
+# --- model knobs: YOLO26 SEGMENTATION (Backbone yolo_onnx_seg-compatible) ---
+model_type: "yolo"            # backend selector (yolo vs rfdetr)
+model_size: "l"               # fallback variant if 'weights' is unset
+weights: "yolo26l-seg.pt"     # SEG model (-seg → mask head). swap to yolo11l-seg.pt,
+                              # or a prior best.pt to finetune from it (must be -seg)
+dataset_path: "data/pallet3_yolo_seg"   # 3-class seg dataset (5540 train / 1049 val)
+optimizer_config: "configs/optimizers/yolo_optim.yaml"
+batch_size: 4
+imgsz: 640                    # image size knob (matches Backbone letterbox 640)
+mixed_precision: true
+epochs: 200
+workers: 2                    # dataloader workers — host-RAM lever; set 1 (or 0)
+                              # if the WSL VM thrashes swap during training
+
+# --- one-shot export: .pt (training) + .onnx + OpenVINO .xml/.bin ---
+export_model: true
+export_formats: ["onnx", "openvino"]   # no tensorrt
+export_nms: false             # raw head (1, 4+nc, 8400); Backbone runs its own NMS
+export_opset: 17
+
+# === Adapted warehouse augmentations (replaces the former project's set) ===
+# Color — warehouse lighting is the dominant real-world variable
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.5
+# Geometry — fixed camera (small perspective), pallets at any floor orientation.
+# scale is the key LONG-DISTANCE / SMALL-OBJECT lever: a wider zoom range makes
+# pallets appear at many sizes (incl. far/small), so 0.5 → 0.7.
+degrees: 15.0
+translate: 0.1
+scale: 0.7                    # ↑ wider zoom range → more far/small pallet instances
+shear: 2.0
+perspective: 0.0005
+fliplr: 0.5
+flipud: 0.0                   # no vertical flip — gravity/perspective is real
+# Composition — occlusion + position variety. mosaic (4-in-1 tiling) is THE
+# small-object augmentation; copy_paste adds more small instances per image.
+mosaic: 1.0
+close_mosaic: 10             # clean final epochs
+mixup: 0.1                    # ↑ modest blend for generalization
+copy_paste: 0.3              # ↑ more pasted (small) instances → denser small targets
+erasing: 0.4
+# Camera-feed degradation (Albumentations injection in the trainer). The Downscale
+# transform now reaches 0.35× (was 0.5×) to simulate low-res long-distance capture.
+camera_aug: true            # MotionBlur + ImageCompression + GaussNoise + Downscale
+
+inference:
+  conf_threshold: 0.3
+  tracker:
+    track_buffer: 60
+    match_thresh: 0.9
+  logging:
+    enabled: true
+    save_interval: 3600
+    log_dir: "logs"
+  udp:
+    enabled: false
+    host: "127.0.0.1"
+    port: 9502

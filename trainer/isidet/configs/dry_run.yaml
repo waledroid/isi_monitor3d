@@ -1,0 +1,11 @@
+# isidet/configs/dry_run.yaml  (paths below are resolved relative to the repo root)
+project_name: "isiDetector_DryRun"
+model_type: "rfdetr"
+model_size: "s" # Use small for faster dry run
+optimizer_config: "isidet/configs/optimizers/rfdetr_optim.yaml"
+dataset_path: "isidet/data/rfdetr_dataset"
+batch_size: 1      # Absolute minimum for dry run
+image_size: 224    # Tiny size for verification
+epochs: 1
+mixed_precision: true
+export_model: false

@@ -1,0 +1,32 @@
+# configs/optimizers/yolo_optim.yaml
+#
+# NOTE: `epochs` is intentionally NOT set here. The merged optimizer config
+# overrides the train config, so defining epochs here would silently shadow the
+# `epochs:` in train_*.yaml. Set epochs in the train config (authoritative);
+# Ultralytics schedules the cosine LR over that value.
+
+optimizer:
+  type: "AdamW"
+  lr: 0.0005
+  weight_decay: 0.0005
+  
+  scheduler:
+    type: "CosineAnnealing"
+    warmup_epochs: 3
+    T_max: 200     # 🧠 Perfectly synced with total epochs
+    eta_min: 0.00001
+
+early_stopping:
+  enabled: true
+  patience: 20     # 🛑 stop if fitness hasn't improved in 20 epochs (keeps best).
+                   # NOTE: a crash + --resume RESETS Ultralytics' early-stop
+                   # counter, so on a resumed run, enforce it by watching results.csv.
+  min_delta: 0.0005
+  monitor: "mAP50"
+  mode: "max"
+  restore_best_weights: true
+
+checkpoint:
+  save_best_only: true
+  save_frequency: 5
+  keep_last: 3

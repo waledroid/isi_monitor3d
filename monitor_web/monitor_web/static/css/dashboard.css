@@ -1,0 +1,1660 @@
+/* ISI Monitor 3D Dashboard - Premium Glassmorphism Redesign
+   ========================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* Color Palette */
+  --bg: #07080c;
+  --text: #ffffff;
+  --text-muted: #94a3b8;
+  
+  /* Glass Colors */
+  --glass-bg: rgba(18, 22, 33, 0.45);
+  --glass-bg-hover: rgba(255, 255, 255, 0.08);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(255, 255, 255, 0.16);
+  --glass-inset-highlight: rgba(255, 255, 255, 0.08);
+  --glass-glow: rgba(55, 66, 250, 0.15);
+
+  /* Accents */
+  --badge-red: #ff4757;
+  --start-blue: #3742fa;
+  --stop-red: #ff4757;
+  --status-green: #2ed573;
+  --status-red: #ff4757;
+  --accent-blue: #3b82f6;
+  --accent-purple: #8b5cf6;
+  --accent-emerald: #10b981;
+}
+
+* { 
+  box-sizing: border-box; 
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  /* Premium radial nebulas that bleed through glass cards */
+  background-image: 
+    radial-gradient(circle at 10% 30%, rgba(59, 130, 246, 0.08) 0%, transparent 45%),
+    radial-gradient(circle at 90% 70%, rgba(255, 71, 87, 0.05) 0%, transparent 45%),
+    radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.04) 0%, transparent 60%);
+  color: var(--text);
+  font-family: "Outfit", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  height: 100vh;
+  overflow: hidden;
+  letter-spacing: -0.01em;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ---------------- Header ---------------- */
+
+.header {
+  background: rgba(7, 8, 12, 0.6);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  z-index: 10;
+  position: relative;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-logo {
+  height: 42px;
+  background: white;
+  padding: 5px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: transform 0.3s ease;
+  cursor: pointer;
+}
+
+.header-logo:hover {
+  transform: scale(1.03);
+}
+
+.header-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #ffffff, #94a3b8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.lang-toggle {
+  display: flex;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.lang-btn {
+  padding: 4px 12px;
+  font-weight: 600;
+  font-size: 11px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+}
+
+.lang-btn[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.status-system {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  position: relative;
+}
+
+@keyframes pulse-green {
+  0% { box-shadow: 0 0 0 0 rgba(46, 213, 115, 0.6); }
+  70% { box-shadow: 0 0 0 8px rgba(46, 213, 115, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(46, 213, 115, 0); }
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(255, 71, 87, 0.6); }
+  70% { box-shadow: 0 0 0 8px rgba(255, 71, 87, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 71, 87, 0); }
+}
+
+.status-dot-green {
+  background: var(--status-green);
+  animation: pulse-green 2s infinite;
+}
+
+.status-dot-red {
+  background: var(--status-red);
+  animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-amber {
+  0% { box-shadow: 0 0 0 0 rgba(245, 171, 53, 0.6); }
+  70% { box-shadow: 0 0 0 8px rgba(245, 171, 53, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 171, 53, 0); }
+}
+
+/* Amber = ready but not running (press START). */
+.status-dot-amber {
+  background: #f5ab35;
+  animation: pulse-amber 2s infinite;
+}
+
+/* Status-line text tints, matching the dot. */
+.status-value.status-green { color: var(--status-green); }
+.status-value.status-amber { color: #f5ab35; }
+.status-value.status-red   { color: var(--status-red); }
+
+/* ---------------- Main Layout ---------------- */
+
+.main-container {
+  display: flex;
+  gap: 20px;
+  padding: 20px;
+  height: calc(100vh - 72px);
+}
+
+.left-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.right-content {
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  flex-shrink: 0;
+}
+
+/* Premium Glassmorphism Panels */
+.panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  box-shadow: 
+    0 8px 32px 0 rgba(0, 0, 0, 0.4),
+    inset 0 1px 1px 0 var(--glass-inset-highlight);
+  border-radius: 20px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* A ZONE panel whose zone is declared + saved (synced) — light-green cue. */
+.panel.zone-synced {
+  border-color: rgba(134, 239, 172, 0.55);   /* #86efac, light green */
+  box-shadow:
+    0 8px 32px 0 rgba(0, 0, 0, 0.4),
+    inset 0 1px 1px 0 var(--glass-inset-highlight),
+    0 0 0 1px rgba(134, 239, 172, 0.25);
+}
+.panel.zone-synced .panel-badge {
+  background: rgba(134, 239, 172, 0.22);
+  color: #bbf7d0;
+}
+
+.panel:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 
+    0 12px 40px 0 rgba(0, 0, 0, 0.5),
+    inset 0 1px 1px 0 var(--glass-inset-highlight);
+}
+
+.panel-toolbar {
+  padding: 18px 24px 10px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;   /* clip the cam overscan (scaled wrapper) to the panel */
+}
+
+/* The MAP / CAM / MP4 child views fill the body absolutely so they're not
+   subject to the flex-center trap that left the floor map feeling cramped. */
+.panel-body > .big-view {
+  position: absolute;
+  inset: 0;
+}
+
+.panel-big {
+  flex: 1;
+  min-height: 0;
+}
+
+.zones-grid {
+  display: grid;
+  gap: 20px;
+  height: 35%;
+  transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.zones-grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: 1fr;
+}
+
+.zones-grid-3 {
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: 1fr;
+}
+
+.zones-grid-6 {
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  height: 50%;
+}
+
+/* Badges (LIVE / ZONE 1 / ZONE 2) */
+
+.panel-badge {
+  position: absolute;
+  bottom: 14px;
+  z-index: 7;
+  background: var(--badge-red);
+  color: white;
+  padding: 6px 18px;
+  border-radius: 30px;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  box-shadow: 0 4px 12px rgba(255, 71, 87, 0.3);
+}
+
+/* Big-panel views */
+
+.big-view {
+  width: 100%;
+  height: 100%;
+  background: rgba(7, 8, 12, 0.35);
+}
+
+/* Expand control — pinned to a panel's bottom-RIGHT */
+.panel .panel-expand-btn {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  left: auto;
+  z-index: 7;
+  padding: 8px;
+  border-radius: 8px;
+  line-height: 0;
+  background: rgba(15, 18, 25, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.panel .panel-expand-btn:hover {
+  background: rgba(15, 18, 25, 0.95);
+  border-color: rgba(255, 255, 255, 0.3);
+  transform: scale(1.05);
+}
+
+.panel-expand-btn svg { display: block; }
+.panel-expand-btn .icon-collapse { display: none; }
+
+/* ---- In-column TALL expansion (the <> toggle) ----
+   One left-column panel (big / zone 1 / zone 2) takes the FULL column height while
+   its siblings hide. The sidebar is untouched. Distinct from `.expanded` (the []
+   full-width overlay, big panel only). */
+.tall-hidden { display: none !important; }
+.zones-grid.has-tall-zone { height: 100%; }
+.panel-zone.tall { grid-column: 1 / -1; }
+/* The tall zone's video grows from the 85% inset slice to the full panel. */
+.panel-zone.tall .zone-patch-img { width: 100%; height: 100%; }
+/* Big panel: <> sits left of the [] full-width button (big panel has BOTH). */
+.panel-big .panel-tall-btn { right: 56px; }
+/* Icon state for the tall toggles (<> → >< while tall). */
+.panel-big.tall #big-panel-tall .icon-expand,
+.panel-zone.tall .panel-expand-btn .icon-expand { display: none; }
+.panel-big.tall #big-panel-tall .icon-collapse,
+.panel-zone.tall .panel-expand-btn .icon-collapse { display: block; }
+
+/* Tall-toggle animation for the ZONE panels: a quick scale pop. The two keyframe
+   NAMES matter — switching .tall swaps the animation property, which restarts it,
+   so the panel pops up when expanded AND pops down when it returns (siblings
+   coming back from display:none replay zone-pop too). */
+@keyframes zone-pop {
+  from { transform: scale(0.92); opacity: 0.55; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+@keyframes zone-pop-tall {
+  from { transform: scale(0.85); opacity: 0.55; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+.zones-grid .panel-zone { animation: zone-pop 0.18s ease; }
+.zones-grid .panel-zone.tall { animation: zone-pop-tall 0.2s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .zones-grid .panel-zone, .zones-grid .panel-zone.tall { animation: none; }
+}
+
+/* "+ Add zone" placeholder in an undeclared zone panel. */
+.zone-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+.zone-add:hover { color: var(--text); }
+.zone-add-plus {
+  font-size: 26px;
+  line-height: 1;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 12px;
+}
+.zone-add:hover .zone-add-plus { border-color: rgba(255, 255, 255, 0.5); }
+
+/* Big-panel title/LIVE badge sits at the bottom-LEFT */
+#big-panel-badge {
+  left: 14px;
+  right: auto;
+}
+
+/* Expanded panels styling */
+.panel.expanded,
+.panel.closing {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(1920px, 96vw);
+  height: min(1080px, 92vh);
+  z-index: 1000;
+  border-radius: 24px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.7);
+  background: rgba(11, 14, 23, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.panel.expanded { animation: panel-pop 0.24s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.panel.closing { animation: panel-pop-out 0.2s cubic-bezier(0.4, 0, 1, 1) forwards; }
+.panel.expanded .icon-expand,
+.panel.closing .icon-expand { display: none; }
+.panel.expanded .icon-collapse,
+.panel.closing .icon-collapse { display: block; }
+
+@keyframes panel-pop {
+  from { transform: translate(-50%, -50%) scale(0.92); opacity: 0; }
+  to   { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
+}
+@keyframes panel-pop-out {
+  from { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
+  to   { transform: translate(-50%, -50%) scale(0.92); opacity: 0; }
+}
+
+#big-panel-backdrop,
+.panel-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: rgba(4, 5, 8, 0.75);
+  backdrop-filter: blur(6px);
+}
+
+.hidden { display: none !important; }
+[x-cloak] { display: none !important; }
+
+/* Baseline = the WHOLE frame (contain). The normal view then overscans the cam
+   wrapper (image + overlay together) so it fills the panel with only the edges
+   cropped; expand/verify/draw drop the overscan to show the true 100% frame. */
+.cam-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.cam-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Overscan the cam view ~120% normally (tunable). Scaling the WRAPPER zooms the
+   <img> and its overlay <canvas> identically, so zone / ROI overlays stay locked
+   to the video with no per-shape math. .panel-body clips the spill. */
+:root { --cam-overscan: 1.2; }
+#cam_a-wrap, #cam_b-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform: scale(var(--cam-overscan));
+  transform-origin: center center;
+  transition: transform .16s ease;
+}
+/* Full-frame (scale 1) states: expanded overlay, verify-warp, and while drawing
+   an ROI/calibration box (so click capture + preview map in plain-contain space). */
+.panel-big.expanded #cam_a-wrap, .panel-big.expanded #cam_b-wrap,
+#cam_a-wrap.cam-flat, #cam_b-wrap.cam-flat,
+body.cam-drawing #cam_a-wrap, body.cam-drawing #cam_b-wrap {
+  transform: none;
+}
+
+/* Zone panels */
+
+.zone-placeholder {
+  width: 100%;
+  height: 100%;
+  background: rgba(7, 8, 12, 0.2);
+}
+
+.zone-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 13px;
+}
+
+.zone-badge {
+  left: 14px;
+  right: auto;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+  color: #ffffff;
+  padding: 5px 14px;
+  font-size: 11px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+/* ---------------- Sidebar ---------------- */
+
+.sidebar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  gap: 20px;
+  overflow: hidden;
+}
+
+.sidebar-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  box-shadow: 
+    0 8px 32px 0 rgba(0, 0, 0, 0.3),
+    inset 0 1px 1px 0 var(--glass-inset-highlight);
+  border-radius: 16px;
+  padding: 16px 20px;
+  min-height: 0;
+}
+
+.sidebar-title {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.sidebar-content {
+  flex: 1;
+  overflow: auto;
+  font-family: "JetBrains Mono", "Menlo", "Consolas", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Sidebar accordion: an expand button grows a panel to fill the whole sidebar;
+   the other collapses to a clickable title strip. */
+.sidebar-section { position: relative; transition: flex-grow .16s ease; }
+.sidebar-section.section-expanded { flex: 1 1 100%; }
+.sidebar-section.section-collapsed { flex: 0 0 auto; }
+.sidebar-section.section-collapsed .sidebar-content { display: none; }
+.sidebar-section.section-collapsed .sidebar-title {
+  margin-bottom: 0; border-bottom: none; padding-bottom: 0;
+}
+
+.sidebar-expand-btn {
+  position: absolute;
+  bottom: 8px; right: 8px;
+  width: 26px; height: 26px;
+  padding: 0;
+  opacity: 0.55;
+  z-index: 2;
+}
+.sidebar-expand-btn:hover { opacity: 1; }
+.sidebar-section.section-collapsed .sidebar-expand-btn { top: 10px; bottom: auto; }
+.sidebar-expand-btn .icon-collapse { display: none; }
+.sidebar-section.section-expanded .sidebar-expand-btn .icon-expand { display: none; }
+.sidebar-section.section-expanded .sidebar-expand-btn .icon-collapse { display: inline; }
+
+/* Live KPI rows (expanded STATUS panel): latency p95, homography reprojection. */
+.kpi-group { margin-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 6px; }
+.kpi-row { display: flex; justify-content: space-between; align-items: baseline; padding: 3px 0; }
+.kpi-key { color: var(--text-muted); }
+.kpi-val { font-variant-numeric: tabular-nums; }
+.kpi-target { color: var(--text-muted); font-size: 0.85em; margin-left: 5px; }
+.kpi-ok { color: #2ed573; }
+.kpi-bad { color: #ff6b6b; }
+
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e2e8f0;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+/* Parsed log rows: dim time + source tag, message coloured by level. */
+.log-time { color: var(--text-muted); margin-right: 6px; }
+.log-src {
+  color: #7aa2c0;
+  margin-right: 6px;
+  text-transform: uppercase;
+  font-size: 0.85em;
+  letter-spacing: 0.03em;
+}
+.log-count {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 0 5px;
+  font-size: 0.85em;
+}
+.log-info .log-msg { color: #e2e8f0; }
+.log-debug { opacity: 0.7; }
+.log-warning .log-msg { color: #f5ab35; }
+.log-error .log-msg,
+.log-critical .log-msg { color: #ff6b6b; }
+.log-raw { color: #94a3b8; opacity: 0.85; }
+
+.logs-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Zone-patch panels: the cropped ROI stream sits CENTRED in the panel body. */
+.panel-zone .panel-body {
+  position: relative;
+  display: flex;
+  align-items: center;     /* centre the slice vertically … */
+  justify-content: center; /* … and horizontally in its view */
+}
+.zone-patch-img {
+  width: 85%;            /* slice shown at ~85% of the panel, not full-bleed */
+  height: 85%;
+  object-fit: contain;  /* show the whole slice (no crop) */
+  display: block;
+}
+.panel-zone.expanded .zone-patch-img { width: 100%; height: 100%; }
+/* Per-zone detection model picker, overlaid top-left on the patch. */
+.zone-model-select {
+  position: absolute;
+  top: 6px; left: 6px;
+  max-width: 65%;
+  font-size: 10px;
+  padding: 2px 5px;
+  color: #e2e8f0;
+  background: rgba(11, 14, 23, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  opacity: 0.65;
+  z-index: 3;
+}
+.zone-model-select:hover { opacity: 1; }
+
+.status-content .status-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.status-content .status-row:last-child { border-bottom: none; }
+.status-key   { color: var(--text-muted); font-family: inherit; font-size: 12px; }
+.status-value { color: var(--text); font-family: inherit; font-weight: 500; }
+
+/* ---------------- Controls (START / STOP) ---------------- */
+
+.controls {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------------- Glassy Buttons ---------------- */
+
+.glass-btn {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.glass-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+  transform: translateY(-1.5px);
+  color: #fff;
+}
+
+.glass-btn:active {
+  transform: translateY(0.5px);
+}
+
+/* Toggled-on icon button (e.g. the calibration-verification warp toggle). */
+.glass-btn.is-active {
+  background: rgba(46, 204, 113, 0.22);
+  border-color: rgba(46, 204, 113, 0.55);
+  color: #2ecc71;
+}
+
+button.btn-start { 
+  background: linear-gradient(135deg, rgba(55, 66, 250, 0.45), rgba(55, 66, 250, 0.25));
+  border-color: rgba(55, 66, 250, 0.5);
+  box-shadow: 0 4px 20px rgba(55, 66, 250, 0.2), inset 0 1px 1px 0 rgba(255, 255, 255, 0.2);
+  padding: 14px 36px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  border-radius: 14px;
+  color: #fff;
+}
+button.btn-start:hover {
+  background: linear-gradient(135deg, rgba(55, 66, 250, 0.65), rgba(55, 66, 250, 0.4));
+  border-color: rgba(55, 66, 250, 0.8);
+  box-shadow: 0 8px 30px rgba(55, 66, 250, 0.45);
+  transform: translateY(-2px);
+}
+
+button.btn-stop { 
+  background: linear-gradient(135deg, rgba(255, 71, 87, 0.45), rgba(255, 71, 87, 0.25));
+  border-color: rgba(255, 71, 87, 0.5);
+  box-shadow: 0 4px 20px rgba(255, 71, 87, 0.2), inset 0 1px 1px 0 rgba(255, 255, 255, 0.2);
+  padding: 14px 36px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  border-radius: 14px;
+  color: #fff;
+}
+button.btn-stop:hover {
+  background: linear-gradient(135deg, rgba(255, 71, 87, 0.65), rgba(255, 71, 87, 0.4));
+  border-color: rgba(255, 71, 87, 0.8);
+  box-shadow: 0 8px 30px rgba(255, 71, 87, 0.45);
+  transform: translateY(-2px);
+}
+
+/* ---------------- Custom Tabs (MAP / CAM 1 / CAM 2) ---------------- */
+
+.custom-tabs {
+  display: flex;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  padding: 4px;
+  gap: 4px;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.custom-tab {
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  outline: none;
+  position: relative;
+  font-family: inherit;
+}
+
+.custom-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.custom-tab.active {
+  background: linear-gradient(135deg, rgba(55, 66, 250, 0.6), rgba(55, 66, 250, 0.45));
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 15px rgba(55, 66, 250, 0.3);
+}
+
+.custom-tab[disabled],
+.custom-tab[aria-disabled="true"] {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* Toolbar icon actions (calibrate · verify warp · + settings) grouped together
+   on the right of the toolbar instead of each one absorbing its own auto-margin
+   and spreading apart. */
+.toolbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.toolbar-actions .btn-icon {
+  margin-left: 0;
+}
+
+/* ---------------- Icon Buttons ---------------- */
+.btn-icon {
+  margin-left: auto;
+  border-radius: 50%;
+  padding: 9px;
+  aspect-ratio: 1;
+}
+.btn-icon svg {
+  display: block;
+}
+
+/* MP4 dev viewer toolbar */
+.mp4-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+}
+.mp4-toolbar select {
+  background: rgba(15, 18, 25, 0.85);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* ============== Zone manager overlay / Settings ============== */
+.config-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 5, 8, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.config-overlay-panel {
+  width: min(1080px, 96vw);
+  height: 84vh;
+  max-height: 88vh;
+  overflow-y: hidden;
+  padding: 28px 32px;
+  border-radius: 24px;
+  background: rgba(12, 15, 24, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 
+    0 24px 70px rgba(0, 0, 0, 0.6),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Landscape tab layout styles */
+.settings-container {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  gap: 28px;
+}
+
+.settings-sidebar {
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  padding-right: 20px;
+  flex-shrink: 0;
+}
+
+.settings-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  padding: 12px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 100%;
+  outline: none;
+  font-family: inherit;
+}
+
+.settings-tab-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  transform: translateX(2px);
+}
+
+.settings-tab-btn.active {
+  background: linear-gradient(135deg, rgba(55, 66, 250, 0.25), rgba(55, 66, 250, 0.15));
+  border-color: rgba(55, 66, 250, 0.45);
+  color: white;
+  box-shadow: 0 4px 15px rgba(55, 66, 250, 0.15);
+}
+
+.settings-tab-btn .tab-icon {
+  color: var(--text-muted);
+  opacity: 0.8;
+  transition: all 0.25s ease;
+}
+
+.settings-tab-btn.active .tab-icon {
+  color: #5352ed;
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+.settings-content-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.settings-tab-content {
+  display: none;
+  flex-direction: column;
+  gap: 20px;
+  animation: settingsFadeIn 0.2s ease-out;
+}
+
+.settings-tab-content.active {
+  display: flex;
+}
+
+@keyframes settingsFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.config-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 14px;
+}
+
+.config-overlay-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.config-section {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.02);
+}
+
+.config-section h3 {
+  margin: 0 0 16px 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding-bottom: 8px;
+}
+
+/* Forms and grid controls inside Settings */
+
+.config-cameras {
+  display: grid;
+  grid-template-columns: 100px 180px 1fr;
+  row-gap: 16px;
+  column-gap: 20px;
+  align-items: center;
+}
+
+.config-cameras label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.zm-cam-field {
+  min-width: 0;
+}
+.zm-cam-field input {
+  width: 100%;
+}
+
+.config-model {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  row-gap: 16px;
+  column-gap: 20px;
+  align-items: center;
+}
+
+.config-model label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+/* Custom inputs, select styling */
+.config-cameras select,
+.config-cameras input,
+.config-model input,
+.config-model select,
+.config-zone-row input,
+.config-zone-row select,
+.zm-mp4-select {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  min-width: 0;
+  transition: all 0.25s ease;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.config-cameras select:focus,
+.config-cameras input:focus,
+.config-model input:focus,
+.config-model select:focus,
+.config-zone-row input:focus,
+.config-zone-row select:focus,
+.zm-mp4-select:focus {
+  outline: none;
+  border-color: rgba(55, 66, 250, 0.6);
+  background: rgba(0, 0, 0, 0.45);
+  box-shadow: 
+    0 0 0 3px rgba(55, 66, 250, 0.15),
+    inset 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.config-cameras input:disabled,
+.config-cameras select:disabled,
+.config-model input:disabled,
+.config-model select:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.config-model input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--start-blue);
+  justify-self: start;
+  margin: 0;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+/* Zone rows */
+
+.config-zone-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.config-zone-row {
+  display: grid;
+  grid-template-columns: 28px minmax(80px, 1.4fr) auto 120px 78px 70px 40px 32px;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 18px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: all 0.25s ease;
+}
+
+.config-zone-row:hover {
+  background: rgba(0, 0, 0, 0.35);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Per-zone outline-colour swatch (compact, overrides the generic input padding). */
+.config-zone-row input.zm-color {
+  grid-column: 7;
+  width: 36px;
+  height: 30px;
+  padding: 2px !important;
+  cursor: pointer;
+  min-width: 0;
+}
+
+/* Per-zone delete (trash) icon — last column; reddens on hover. */
+.config-zone-row .zm-delete {
+  grid-column: 8;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.config-zone-row .zm-delete:hover { color: #f87171; }
+
+/* Per-zone confidence box — tighter padding so the small number field fits. */
+.config-zone-row input.zm-conf { padding: 8px 8px; }
+
+/* Saved polygon vertices — spans the whole row, wraps under the controls. */
+.config-zone-row .zm-coords {
+  grid-column: 1 / -1;
+  font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text-muted);
+  opacity: 0.85;
+  word-break: break-word;
+}
+.config-zone-row .zm-coords b {
+  color: var(--text);
+  font-weight: 600;
+  opacity: 0.7;
+}
+
+.config-zone-num {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zm-iconbtn {
+  padding: 8px;
+  border-radius: 8px;
+  line-height: 0;
+}
+
+.zm-iconbtn svg {
+  display: block;
+}
+
+.zm-polygon {
+  font-family: "JetBrains Mono", "Menlo", monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+.zm-polygon.has-points {
+  color: var(--status-green);
+  background: rgba(46, 213, 115, 0.08);
+  border-color: rgba(46, 213, 115, 0.2);
+}
+
+.config-overlay-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.config-toast {
+  margin-top: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  background: rgba(55, 66, 250, 0.15);
+  border: 1px solid rgba(55, 66, 250, 0.3);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(55, 66, 250, 0.2);
+}
+
+.config-toast.is-error {
+  background: rgba(255, 71, 87, 0.15);
+  border-color: rgba(255, 71, 87, 0.3);
+  box-shadow: 0 4px 12px rgba(255, 71, 87, 0.2);
+}
+
+/* Draw-mode top toolbar */
+.draw-toolbar {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 24px;
+  border-radius: 40px;
+  background: rgba(12, 16, 27, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  font-size: 13px;
+  box-shadow: 
+    0 10px 30px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.draw-toolbar .draw-label {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+}
+
+.draw-toolbar .draw-hint {
+  color: var(--text-muted);
+}
+
+.draw-toolbar .draw-count {
+  color: var(--status-green);
+  font-family: "JetBrains Mono", monospace;
+  font-weight: 600;
+}
+
+/* Icon buttons inside draw toolbar */
+.draw-toolbar .draw-confirm,
+.draw-toolbar .draw-cancel {
+  padding: 8px 12px;
+  border-radius: 8px;
+  line-height: 0;
+}
+
+.draw-toolbar .draw-confirm svg,
+.draw-toolbar .draw-cancel svg { display: block; }
+
+.draw-toolbar .draw-confirm {
+  background: rgba(46, 213, 115, 0.4);
+  border-color: rgba(46, 213, 115, 0.5);
+  box-shadow: 0 4px 12px rgba(46, 213, 115, 0.2);
+}
+.draw-toolbar .draw-confirm:hover { 
+  background: rgba(46, 213, 115, 0.6); 
+  border-color: rgba(46, 213, 115, 0.7);
+}
+
+.draw-toolbar .draw-cancel {
+  background: rgba(255, 71, 87, 0.4);
+  border-color: rgba(255, 71, 87, 0.5);
+  box-shadow: 0 4px 12px rgba(255, 71, 87, 0.2);
+}
+.draw-toolbar .draw-cancel:hover {
+  background: rgba(255, 71, 87, 0.6);
+  border-color: rgba(255, 71, 87, 0.7);
+}
+
+/* ---- S16: distance-lines rule rows in the Settings modal ---- */
+
+.config-link-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.config-link-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 110px 80px auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 18px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: all 0.25s ease;
+}
+
+.config-link-row:hover {
+  background: rgba(0, 0, 0, 0.35);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.config-link-row input,
+.config-link-row select {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.config-link-row input:focus,
+.config-link-row select:focus {
+  outline: none;
+  border-color: rgba(55, 66, 250, 0.6);
+}
+
+.config-link-add {
+  margin-top: 12px;
+}
+
+/* ============ S17.1: draw-target picker (CAM-only) ============ */
+
+.zm-draw-picker {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 5, 8, 0.78);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  /* Settings overlay sits at z-index 2000; picker floats above it. */
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zm-draw-picker-panel {
+  width: min(440px, 92vw);
+  padding: 26px 30px;
+  border-radius: 22px;
+  background: rgba(14, 18, 28, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 24px 70px rgba(0, 0, 0, 0.6),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  text-align: center;
+}
+
+.zm-draw-picker-panel h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.zm-draw-picker-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.zm-draw-target-btn {
+  padding: 16px 12px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 14px;
+}
+
+.zm-draw-target-btn[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.zm-draw-picker-msg {
+  margin: 0;
+  font-size: 13px;
+  color: #fca5a5;
+  line-height: 1.4;
+}
+
+.zm-draw-picker-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ============ S18: Calibrate button + modal ============ */
+
+.btn-calibrate {
+  /* Default state is "no calibration" → white icon. */
+  color: #ffffff;
+  transition: color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.btn-calibrate[data-state="green"] {
+  color: #2ecc71;
+  border-color: rgba(46, 204, 113, 0.45);
+  box-shadow:
+    0 0 0 1px rgba(46, 204, 113, 0.18),
+    0 4px 12px rgba(46, 204, 113, 0.18);
+}
+
+.cal-panel {
+  width: min(560px, 94vw);
+  text-align: left;
+}
+
+.cal-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cal-hint {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #cbd5e1;
+}
+
+.cal-cam-note {
+  margin: 0;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.cal-cam-note #cal-target-cam {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.cal-pallet-dims {
+  display: grid;
+  grid-template-columns: 1fr 100px;
+  gap: 10px 16px;
+  align-items: center;
+}
+
+.cal-pallet-dims label {
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.cal-pallet-dims input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-family: inherit;
+}
+
+.cal-pallet-dims input:focus {
+  outline: none;
+  border-color: rgba(55, 66, 250, 0.6);
+}
+
+/* Point-count selector (4 / 5+) + extra-point world-coord rows. */
+.cal-points-row {
+  display: grid;
+  grid-template-columns: 1fr 100px;
+  gap: 6px 16px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.cal-points-row label {
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.cal-points-row input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-family: inherit;
+}
+
+.cal-hint-inline {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.cal-extra-points {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cal-extra-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 90px;
+  gap: 8px;
+  align-items: center;
+}
+
+.cal-extra-row label {
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.cal-extra-row input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-family: inherit;
+}
+
+.cal-primary {
+  padding: 12px 18px;
+  background: rgba(46, 204, 113, 0.25);
+  border-color: rgba(46, 204, 113, 0.45);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.cal-primary:hover {
+  background: rgba(46, 204, 113, 0.4);
+}
+
+.cal-result {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cal-result.is-success {
+  border-color: rgba(46, 204, 113, 0.45);
+  color: #86efac;
+}
+
+.cal-result.is-error {
+  border-color: rgba(252, 165, 165, 0.45);
+  color: #fca5a5;
+}
+
+.cal-cli {
+  margin: 0;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: #cbd5e1;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.layout-panel { position: absolute; top: 64px; right: 16px; z-index: 1500;
+  background: rgba(20,24,28,0.92); border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px; padding: 12px 14px; width: 290px; color: #e6e6e6; }
+.layout-panel.hidden { display: none; }
+.layout-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.layout-row label { font-size: 12px; color: #9aa5b1; flex-shrink: 0; }
+.layout-hint { font-size: 11px; color: #9aa5b1; margin: 4px 0; }
+
+/* Element counter pill */
+.layout-count {
+  font-size: 11px; font-weight: 600; background: rgba(0,217,255,0.15);
+  color: #00d9ff; border: 1px solid rgba(0,217,255,0.35);
+  border-radius: 20px; padding: 2px 9px; white-space: nowrap;
+}
+.layout-count-row { justify-content: space-between; }
+
+/* Button action rows */
+.layout-actions { gap: 6px; }
+.layout-actions > button { flex: 1; }
+
+/* Layout panel button base */
+.layout-btn-primary, .layout-btn-danger, .layout-btn-outline {
+  padding: 5px 10px; font-size: 12px; border-radius: 7px; cursor: pointer;
+  border: 1px solid transparent; transition: background 0.15s, opacity 0.15s;
+  white-space: nowrap;
+}
+.layout-btn-primary {
+  background: rgba(0,217,255,0.18); color: #00d9ff; border-color: rgba(0,217,255,0.35);
+}
+.layout-btn-primary:hover { background: rgba(0,217,255,0.30); }
+.layout-btn-danger {
+  background: rgba(239,68,68,0.18); color: #f87171; border-color: rgba(239,68,68,0.35);
+}
+.layout-btn-danger:hover:not(:disabled) { background: rgba(239,68,68,0.30); }
+.layout-btn-danger:disabled { opacity: 0.35; cursor: default; }
+.layout-btn-outline {
+  background: transparent; color: #9aa5b1; border-color: rgba(255,255,255,0.2);
+}
+.layout-btn-outline:hover { background: rgba(255,255,255,0.07); color: #e6e6e6; }
+
+/* Inference-size slider row in the Settings detection section. */
+.zm-imgsz-row { display: flex; align-items: center; gap: 10px; }
+.zm-imgsz-row input[type="range"] { flex: 1; }
+#zm-model-imgsz-val { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; }
+.zm-hint { display: block; font-size: 11px; color: #9aa5b1; margin: 2px 0 8px; }
+

@@ -1,0 +1,73 @@
+# trainer/isidet/configs/train_palette_det.yaml
+# Single-class "palette" DETECTION (bbox) on the new 625-image master at
+# video/pallet_seg.v1/ (derived AABB from the LabelMe polygons).
+#
+# This is NEW — the existing train_pallet.yaml (133-image pallet_v2_yolo /
+# "palette_vide") is intentionally left untouched so the current working
+# pipeline keeps producing the same artefact you're serving.
+#
+# Run FROM trainer/isidet/ :
+#   conda activate isi-train
+#   python scripts/run_train.py --config configs/train_palette_det.yaml
+#
+# Dataset prep (one-shot):
+#   python ../../scripts/labelme_to_yolo.py \
+#     --src ../../video/pallet_seg.v1 \
+#     --out data/pallet_seg_yolo_det \
+#     --class-name palette --task detect --preserve-splits --force
+
+project_name: "palette_det"
+nc: 1
+class_names: ["palette"]
+hooks:
+  - "IndustrialLogger"
+
+# --- model knobs: YOLOv11 DETECTION (Backbone-compatible raw head) ---
+model_type: "yolo"
+model_size: "n"
+weights: "yolo11n.pt"          # detect head, single ONNX output (1, 4+nc, A)
+dataset_path: "data/pallet_seg_yolo_det"
+optimizer_config: "configs/optimizers/yolo_optim.yaml"
+batch_size: 16
+imgsz: 640
+mixed_precision: true
+epochs: 100
+workers: 2
+
+# --- one-shot export: .pt + .onnx (raw head) + OpenVINO .xml/.bin ---
+export_model: true
+export_formats: ["onnx", "openvino"]
+export_nms: false
+export_opset: 17
+
+# === Same warehouse augmentations ===
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.5
+degrees: 15.0
+translate: 0.1
+scale: 0.5
+shear: 2.0
+perspective: 0.0005
+fliplr: 0.5
+flipud: 0.0
+mosaic: 1.0
+close_mosaic: 10
+mixup: 0.05
+copy_paste: 0.1
+erasing: 0.4
+camera_aug: true
+
+inference:
+  conf_threshold: 0.3
+  tracker:
+    track_buffer: 60
+    match_thresh: 0.9
+  logging:
+    enabled: true
+    save_interval: 3600
+    log_dir: "logs"
+  udp:
+    enabled: false
+    host: "127.0.0.1"
+    port: 9502

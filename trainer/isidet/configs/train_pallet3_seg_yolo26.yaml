@@ -1,0 +1,73 @@
+# trainer/isidet/configs/train_pallet3_seg_yolo26.yaml
+# 3-class instance SEGMENTATION — palette + carton + polybag — YOLO26m-seg @ 640.
+#
+# Why this run: on-site the 1024 model underperformed vs 640 on the actual camera
+# (likely the sub-stream / feed resolution is closer to 640, and 1024 over-fit far
+# detail). So we train natively at 640. Same dataset + leak-free split as the
+# yolo11m-seg run.
+#
+# Run FROM trainer/isidet/ :
+#   conda activate isi-train
+#   python scripts/run_train.py --config configs/train_pallet3_seg_yolo26.yaml
+
+project_name: "pallet3_seg_yolo26"
+nc: 3
+class_names: ["palette", "carton", "polybag"]
+hooks:
+  - "IndustrialLogger"
+  - "MemoryCleanup"      # gc + cuda cache clear each epoch (WSL OOM guard)
+
+# --- model: YOLO26 SEGMENTATION ---
+model_type: "yolo"
+model_size: "m"
+weights: "yolo26m-seg.pt"     # *-seg.pt → Ultralytics auto-selects task=segment
+dataset_path: "data/pallet3_yolo_seg"   # same 3-class set as the yolo11m run
+optimizer_config: "configs/optimizers/yolo26_optim.yaml"   # AdamW + patience 25
+
+# 12 GB RTX 5070: 640 is far lighter than 1024, so batch 4 is comfortable and
+# coexists with the dashboard's GPU detector.
+batch_size: 4
+imgsz: 640
+mixed_precision: true
+epochs: 200
+workers: 2
+cache: false
+
+# --- one-shot export: .pt + .onnx (raw head, DYNAMIC) + OpenVINO ---
+export_model: true
+export_formats: ["onnx", "openvino"]
+export_nms: false
+export_opset: 17
+export_dynamic: true     # dynamic input → the dashboard imgsz slider works
+
+# === Warehouse augmentations (same as the yolo11m run) ===
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.5
+degrees: 15.0
+translate: 0.1
+scale: 0.5
+shear: 2.0
+perspective: 0.0005
+fliplr: 0.5
+flipud: 0.0
+mosaic: 1.0
+close_mosaic: 10
+mixup: 0.05
+copy_paste: 0.5               # minority (carton/polybag) instance boost
+erasing: 0.4
+camera_aug: true              # MotionBlur + ImageCompression + GaussNoise + Downscale
+
+inference:
+  conf_threshold: 0.3
+  tracker:
+    track_buffer: 60
+    match_thresh: 0.9
+  logging:
+    enabled: true
+    save_interval: 3600
+    log_dir: "logs"
+  udp:
+    enabled: false
+    host: "127.0.0.1"
+    port: 9502

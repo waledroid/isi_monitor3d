@@ -1,0 +1,6 @@
+rules:
+- from: person
+  to:
+  - palette
+  max_distance_m: 6.0
+  color: '#ffffff'

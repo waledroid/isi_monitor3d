@@ -1,0 +1,16 @@
+{% if not rows %}
+  <div class="logs-empty"><em data-i18n="logs_empty">{{ '— no logs —' }}</em></div>
+{% else %}
+  {% for r in rows %}
+    <div class="log-line log-{{ r.level }}">
+      {%- if r.level == 'raw' -%}
+        <span class="log-msg">{{ r.message }}</span>
+      {%- else -%}
+        <span class="log-time">{{ r.time }}</span>
+        <span class="log-src">{{ r.source }}</span>
+        <span class="log-msg">{{ r.message }}</span>
+        {%- if r.count > 1 %} <span class="log-count">×{{ r.count }}</span>{% endif -%}
+      {%- endif -%}
+    </div>
+  {% endfor %}
+{% endif %}

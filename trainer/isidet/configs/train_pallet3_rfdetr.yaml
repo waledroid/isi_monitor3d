@@ -1,0 +1,39 @@
+# trainer/isidet/configs/train_pallet3_rfdetr.yaml
+# 3-class instance SEGMENTATION with RF-DETR-Seg (transformer, DINOv2 backbone).
+# Same classes + same leak-free split as train_pallet3_seg.yaml — so you can
+# compare YOLO11-seg vs RF-DETR-Seg head-to-head on identical data.
+#
+# Dataset is the COCO conversion of pallet3_yolo_seg:
+#   python ../../scripts/yolo_seg_to_coco.py \
+#     --src data/pallet3_yolo_seg --out data/pallet3_coco --force
+#
+# Run FROM trainer/isidet/ :
+#   conda activate isi-train
+#   python scripts/run_train.py --config configs/train_pallet3_rfdetr.yaml
+
+project_name: "pallet3_rfdetr_seg"
+nc: 3
+class_names: ["palette", "carton", "polybag"]   # COCO ids 1/2/3 (+ _background_ 0)
+hooks:
+  - "IndustrialLogger"
+
+# --- model: RF-DETR SEGMENTATION (transformer) ---
+model_type: "rfdetr"
+model_size: "m"               # RFDETRSegMedium (DINOv2-B/14); 's'/'n' are lighter
+dataset_path: "data/pallet3_coco"   # COCO layout: train/ valid/ test/ + _annotations.coco.json
+optimizer_config: "configs/optimizers/rfdetr_optim.yaml"   # dual LR + EMA + grad-accum
+
+# --- 12 GB RTX 5070 (RF-DETR-Seg masks are VRAM-heavy) ---
+batch_size: 2                 # keep at 2; grad_accum (optimizer cfg) gives effective ~16
+image_size: 448               # DINOv2 multiple; 448 is the safe ceiling on 12 GB.
+                              # NOTE: this is RF-DETR's weak spot vs YOLO@1024 for the
+                              # FAR/small floor objects — it can't easily go higher here.
+mixed_precision: true
+epochs: 100                   # transformers converge in fewer epochs; early-stop patience ~20
+num_select: 100               # max detections/query budget (lower = less mask-interp VRAM)
+workers: 1                    # low for WSL2 stability
+
+# RF-DETR exports its own ONNX (the backbone yolo_onnx_seg plugin is YOLO-specific;
+# an RF-DETR backbone plugin would be a separate seam — out of scope for this run).
+export_model: true
+export_formats: ["onnx", "openvino"]

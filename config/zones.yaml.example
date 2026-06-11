@@ -1,0 +1,53 @@
+# Floor-frame zones for the Backbone.
+#
+# Polygons are in meters on the shared floor plane (Z = 0), counter-clockwise
+# vertices. Authored once per node from tape-measured corners (or drawn in the
+# dashboard's zone manager). See `backbone/shared/zones.py` for the loader.
+#
+# `kind` is the zone category (default "palette"):
+#   palette  — pallet area            (neutral)
+#   etagere  — "étagère" / shelving   (light green on the floor map)
+#   danger   — machine danger zone    (light red; pulses when severity is
+#              warning/critical). `severity`: info | warning | critical.
+# `type` mirrors `kind` and is the free-form tag modules match via
+# `any_<type>` subscriptions.
+
+zones:
+  - name: palette_a3
+    type: palette
+    kind: palette
+    polygon:
+      - [1.0, 0.0]
+      - [3.0, 0.0]
+      - [3.0, 1.5]
+      - [1.0, 1.5]
+
+  - name: etagere_b1
+    type: etagere
+    kind: etagere
+    polygon:
+      - [4.0, 0.0]
+      - [6.0, 0.0]
+      - [6.0, 1.5]
+      - [4.0, 1.5]
+
+  - name: press_north
+    type: danger
+    kind: danger
+    severity: critical
+    polygon:
+      - [5.0, 4.0]
+      - [7.5, 4.0]
+      - [7.5, 5.5]
+      - [6.2, 6.0]
+      - [5.0, 5.5]
+
+  - name: agv_corridor
+    type: danger
+    kind: danger
+    severity: warning
+    polygon:
+      - [0.0, 6.0]
+      - [8.0, 6.0]
+      - [8.0, 7.5]
+      - [0.0, 7.5]

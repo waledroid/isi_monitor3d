@@ -1,0 +1,32 @@
+# Triangulation subscriptions for the Backbone.
+#
+# Each rule says "if a Track2D matches these predicates, lift it to Track3D".
+# v1 supports `request: xyz` (foot centroid). `keypoints_3d` lands in S5.5.
+#
+# `match.in_zone` accepts either an exact zone name (must exist in zones.yaml)
+# or an `any_<type>` glob ("any zone of type <type>"). See zones.yaml.example.
+
+- name: fall_detection
+  module: securite
+  match:
+    cls: person
+    cameras_seeing_min: 2
+    in_zone: any_danger
+  request: xyz
+  rate_hz: 10.0     # 10 Hz is enough for fall events; saves CPU
+
+- name: stacked_pallets
+  module: palettes
+  match:
+    cls: pallet
+    cameras_seeing_min: 2
+    in_zone: any_storage
+  request: xyz
+
+- name: forklift_anywhere
+  module: securite
+  match:
+    cls: forklift
+    cameras_seeing_min: 2
+  request: xyz
+  rate_hz: 5.0

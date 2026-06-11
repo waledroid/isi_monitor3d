@@ -1,0 +1,32 @@
+# configs/optimizers/rfdetr_optim_m560.yaml
+#
+# RF-DETR-Seg Medium @ 560 px. NOTE: run_train.py merges this OVER the train
+# config (_deep_merge(config, optim_config) → optim wins), so the AUTHORITATIVE
+# epochs / batch_size / image_size / num_select / early_stopping live HERE, not in
+# the train YAML.
+#
+# 560 = 56×10 — the nearest valid RF-DETR resolution to the requested 640
+# (resolution must be divisible by block_size = patch_size 14 × num_windows 4 = 56;
+# 640 ÷ 56 = 11.43 → invalid).
+
+epochs: 120             # cap; patience-20 early stopping decides the real stop
+batch_size: 2           # 12 GB RTX 5070 + seg masks; drop to 1 if the 1st epoch OOMs
+image_size: 560         # 56×10 — the EFFECTIVE training resolution
+num_select: 100         # top-K queries kept; bounds mask-interp VRAM
+
+optimizer:
+  type: "AdamW"
+  lr: 0.0001            # 1e-4 for the head
+  lr_encoder: 0.00001   # 1e-5 for the DINOv2 backbone (10× lower — critical)
+  weight_decay: 0.0001
+
+# Transformer stability tricks
+training_tricks:
+  use_ema: true
+  grad_accum_steps: 8   # batch 2 × accum 8 = effective 16
+  num_workers: 1        # low for WSL2 stability
+  pin_memory: false
+
+early_stopping:
+  enabled: true
+  patience: 20          # ← the user's requirement

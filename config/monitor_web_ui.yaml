@@ -1,0 +1,71 @@
+mp4_selected: archive/video/veed.mp4
+model_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26l-seg_e200_640px_09-06-2026_00-24-57/weights/best.onnx
+model_xml_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/detect/models/yolo/yolo11l-det_e100_640px_21-05-2026_21-55-41/weights/openvino/model.xml
+pose_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/tests/.cache/yolo11n-pose.onnx
+show_nodes: true
+show_masks: true
+show_boxes: false
+display_fps: 25
+warehouse_map:
+  elements: []
+  outline: null
+zone_patches:
+  patches:
+  - id: zp_mq8fx4li
+    name: Zone 1
+    camera: cam_a
+    rect:
+    - 191.27305668792027
+    - 88.69600362356712
+    - 390.64283474443397
+    - 265.3030904846521
+    polygon:
+    - - 192.8428974600188
+      - 102.82457057245392
+    - - 342.7626911954287
+      - 88.69600362356712
+    - - 390.64283474443397
+      - 241.75547890317412
+    - - 191.27305668792027
+      - 265.3030904846521
+    frame_wh:
+    - 640
+    - 352
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/models/rfdetr/rfdetr-medium-seg_e41_432px/inference_model.onnx
+    infer_size: 320
+    color: null
+    confidence: 0.05
+  - id: zp_mq8fyc6q
+    name: Zone 2
+    camera: cam_a
+    rect:
+    - 374.94442702344867
+    - 76.13727744677887
+    - 557.0459565868784
+    - 238.61579735897706
+    polygon:
+    - - 374.94442702344867
+      - 87.12616285146859
+    - - 485.61820145639524
+      - 76.13727744677887
+    - - 557.0459565868784
+      - 207.2189819170064
+    - - 418.89996864220757
+      - 238.61579735897706
+    frame_wh:
+    - 640
+    - 352
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/models/rfdetr/rfdetr-medium-seg_e41_432px/inference_model.onnx
+    infer_size: 640
+    color: '#ffcb3d'
+    confidence: 0.05
+link_lines:
+  rules:
+  - from: person
+    to:
+    - palette
+    max_distance_m: 6.0
+    color: '#ffffff'
+distance_line_opacity: 0.3
+distance_line_color: '#ffffff'
+distance_line_thickness: 3

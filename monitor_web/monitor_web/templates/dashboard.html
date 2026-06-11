@@ -1,0 +1,564 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="header">
+  <div class="header-brand">
+    <img src="/static/img/logo_isitec.png" alt="Isitec" class="header-logo" />
+    <span class="header-title" data-i18n="title">{{ t.title or 'ISITEC Industrial Vision' }}</span>
+  </div>
+  <div class="header-actions">
+    <div class="lang-toggle">
+      <button class="glass-btn lang-btn" data-lang="en" aria-pressed="false">GB</button>
+      <button class="glass-btn lang-btn" data-lang="fr" aria-pressed="false">FR</button>
+    </div>
+    <div class="status-system">
+      <span data-i18n="status_system">{{ t.status_system or 'STATUS SYSTEM' }}</span>
+      <span id="status-dot" class="status-dot status-dot-red" aria-hidden="true"></span>
+    </div>
+  </div>
+</header>
+
+<main class="main-container">
+  <div class="left-content">
+
+  <section class="panel panel-big" x-init="$store.bigPanel.boot()"
+           :class="{ expanded: $store.bigPanel.expanded, closing: $store.bigPanel.closing,
+                     tall: $store.bigPanel.tallPanel === 'big',
+                     'tall-hidden': $store.bigPanel.tallPanel === 'zone1' || $store.bigPanel.tallPanel === 'zone2' }">
+    <div class="panel-toolbar">
+      <div id="big-panel-tabs" class="custom-tabs" aria-label="big panel view">
+        <button class="custom-tab" data-view="map"
+                :class="{ active: $store.bigPanel.view === 'map' }"
+                @click="$store.bigPanel.select('map')">
+          <span data-i18n="map">{{ t.map or 'MAP' }}</span>
+        </button>
+        <button class="custom-tab" data-view="cam_a" id="cam-a-btn"
+                :class="{ active: $store.bigPanel.view === 'cam_a' }"
+                @click="$store.bigPanel.select('cam_a')">
+          <span data-i18n="cam_1">{{ t.cam_1 or 'CAM 1' }}</span>
+        </button>
+        <button class="custom-tab" data-view="cam_b" id="cam-b-btn" x-cloak
+                x-show="$store.bigPanel.hasCamB"
+                :class="{ active: $store.bigPanel.view === 'cam_b' }"
+                @click="$store.bigPanel.select('cam_b')">
+          <span data-i18n="cam_2">{{ t.cam_2 or 'CAM 2' }}</span>
+        </button>
+        <button class="custom-tab" data-view="unified" id="unified-btn" x-cloak
+                x-show="$store.bigPanel.unifiedAvailable"
+                :class="{ active: $store.bigPanel.view === 'unified' }"
+                @click="$store.bigPanel.select('unified')">
+          <span data-i18n="unified">{{ t.unified or 'UNIFIED' }}</span>
+        </button>
+        <button class="custom-tab" data-view="mp4" id="mp4-btn" x-cloak
+                x-show="$store.bigPanel.mp4Unlocked"
+                :class="{ active: $store.bigPanel.view === 'mp4' }"
+                @click="$store.bigPanel.select('mp4')">
+          <span data-i18n="mp4">{{ t.mp4 or 'MP4' }}</span>
+        </button>
+      </div>
+      <!-- Icon actions grouped together on the right, next to the + Settings. -->
+      <div class="toolbar-actions">
+      <button id="btn-calibrate" class="glass-btn btn-icon btn-calibrate"
+              data-state="white" title="Calibrate" aria-label="Calibrate cameras">
+        <!-- Lucide-style ruler icon. Tinted via currentColor; state CSS rules
+             swap the colour between white (no calibration) and green (full). -->
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+             stroke-linejoin="round">
+          <path d="M21.3 8.7 8.7 21.3a2.4 2.4 0 0 1-3.4 0L2.7 18.7a2.4 2.4 0 0 1 0-3.4L15.3 2.7a2.4 2.4 0 0 1 3.4 0l2.6 2.6a2.4 2.4 0 0 1 0 3.4z"/>
+          <path d="m7.5 10.5 2 2"/>
+          <path d="m10.5 7.5 2 2"/>
+          <path d="m13.5 4.5 2 2"/>
+          <path d="m4.5 13.5 2 2"/>
+        </svg>
+      </button>
+      <button id="btn-warp-verify" class="glass-btn btn-icon" x-cloak
+              x-show="$store.bigPanel.canVerify"
+              :class="{ 'is-active': $store.bigPanel.showWarp }"
+              @click="$store.bigPanel.toggleWarp()"
+              :title="$store.bigPanel.showWarp
+                ? (window.__monitor_web.strings.warp_verify_off || 'Back to live detection')
+                : (window.__monitor_web.strings.warp_verify_on || 'Flatten floor (verify calibration)')"
+              aria-label="Toggle calibration verification view">
+        <!-- Perspective-grid icon: a floor plane flattening to top-down. -->
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 21h18"/><path d="M7 21 4 9l16 0-3 12"/>
+          <path d="M9.5 9 8 21"/><path d="M14.5 9 16 21"/><path d="M5 15h14"/>
+        </svg>
+      </button>
+      <button id="btn-layout" class="glass-btn btn-icon" x-cloak
+              x-show="$store.bigPanel.view === 'map'"
+              :title="window.__monitor_web.strings.layout_title || 'Warehouse layout'"
+              aria-label="Edit warehouse layout">
+        <!-- Grid-of-boxes icon: the static warehouse twin. -->
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+          <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+        </svg>
+      </button>
+      <button id="btn-draw-patch" class="glass-btn btn-icon" x-cloak
+              x-show="$store.bigPanel.view === 'cam_a' || $store.bigPanel.view === 'cam_b'"
+              title="Draw zone patch (red ROI to monitor)" aria-label="Draw zone patch">
+        <!-- Crop/box icon: drag a watch box on the camera. -->
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/>
+        </svg>
+      </button>
+      <button id="btn-add-zone" class="glass-btn btn-icon" title="Add Zone" aria-label="Add Zone">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+      </button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div id="floor-map-host" class="big-view" data-view="map"
+           x-show="$store.bigPanel.view === 'map'"></div>
+      <div id="cam_a-wrap" class="big-view" data-view="cam_a" x-cloak
+           :class="{ 'cam-flat': $store.bigPanel.isWarped }"
+           x-show="$store.bigPanel.view === 'cam_a'">
+        <img id="cam_a-img" :src="$store.bigPanel.camSrc('cam_a')" @error="$store.bigPanel.onStreamError('cam_a')" :class="{ 'fit-contain': $store.bigPanel.isWarped }" alt="cam_a live feed" class="cam-img" />
+        <canvas id="cam_a-overlay" class="cam-overlay"></canvas>
+      </div>
+      <div id="cam_b-wrap" class="big-view" data-view="cam_b" x-cloak
+           :class="{ 'cam-flat': $store.bigPanel.isWarped }"
+           x-show="$store.bigPanel.view === 'cam_b'">
+        <img id="cam_b-img" :src="$store.bigPanel.camSrc('cam_b')" @error="$store.bigPanel.onStreamError('cam_b')" :class="{ 'fit-contain': $store.bigPanel.isWarped }" alt="cam_b live feed" class="cam-img" />
+        <canvas id="cam_b-overlay" class="cam-overlay"></canvas>
+      </div>
+      <div id="unified-wrap" class="big-view" data-view="unified" x-cloak
+           x-show="$store.bigPanel.view === 'unified'">
+        <!-- Mode-2 unified bird's-eye floor composite of both cameras. Shown full
+             frame (contain) since it's a fitted floor canvas, not a camera feed. -->
+        <img id="unified-img" :src="$store.bigPanel.unifiedSrc" alt="unified floor view (needs 2 cameras + Mode-2 calibration)" class="cam-img fit-contain" />
+      </div>
+      <div id="mp4-wrap" class="big-view" data-view="mp4" x-cloak
+           x-show="$store.bigPanel.view === 'mp4'">
+        <!-- The MP4 picker lives in the zone-manager modal (after Cam 2). -->
+        <img id="mp4-img" :src="$store.bigPanel.mp4Src" alt="mp4 playback (detector)" class="cam-img" />
+      </div>
+    </div>
+    <!-- Controls live on .panel-big (bounded + overflow-clipped) — NOT in
+         .panel-body, which the video can grow past — so they stay pinned to the
+         panel's visible bottom corners. -->
+    <!-- <> tall toggle: this panel fills the LEFT COLUMN height (zones hide). -->
+    <button id="big-panel-tall" class="glass-btn btn-icon panel-expand-btn panel-tall-btn"
+            :title="$store.bigPanel.tallPanel === 'big' ? 'Collapse' : 'Expand (full column)'"
+            aria-label="Expand view in column"
+            :aria-pressed="$store.bigPanel.tallPanel === 'big'"
+            @click="$store.bigPanel.toggleTall('big')">
+      <svg class="icon-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
+      <svg class="icon-collapse" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
+    </button>
+    <!-- [] full-width overlay (big panel only): pop out over the whole app. -->
+    <button id="big-panel-expand" class="glass-btn btn-icon panel-expand-btn"
+            :title="$store.bigPanel.expanded ? 'Collapse' : 'Full width'" aria-label="Expand view"
+            :aria-pressed="$store.bigPanel.expanded"
+            @click="$store.bigPanel.toggleExpand()">
+      <svg class="icon-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M16 21h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+      <svg class="icon-collapse" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M16 21v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"></path></svg>
+    </button>
+    <div class="panel-badge" id="big-panel-badge" x-text="$store.bigPanel.badge">{{ t.live or 'LIVE' }}</div>
+  </section>
+
+  <!-- Backdrop shown behind the big panel when it's expanded (click to collapse). -->
+  <div id="big-panel-backdrop" x-cloak x-show="$store.bigPanel.expanded"
+       x-transition.opacity.duration.200ms
+       @click="$store.bigPanel.collapse()"
+       @keydown.escape.window="$store.bigPanel.collapse()"></div>
+
+  <div id="zones-container" class="zones-grid zones-grid-3" x-data
+       :class="{ 'tall-hidden': $store.bigPanel.tallPanel === 'big',
+                 'has-tall-zone': ['zone1','zone2','zone3'].includes($store.bigPanel.tallPanel) }">
+    <section class="panel panel-zone"
+             :class="{ tall: $store.bigPanel.tallPanel === 'zone1',
+                       'tall-hidden': ['zone2','zone3'].includes($store.bigPanel.tallPanel) }">
+      <div class="panel-body zone-placeholder" id="zone-1-body">
+        <div class="zone-empty">
+          <span data-i18n="no_zone">{{ t.no_zone or 'Aucune zone définie' }}</span>
+        </div>
+      </div>
+      <!-- <> tall toggle: this zone fills the LEFT COLUMN (big panel + other zones hide). -->
+      <button class="glass-btn btn-icon panel-expand-btn" aria-label="Expand zone"
+              :title="$store.bigPanel.tallPanel === 'zone1' ? 'Collapse' : 'Expand (full column)'"
+              :aria-pressed="$store.bigPanel.tallPanel === 'zone1'"
+              @click="$store.bigPanel.toggleTall('zone1')">
+        <svg class="icon-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
+        <svg class="icon-collapse" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
+      </button>
+      <div class="panel-badge zone-badge" id="zone-1-badge">ZONE 1</div>
+    </section>
+
+    <section class="panel panel-zone"
+             :class="{ tall: $store.bigPanel.tallPanel === 'zone2',
+                       'tall-hidden': ['zone1','zone3'].includes($store.bigPanel.tallPanel) }">
+      <div class="panel-body zone-placeholder" id="zone-2-body">
+        <div class="zone-empty">
+          <span data-i18n="no_zone">{{ t.no_zone or 'Aucune zone définie' }}</span>
+        </div>
+      </div>
+      <button class="glass-btn btn-icon panel-expand-btn" aria-label="Expand zone"
+              :title="$store.bigPanel.tallPanel === 'zone2' ? 'Collapse' : 'Expand (full column)'"
+              :aria-pressed="$store.bigPanel.tallPanel === 'zone2'"
+              @click="$store.bigPanel.toggleTall('zone2')">
+        <svg class="icon-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
+        <svg class="icon-collapse" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
+      </button>
+      <div class="panel-badge zone-badge" id="zone-2-badge">ZONE 2</div>
+    </section>
+
+    <section class="panel panel-zone"
+             :class="{ tall: $store.bigPanel.tallPanel === 'zone3',
+                       'tall-hidden': ['zone1','zone2'].includes($store.bigPanel.tallPanel) }">
+      <div class="panel-body zone-placeholder" id="zone-3-body">
+        <div class="zone-empty">
+          <span data-i18n="no_zone">{{ t.no_zone or 'Aucune zone définie' }}</span>
+        </div>
+      </div>
+      <button class="glass-btn btn-icon panel-expand-btn" aria-label="Expand zone"
+              :title="$store.bigPanel.tallPanel === 'zone3' ? 'Collapse' : 'Expand (full column)'"
+              :aria-pressed="$store.bigPanel.tallPanel === 'zone3'"
+              @click="$store.bigPanel.toggleTall('zone3')">
+        <svg class="icon-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
+        <svg class="icon-collapse" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
+      </button>
+      <div class="panel-badge zone-badge" id="zone-3-badge">ZONE 3</div>
+    </section>
+  </div>
+  </div>
+
+  <!-- x-data gives this sidebar an Alpine scope so the START/STOP @click handlers
+       bind. Without it, the buttons live outside any x-data/x-init root (the big
+       panel self-scopes via its own x-init) and Alpine never wires their clicks. -->
+  <aside class="right-content" x-data="{ panel: null }">
+    <div class="controls">
+      <button id="btn-start" class="glass-btn btn-start" @click="$store.bigPanel.start()">
+        <span data-i18n="start">{{ t.start or 'START' }}</span>
+      </button>
+      <button id="btn-stop" class="glass-btn btn-stop" @click="$store.bigPanel.stop()">
+        <span data-i18n="stop">{{ t.stop or 'STOP' }}</span>
+      </button>
+    </div>
+
+    <div class="sidebar">
+      <section class="sidebar-section"
+               :class="{ 'section-expanded': panel==='status', 'section-collapsed': panel==='logs' }">
+        <h2 class="sidebar-title" data-i18n="status">{{ t.status or 'STATUS' }}</h2>
+        <div id="status-content" class="sidebar-content status-content">
+          <!-- Filled by ws_tracks.js / poll-status.js -->
+        </div>
+        <button class="glass-btn btn-icon sidebar-expand-btn"
+                @click="panel = panel==='status' ? null : 'status'"
+                :title="panel==='status' ? 'Collapse' : 'Expand'" aria-label="Expand status">
+          <svg class="icon-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
+          <svg class="icon-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
+        </button>
+      </section>
+      <section class="sidebar-section"
+               :class="{ 'section-expanded': panel==='logs', 'section-collapsed': panel==='status' }">
+        <h2 class="sidebar-title" data-i18n="logs">{{ t.logs or 'LOGS' }}</h2>
+        <div id="logs-content"
+             class="sidebar-content logs-content"
+             hx-get="/api/logs?n=100"
+             hx-trigger="load, every 2s"
+             hx-swap="innerHTML">
+          <!-- HTMX swaps in _logs.html -->
+        </div>
+        <button class="glass-btn btn-icon sidebar-expand-btn"
+                @click="panel = panel==='logs' ? null : 'logs'"
+                :title="panel==='logs' ? 'Collapse' : 'Expand'" aria-label="Expand logs">
+          <svg class="icon-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
+          <svg class="icon-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
+        </button>
+      </section>
+    </div>
+  </aside>
+</main>
+
+<!-- ============ Zone manager (S11) — hidden by default ============ -->
+<div id="zone-manager" class="config-overlay-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="zm-title">
+  <div class="config-overlay-panel panel">
+    <div class="config-overlay-header">
+      <h2 id="zm-title" data-i18n="zone_manager_title">{{ t.zone_manager_title or 'Zone manager' }}</h2>
+      <button id="zm-close" class="glass-btn btn-icon" aria-label="Close">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"></line><line x1="6" y1="18" x2="18" y2="6"></line></svg>
+      </button>
+    </div>
+
+    <div class="settings-container">
+      <div class="settings-sidebar">
+        <button type="button" class="settings-tab-btn active" data-tab="cameras">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          <span data-i18n="cameras_tab">{{ t.cameras_section or 'Cameras' }}</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="detection">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><circle cx="12" cy="12" r="10"/><path d="m4.93 4.93 4.24 4.24"/><circle cx="12" cy="12" r="4"/></svg>
+          <span data-i18n="detection_tab">{{ t.model_section or 'Detection' }}</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="zones">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><polygon points="12 2 2 7 12 12 22 7 12 2"/></svg>
+          <span data-i18n="zones_tab">Zones</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="lines">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><path d="M5 12h14"/><circle cx="5" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+          <span data-i18n="lines_tab">Distance Lines</span>
+        </button>
+      </div>
+
+      <div class="settings-content-wrapper">
+        <!-- Tab 1: Cameras / Inputs -->
+        <div class="settings-tab-content active" id="tab-cameras">
+          <section class="config-section">
+            <h3 data-i18n="cameras_section">{{ t.cameras_section or 'Cameras' }}</h3>
+            <div id="zm-cameras" class="config-cameras"></div>
+          </section>
+
+          <!-- Hidden MP4 (dev) source -->
+          <section id="zm-mp4-row" class="config-section hidden">
+            <h3 data-i18n="mp4_section">{{ t.mp4_section or 'MP4 source (dev)' }}</h3>
+            <select id="mp4-pick" class="zm-mp4-select">
+              <option value="" data-i18n="mp4_pick">{{ t.mp4_pick or 'Choose an MP4…' }}</option>
+            </select>
+          </section>
+        </div>
+
+        <!-- Tab 2: Detection -->
+        <div class="settings-tab-content" id="tab-detection">
+          <section class="config-section">
+            <h3 data-i18n="model_section">{{ t.model_section or 'Detection model' }}</h3>
+            <!-- Backend is auto-selected from the host's hardware (GPU → ONNX, CPU-only
+                 → OpenVINO); only the relevant model-path field is shown. -->
+            <div class="config-model">
+              <label id="zm-model-onnx-label" data-i18n="model_onnx">{{ t.model_onnx or 'ONNX model (.onnx)' }}</label>
+              <!-- Dropdown of every *.onnx under trainer/isidet/runs/, populated from
+                   /api/detection/onnx-files on modal open. The option VALUE is the
+                   absolute path written to backbone.yaml (loads verbatim); the option
+                   TEXT is the path relative to runs/. -->
+              <select id="zm-model-onnx">
+                <option value="" data-i18n="model_onnx_placeholder">{{ t.model_onnx_placeholder or '— select a model —' }}</option>
+              </select>
+
+              <label id="zm-model-xml-label" data-i18n="model_openvino">{{ t.model_openvino or 'OpenVINO IR (.xml)' }}</label>
+              <input id="zm-model-xml" type="text" placeholder="./models/model.xml" />
+
+              <!-- Person-pose model (separate from the detection model). Dropdown of
+                   pose *.onnx (path contains "pose") from /api/detection/pose-onnx-files.
+                   Option value = absolute path persisted to backbone.yaml. Optional. -->
+              <label data-i18n="model_pose">{{ t.model_pose or 'Pose model (person, .onnx)' }}</label>
+              <select id="zm-model-pose-onnx">
+                <option value="" data-i18n="model_pose_placeholder">{{ t.model_pose_placeholder or '— none —' }}</option>
+              </select>
+
+              <label data-i18n="model_pose_conf">{{ t.model_pose_conf or 'Pose confidence threshold' }}</label>
+              <input id="zm-model-pose-conf" type="number" step="0.05" min="0" max="1" placeholder="0.3" />
+
+              <label data-i18n="model_classes">{{ t.model_classes or 'Classes (auto-detected from model)' }}</label>
+              <input id="zm-model-classes" type="text" readonly
+                     placeholder="— detected from the selected model —" />
+
+              <label data-i18n="model_conf">{{ t.model_conf or 'Confidence threshold' }}</label>
+              <input id="zm-model-conf" type="number" step="0.05" min="0" max="1" placeholder="0.25" />
+
+              <label data-i18n="model_imgsz">{{ t.model_imgsz or 'Inference image size' }}</label>
+              <div class="zm-imgsz-row">
+                <input id="zm-model-imgsz" type="range" min="0" max="4" step="1" value="4" />
+                <span id="zm-model-imgsz-val">1024</span><span>px</span>
+              </div>
+              <small class="zm-hint" data-i18n="model_imgsz_hint">{{ t.model_imgsz_hint or 'Smaller = faster, less accurate. Requires a dynamic-exported model.' }}</small>
+
+              <label for="zm-model-show-nodes" data-i18n="show_nodes">{{ t.show_nodes or 'Show foot nodes' }}</label>
+              <input id="zm-model-show-nodes" type="checkbox" class="zm-checkbox" />
+
+              <label for="zm-model-show-masks" data-i18n="show_masks">{{ t.show_masks or 'Show segmentation masks' }}</label>
+              <input id="zm-model-show-masks" type="checkbox" class="zm-checkbox" />
+
+              <label for="zm-model-show-boxes" data-i18n="show_boxes">{{ t.show_boxes or 'Show bounding boxes' }}</label>
+              <input id="zm-model-show-boxes" type="checkbox" class="zm-checkbox" />
+
+              <label for="zm-model-display-fps" data-i18n="display_fps">{{ t.display_fps or 'Display FPS (inference cap)' }}</label>
+              <input id="zm-model-display-fps" type="number" min="1" max="30" step="1" class="zm-input" />
+
+              <label for="zm-model-dist-opacity" data-i18n="dist_opacity">{{ t.dist_opacity or 'Distance line — opacity' }}</label>
+              <input id="zm-model-dist-opacity" type="number" min="0.05" max="1" step="0.05" class="zm-input" />
+
+              <label for="zm-model-dist-color" data-i18n="dist_color">{{ t.dist_color or 'Distance line — colour' }}</label>
+              <input id="zm-model-dist-color" type="color" class="zm-input" />
+
+              <label for="zm-model-dist-thickness" data-i18n="dist_thickness">{{ t.dist_thickness or 'Distance line — thickness (px)' }}</label>
+              <input id="zm-model-dist-thickness" type="number" min="1" max="8" step="1" class="zm-input" />
+            </div>
+          </section>
+        </div>
+
+        <!-- Tab 3: Zones — operator zones are drawn on a CAM (red polygons →
+             ZONE panels), synced here from /api/zone-patches. The old metric
+             "Zones (up to 6)" map-click editor was retired. -->
+        <div class="settings-tab-content" id="tab-zones">
+          <!-- Camera zones (the red polygons drawn on a cam → ZONE panels). Synced
+               here from /api/zone-patches; name + model + detect size + colour editable. -->
+          <section class="config-section">
+            <h3 data-i18n="cam_zones_section">{{ t.cam_zones_section or 'Camera zones (drawn on CAM)' }}</h3>
+            <div id="zm-cam-zones" class="config-zone-list">
+              <p class="layout-hint" data-i18n="cam_zones_empty">Draw a zone on a camera view — it appears here.</p>
+            </div>
+          </section>
+        </div>
+
+        <!-- Tab 4: Distance Lines -->
+        <div class="settings-tab-content" id="tab-lines">
+          <section class="config-section">
+            <h3 data-i18n="link_lines_section">{{ t.link_lines_section or 'Distance lines' }}</h3>
+            <div id="zm-link-lines" class="config-link-list"></div>
+            <button id="zm-link-add" class="glass-btn config-link-add" type="button"
+                    data-i18n="link_add">{{ t.link_add or '+ Add rule' }}</button>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="config-overlay-footer">
+      <button id="zm-cancel" class="glass-btn" data-i18n="cancel">{{ t.cancel or 'Cancel' }}</button>
+      <button id="zm-save" class="glass-btn btn-start" data-i18n="save_config">{{ t.save_config or 'Save' }}</button>
+    </div>
+    <div id="zm-toast" class="config-toast hidden"></div>
+  </div>
+</div>
+
+<!-- S17.1: draw-target picker — pops over the Settings overlay when Draw is
+     clicked on a zone row, asks which camera to author on. CAM-only by design;
+     pre-calibration both buttons disable + an inline message blocks the flow. -->
+<div id="zm-draw-picker" class="zm-draw-picker hidden" role="dialog" aria-modal="true"
+     aria-labelledby="zm-draw-picker-title">
+  <div class="zm-draw-picker-panel panel">
+    <h3 id="zm-draw-picker-title" data-i18n="draw_target_title">
+      {{ t.draw_target_title or 'Draw zone on which camera?' }}
+    </h3>
+    <div class="zm-draw-picker-buttons">
+      <button class="glass-btn zm-draw-target-btn" data-target="cam_a"
+              data-i18n="cam_1">{{ t.cam_1 or 'CAM 1' }}</button>
+      <button class="glass-btn zm-draw-target-btn" data-target="cam_b"
+              data-i18n="cam_2">{{ t.cam_2 or 'CAM 2' }}</button>
+    </div>
+    <p id="zm-draw-picker-msg" class="zm-draw-picker-msg hidden"
+       data-i18n="draw_target_no_cameras">
+      {{ t.draw_target_no_cameras or 'Calibrate a camera first to draw zones.' }}
+    </p>
+    <div class="zm-draw-picker-footer">
+      <button id="zm-draw-picker-cancel" class="glass-btn" data-i18n="cancel">
+        {{ t.cancel or 'Cancel' }}
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- S18: calibration picker — opens on btn-calibrate click. Mode is decided
+     by len(configured_cameras): 1 → pallet flow, 2 → Multical (S18.B). -->
+<div id="calibration-picker" class="zm-draw-picker hidden" role="dialog" aria-modal="true"
+     aria-labelledby="cal-title">
+  <div class="zm-draw-picker-panel panel cal-panel">
+    <h3 id="cal-title" data-i18n="calibrate_title">
+      {{ t.calibrate_title or 'Calibrate cameras' }}
+    </h3>
+
+    <!-- Mode 1: pallet flow (1 camera configured). -->
+    <div id="cal-mode1" class="cal-mode hidden">
+      <p class="cal-hint" data-i18n="calibrate_pallet_intro">
+        {{ t.calibrate_pallet_intro or 'Place a pallet flat on the floor with all 4 corners visible to the camera, then click the corners in order TL → TR → BR → BL.' }}
+      </p>
+      <div class="cal-pallet-dims">
+        <label data-i18n="pallet_width">{{ t.pallet_width or 'Pallet long side (m)' }}</label>
+        <input id="cal-pallet-width" type="number" step="0.01" min="0.1" value="1.2" />
+        <label data-i18n="pallet_height">{{ t.pallet_height or 'Pallet short side (m)' }}</label>
+        <input id="cal-pallet-height" type="number" step="0.01" min="0.1" value="0.8" />
+      </div>
+      <!-- Point-count selector: 4 = pallet corners only; 5+ adds tape-measured
+           floor points (overdetermines H so the residual gate validates). -->
+      <div class="cal-points-row">
+        <label data-i18n="calibrate_point_count">{{ t.calibrate_point_count or 'Calibration points' }}</label>
+        <input id="cal-point-count" type="number" min="4" max="8" step="1" value="4" />
+        <span class="cal-hint-inline" data-i18n="calibrate_point_count_hint">{{ t.calibrate_point_count_hint or '4 = pallet corners (fast); 5+ adds tape-measured floor points (more accurate, validated)' }}</span>
+      </div>
+      <div id="cal-extra-points" class="cal-extra-points hidden"></div>
+      <p class="cal-cam-note" data-i18n="calibrate_target_camera">
+        {{ t.calibrate_target_camera or 'Target camera' }}: <span id="cal-target-cam">cam_a</span>
+      </p>
+      <button id="cal-start" class="glass-btn cal-primary"
+              data-i18n="calibrate_start">{{ t.calibrate_start or 'Start calibration' }}</button>
+    </div>
+
+    <!-- Mode 2: Multical placeholder (S18.B replaces this with the full UX). -->
+    <div id="cal-mode2" class="cal-mode hidden">
+      <p class="cal-hint" data-i18n="calibrate_multical_placeholder">
+        {{ t.calibrate_multical_placeholder or 'Two-camera 3D calibration (Track3D) requires Multical bundle adjustment with a ChArUco board. The in-dashboard workflow is coming in S18.B — for now, run from the CLI:' }}
+      </p>
+      <pre class="cal-cli">python -m calibration.calibrate calibrate-all \
+  --cam-images cam_a=path/cam_a/ cam_b=path/cam_b/ \
+  --output config/mode2/calibration.json</pre>
+    </div>
+
+    <!-- Result panel (shared by both modes). -->
+    <div id="cal-result" class="cal-result hidden">
+      <p id="cal-result-msg"></p>
+    </div>
+
+    <div class="zm-draw-picker-footer">
+      <button id="cal-cancel" class="glass-btn" data-i18n="cancel">
+        {{ t.cancel or 'Cancel' }}
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Draw-mode toolbar (shown only while user is clicking polygon points). -->
+<div id="draw-toolbar" class="draw-toolbar hidden">
+  <span class="draw-label"><span id="draw-zone-label">Zone</span></span>
+  <span class="draw-hint" data-i18n="draw_hint">{{ t.draw_hint or 'Click points on the map to define the polygon.' }}</span>
+  <span class="draw-count"><span id="draw-count">0</span> <span data-i18n="points_label">{{ t.points_label or 'points' }}</span></span>
+  <button id="draw-undo" class="glass-btn" data-i18n="undo">{{ t.undo or 'Undo' }}</button>
+  <button id="draw-done" class="glass-btn draw-confirm" title="{{ t.done or 'Done' }}" aria-label="Done">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+  </button>
+  <button id="draw-cancel" class="glass-btn draw-cancel" title="{{ t.cancel or 'Cancel' }}" aria-label="Cancel">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+  </button>
+</div>
+
+<!-- Warehouse-layout authoring panel (driven by layout_manager.js). 3D racks; MAP view only. -->
+<div id="layout-panel" class="layout-panel hidden">
+  <div class="layout-row">
+    <label data-i18n="layout_element_type">Element</label>
+    <select id="layout-type">
+      <option value="rack" data-i18n="layout_type_rack">Rack (shelving)</option>
+      <option value="wall" data-i18n="layout_type_wall">Wall</option>
+    </select>
+  </div>
+  <div class="layout-row">
+    <label data-i18n="layout_height">Height (m)</label>
+    <input id="layout-height" type="number" min="0.2" step="0.1" value="2.4" style="width:4.5em" />
+    <label data-i18n="layout_levels">Levels</label>
+    <input id="layout-levels" type="number" min="1" max="8" step="1" value="3" style="width:4em" />
+  </div>
+  <div class="layout-row">
+    <label data-i18n="layout_rotation">Rotation°</label>
+    <input id="layout-rotation" type="number" min="0" max="360" step="5" value="0" style="width:4.5em" />
+    <label data-i18n="layout_label">Label</label>
+    <input id="layout-label" type="text" maxlength="12" placeholder="A" style="width:5em" />
+  </div>
+  <p class="layout-hint" data-i18n="layout_trace_hint">Click the two opposite floor corners on the map.</p>
+  <!-- element counter + per-element delete -->
+  <div class="layout-row layout-count-row">
+    <span id="layout-count" class="layout-count" style="display:none">0 elements</span>
+    <button id="layout-delete-last" class="layout-btn-danger" data-i18n="layout_delete_last" disabled>⌫ Delete last</button>
+  </div>
+  <!-- action buttons -->
+  <div class="layout-row layout-actions">
+    <button id="layout-add" class="layout-btn-primary" data-i18n="layout_add">＋ Add</button>
+    <button id="layout-outline" class="layout-btn-outline" data-i18n="layout_outline">⬡ Work area</button>
+  </div>
+  <div class="layout-row layout-actions">
+    <button id="layout-save" class="layout-btn-primary" data-i18n="layout_save">✓ Save</button>
+    <button id="layout-clear" class="layout-btn-danger" data-i18n="layout_clear">✕ Clear all</button>
+  </div>
+</div>
+
+{% endblock %}

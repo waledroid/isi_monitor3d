@@ -1,0 +1,105 @@
+# ISI Monitor 3D — Backbone runtime + dev environment.
+#
+# Create:
+#     conda env create -f environment.yml -n monitor3d
+#     conda activate monitor3d
+#
+# Refresh after edits:
+#     conda env update -f environment.yml -n monitor3d --prune
+#
+# Python 3.10 matches JetPack 6.x — picking it here keeps the eventual Jetson
+# Orin NX port cheap. Conda-forge's `opencv` headless build comes with both
+# GStreamer and FFmpeg compiled in, which is what S2's RTSP ingest needs.
+#
+# Multical (calibration BA) is NOT installed here — it pins
+# opencv-contrib-python<=4.7 and would corrupt this env's OpenCV 4.13. Run
+# `bash calibration/setup_multical.sh` to set up its isolated venv at
+# `calibration/.venv-multical/`. The Backbone never imports Multical.
+#
+# Deferred to later sprints (added on demand):
+#   - pydantic (S6 — metadata schemas)
+#
+# S3 brings CUDA 12.9 + ONNX Runtime (GPU EP) for inference on the RTX 5070
+# Blackwell (sm_120). Training is external; the Backbone consumes .onnx files.
+# No PyTorch in the runtime env — we don't train here. No TensorRT — the user
+# picked ONNX Runtime as the production backend for portability (same .onnx
+# runs on the Jetson Orin NX without rebuilding any engine).
+
+name: monitor3d
+channels:
+  - conda-forge
+  - nodefaults
+
+dependencies:
+  # Interpreter — pinned to match JetPack 6.x.
+  - python=3.10
+  - pip>=24
+
+  # Scientific stack.
+  - numpy>=1.26
+  - scipy>=1.11
+
+  # OpenCV — conda-forge headless build for py3.10 (no Qt, no display deps;
+  # Backbone is a service). The headless variant still ships with full
+  # GStreamer + FFmpeg support, which is what we need for RTSP.
+  - opencv=4.13.*=headless_py310*
+
+  # Video pipeline runtime — GStreamer + Python bindings for the RTSP ingest
+  # in S2. We use `pygobject` (PyGI) as the Python binding, not `gst-python`:
+  #   - `gst-python` 1.21.x (latest py310 build on conda-forge) hard-pins to
+  #     gstreamer 1.21 and gst-libav 1.21, which transitively pins FFmpeg 5
+  #     and collides with opencv 4.13's FFmpeg 8 dep.
+  #   - `pygobject` only needs libgirepository + libglib. It introspects
+  #     whatever GStreamer is at runtime via the .gir files in conda's
+  #     gstreamer install — no version pinning, no diamond conflict.
+  # Practically: `import gi; gi.require_version("Gst","1.0"); from gi.repository import Gst, GLib`
+  # gives us rtspsrc with `latency=`, drop-on-latency, RTCP NTP timestamps via
+  # `Gst.Buffer.pts`, and appsink frame pulls — the full RTSP pipeline.
+  - ffmpeg
+  - gstreamer>=1.22
+  - gst-plugins-base
+  - gst-plugins-good
+  - gst-plugins-bad
+  - gst-libav
+  - pygobject>=3.46
+
+  # 2D/3D Kalman filtering (homography + triangulation layers).
+  - filterpy>=1.4.5
+
+  # S3 — detection inference. ONNX Runtime with CUDAExecutionProvider on
+  # CUDA 12.9 covers the RTX 5070 (Blackwell sm_120). The conda-forge build
+  # is pre-linked against cuda129 so we don't need to manage the CUDA toolkit
+  # separately. CPUExecutionProvider is included by default — handy for CI.
+  - cuda-version=12.9
+  - onnxruntime=1.25.*=*cuda129*
+  - onnx>=1.20
+
+  # S13 — OpenVINO detector (`yolo_openvino`) for a future Intel CPU/iGPU edge
+  # node. CPU/Intel-iGPU only — it does NOT use the NVIDIA GPU; ONNX Runtime +
+  # CUDAExecutionProvider stays the fast path on the RTX 5070. Imported lazily,
+  # so the runtime works without it; only the yolo_openvino plugin needs it.
+  - openvino>=2024.0
+
+  # S6 — metadata UDP/JSON envelopes are pydantic-validated and versioned.
+  - pydantic>=2.6
+
+  # S9 — operator dashboard (monitor_web/, separate FastAPI process). The
+  # dashboard consumes the Backbone over UDP and imports its schemas for
+  # typed decode, so the deps live in the same env.
+  - fastapi>=0.115
+  - uvicorn>=0.30
+  - jinja2>=3.1
+
+  # Configuration files.
+  - pyyaml>=6.0
+
+  # Dev tooling.
+  - pytest>=8.0
+  - pytest-cov>=4.1
+  - ruff>=0.4
+
+  # The project itself — editable install. No extras: the conda packages
+  # above already satisfy `[geometry]`, and the `opencv-python` PyPI wheel
+  # in that extra would collide with conda's `opencv`.
+  - pip:
+    - --editable .

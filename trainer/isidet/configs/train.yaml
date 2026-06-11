@@ -1,0 +1,54 @@
+# isidet/configs/train.yaml  (paths below are resolved relative to the repo root)
+project_name: "isiDetector"
+nc: 2
+class_names: ["carton", "polybag"]
+hooks:
+  - "IndustrialLogger"
+
+# =========================================================
+# 🛑 ACTIVE ENGINE SWITCHBOARD (Uncomment ONE block below)
+# =========================================================
+
+# ---------------------------------------------------------
+# 🚀 OPTION A: YOLOv26 (CNN) - Fast, grid-based, high batch size
+# ---------------------------------------------------------
+model_type: "yolo"
+model_size: "n"
+dataset_path: "isidet/data/universal_dataset"
+optimizer_config: "isidet/configs/optimizers/yolo_optim.yaml"
+batch_size: 16
+image_size: 320
+mixed_precision: true 
+# YOLO Specific Augmentations
+# hsv_h: 0.015  
+# hsv_s: 0.7    
+# hsv_v: 0.4    
+fliplr: 0.5   
+mosaic: 1.0   
+scale: 0.5    
+
+# ---------------------------------------------------------
+# 🤖 OPTION B: RF-DETR (Transformer) - DINOv2 Backbone, Global Context
+# ---------------------------------------------------------
+# model_type: "rfdetr"
+# model_size: "n"
+# optimizer_config: "isidet/configs/optimizers/rfdetr_optim.yaml"
+# dataset_path: "isidet/data/rfdetr_dataset"
+# batch_size: 4      #4 default   # Keep low to prevent VRAM crashes
+# image_size: 416
+# mixed_precision: true
+
+
+inference:
+  conf_threshold: 0.3      # AI confidence cutoff
+  tracker:
+    track_buffer: 60       # Frames to wait before dropping ID
+    match_thresh: 0.9      # Strictness of ID matching
+  logging:
+    enabled: true
+    save_interval: 3600    # 3600 = 1 Hour, 60 = 1 Minute # 15 to test
+    log_dir: "isidet/logs"
+  udp:
+    enabled: true
+    host: "127.0.0.1"      # localhost — sorting controller on same machine
+    port: 9502             # consumer binds to this port to receive crossing events

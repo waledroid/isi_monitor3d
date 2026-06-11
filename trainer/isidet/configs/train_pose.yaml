@@ -1,0 +1,87 @@
+# trainer/isidet/configs/train_pose.yaml
+# Single-class "person" POSE (keypoint) model — YOLOv11-pose.
+#
+# In the IsiMonitor3D design the PERSON class is handled entirely by a pose
+# model: its ankle keypoints (COCO 15 = left ankle, 16 = right ankle) give the
+# foot node the homography layer projects to the floor — far more accurate than
+# a bbox bottom-center when a person is leaning or partially occluded by a pallet.
+#
+# Person uses the PRETRAINED COCO pose model out of the box (yolo11n-pose.pt);
+# you usually do NOT need to train. This config exists to (a) export that model
+# to the raw-head ONNX the backbone consumes, and (b) optionally FINE-TUNE on
+# site frames later for the camera geometry.
+#
+# Shares the task-agnostic isidet/yolo.py trainer — Ultralytics infers task=pose
+# from the *-pose.pt weights, and the trainer injects kpt_shape/flip_idx into the
+# generated data.yaml automatically.
+#
+# Run FROM trainer/isidet/ :
+#   conda activate isi-train
+#   python scripts/run_train.py --config configs/train_pose.yaml
+
+project_name: "person_pose"
+nc: 1
+class_names: ["person"]
+hooks:
+  - "IndustrialLogger"
+
+# --- model knobs: YOLOv11 POSE ---
+model_type: "yolo"
+model_size: "n"               # fallback variant if 'weights' is unset
+weights: "yolo11n-pose.pt"    # *-pose.pt → Ultralytics auto-selects task=pose
+                              # (n is fast + plenty for person feet; bump to
+                              # yolo11s-pose / m-pose for more capacity, or a
+                              # prior best.pt to finetune on site frames)
+dataset_path: "data/person_pose_yolo"   # YOLO-pose format; only needed to FINETUNE
+optimizer_config: "configs/optimizers/yolo_optim.yaml"
+batch_size: 16                # pose-n is light
+imgsz: 640                    # matches Backbone letterbox(640)
+mixed_precision: true
+epochs: 60
+workers: 2
+
+# COCO-17 keypoint layout (injected into the generated data.yaml). Override only
+# if you train on a different skeleton.
+kpt_shape: [17, 3]
+flip_idx: [0, 2, 1, 4, 3, 6, 5, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15]
+
+# --- one-shot export: .pt + .onnx (raw head) + OpenVINO .xml/.bin ---
+# Pose exports a raw head of shape (1, 4 + nc + 17*3, anchors); the backbone's
+# yolo_onnx_pose plugin runs its own NMS + keypoint decode, so nms=False /
+# opset=17 matches the detect/seg path and stays Jetson-portable.
+export_model: true
+export_formats: ["onnx", "openvino"]
+export_nms: false
+export_opset: 17
+
+# === Warehouse augmentations (flip_idx makes fliplr keypoint-correct) ===
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.5
+degrees: 15.0
+translate: 0.1
+scale: 0.5
+shear: 2.0
+perspective: 0.0005
+fliplr: 0.5
+flipud: 0.0
+mosaic: 1.0
+close_mosaic: 10
+mixup: 0.05
+copy_paste: 0.0               # not applicable to pose (no masks)
+erasing: 0.4
+camera_aug: true              # MotionBlur + ImageCompression + GaussNoise + Downscale
+
+inference:
+  conf_threshold: 0.3
+  tracker:
+    track_buffer: 60
+    match_thresh: 0.9
+  logging:
+    enabled: true
+    save_interval: 3600
+    log_dir: "logs"
+  udp:
+    enabled: false
+    host: "127.0.0.1"
+    port: 9502

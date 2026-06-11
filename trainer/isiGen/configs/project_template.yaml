@@ -1,0 +1,95 @@
+# isiGen project template — copied into data/<name>/project.yaml on project
+# creation (classes are replaced by the ones you give create_project).
+#
+# A project = ONE dataset type. Phases read their own sub-dict; plugin names
+# are registry keys (src/stages/*/base.py registries).
+
+name: __template__
+classes:                       # unique names, unique triggers, unique colors
+  - {name: palette, trigger: ISI_PLT,   color: [220, 40, 40]}
+  - {name: carton,  trigger: ISI_CRTN,  color: [40, 200, 40]}
+  - {name: polybag, trigger: ISI_PLYBG, color: [40, 90, 230]}
+
+phases:
+  # ── Phase 1: curate real images ────────────────────────────────────────────
+  curate:
+    min_side: 512              # warn (not reject) below this
+    dedupe: true               # sha256 content dedupe
+    strip_exif: true
+    jpeg_quality: 95
+
+  # ── Phase 2: dual-layer maps ───────────────────────────────────────────────
+  control_maps:
+    extractors: [depth_anything_v2, canny]
+    depth_anything_v2:
+      model_id: depth-anything/Depth-Anything-V2-Small-hf
+      device: cuda
+    canny:
+      low: 100
+      high: 200
+      blur_ksize: 3
+  masking:
+    masker: sam2
+    sam2:
+      model_id: facebook/sam2.1-hiera-small
+      device: cuda
+      multimask_output: false
+      fallback_auto: true      # promptless records → automatic mask generator
+
+  # ── Phase 3: anti-bleed captions ───────────────────────────────────────────
+  captioning:
+    captioner: template
+    template:
+      patterns:                # slots: {trigger} {class_phrase} {background}
+        - "a photo of {trigger} {class_phrase}, {background}"
+        - "{trigger} {class_phrase} standing in {background}"
+        - "an industrial photo of {trigger} {class_phrase}, {background}"
+      class_phrases:
+        palette: "wooden transport pallet"
+        carton: "cardboard box"
+        polybag: "plastic polybag package"
+      backgrounds:             # exhaustive background bank — THE anti-bleed mechanism
+        - "a busy warehouse aisle with tall metal shelving racks, concrete floor, fluorescent lighting"
+        - "a loading dock with an open roller door, daylight, painted floor markings"
+        - "an outdoor storage yard on wet asphalt under an overcast sky"
+        - "a factory floor with yellow safety lines and parked forklifts"
+        - "a cold-storage room with frosted walls and bright LED panels"
+
+  # ── Reserved keys (phases 4-8 land next session — schema is FINAL) ─────────
+  lora:
+    trainer: diffusers_sd3
+    rank: 16
+    resolution: 512
+    precision: bf16
+    gradient_checkpointing: true
+    optimizer: adamw_8bit
+    max_steps: 2000
+    lr: 1.0e-4
+    batch_size: 1
+    grad_accum: 4
+  scaffolds:
+    sources: [depth_remix, box3d_procedural]
+    count: 500
+    depth_remix: {}
+    box3d_procedural: {}
+  generation:
+    generator: sd35_large_controlnet
+    base_model: stabilityai/stable-diffusion-3.5-large
+    controlnet: stabilityai/stable-diffusion-3.5-large-controlnet-depth
+    quantization: nf4          # 8B transformer in 4-bit on the 12 GB card
+    text_encoder_3: nf4        # T5-XXL: nf4 | none (12 GB system RAM escape hatch)
+    cpu_offload: true
+    steps: 28
+    guidance: 4.5
+    controlnet_scale: 0.85
+    lora_weights: null         # set after phase 4
+    width: 1024
+    height: 1024
+    seed: -1                   # -1 = random per image
+  filtering:
+    filter: clip_score
+    min_score: 0.25
+    model_id: openai/clip-vit-base-patch32
+  export:
+    exporters: [yolo_seg]
+    val_fraction: 0.1

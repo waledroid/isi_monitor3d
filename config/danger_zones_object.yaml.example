@@ -1,0 +1,28 @@
+# Type-1 danger zones — proximity rings attached to tracked objects.
+#
+# Per detected class (matching `Track2D.cls`), declares three concentric
+# safety radii in meters:
+#   green_m   outer  — "aware"     (informational)
+#   yellow_m  middle — "caution"   (operator should attend)
+#   red_m     inner  — "critical"  (immediate hazard)
+#
+# When another tracked object crosses into a ring, the dashboard pulses the
+# matching colour and draws a proximity arrow with the live distance label.
+# The Backbone does NOT consume this file — it's purely a dashboard renderer
+# config in v1. The future Sécurité module will read the same file and emit
+# alert envelopes (S11).
+#
+# `alpha` controls the ring fill transparency (0.0..1.0).
+
+classes:
+  custom-robot:
+    green_m:  3.0
+    yellow_m: 1.5
+    red_m:    0.5
+    alpha:    0.18
+
+  forklift:
+    green_m:  4.0
+    yellow_m: 2.0
+    red_m:    0.8
+    alpha:    0.18

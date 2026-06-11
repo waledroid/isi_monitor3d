@@ -1,0 +1,95 @@
+# trainer/isidet/configs/train_pallet3_seg.yaml
+# 3-class instance SEGMENTATION — palette + carton + polybag — YOLOv11-seg.
+#
+# Dataset built by scripts/build_pallet3_seg.py from:
+#   • pallet_universal_labelme  (LabelMe polygons, single 'palette')  → class 0
+#   • colis_universal_dataset   (YOLO-seg carton/polybag)             → classes 1/2
+# Images are named pallets-* / colis-* so each source is findable in the merged set.
+#
+# Run FROM trainer/isidet/ :
+#   conda activate isi-train
+#   python scripts/run_train.py --config configs/train_pallet3_seg.yaml
+#
+# Rebuild the dataset (after more annotation) :
+#   python ../../scripts/build_pallet3_seg.py \
+#     --labelme data/pallet_universal_labelme --colis data/colis_universal_dataset \
+#     --out data/pallet3_yolo_seg --force
+
+project_name: "pallet3_seg"
+nc: 3
+class_names: ["palette", "carton", "polybag"]
+hooks:
+  - "IndustrialLogger"
+  - "MemoryCleanup"      # gc.collect() + torch.cuda.empty_cache() after each epoch
+                         # — flattens the host/GPU memory creep that OOM-killed
+                         # this run twice around epoch ~90 (silent SIGKILL).
+
+# --- model knobs: YOLOv11 SEGMENTATION ---
+model_type: "yolo"
+model_size: "m"               # fallback if 'weights' unset
+weights: "yolo11m-seg.pt"     # *-seg.pt → Ultralytics auto-selects task=segment
+                              # (yolo11s-seg / l-seg for less/more capacity;
+                              #  or a prior best.pt to finetune on site data)
+dataset_path: "data/pallet3_yolo_seg"   # data.yaml already written by the builder
+optimizer_config: "configs/optimizers/yolo_optim.yaml"   # supplies LR + early-stop patience
+# 12 GB RTX 5070: m-seg @ 1024 with batch 2 to stay well clear of OOM.
+# Higher imgsz (1024 vs 640) is the main lever for the far/small floor objects.
+batch_size: 2
+imgsz: 1024
+mixed_precision: true          # AMP — essential at 1024 on 12 GB
+# 200 is a ceiling; the optimizer_config's early-stop patience (≈50) keeps the best
+# checkpoint and stops when val mAP plateaus (usually ~100-160).
+epochs: 200
+workers: 2          # lowered from 4 — 1024px seg batches × workers exhausted WSL /dev/shm
+                    # (bus error). run_train.py also sets the file_system sharing
+                    # strategy, which is what protects the --resume path (Ultralytics
+                    # restores the checkpoint's workers, so this value won't apply there).
+cache: false
+
+# --- one-shot export: .pt + .onnx (raw head) + OpenVINO .xml/.bin ---
+# Seg exports TWO ONNX outputs (head + mask prototypes); the Backbone's
+# yolo_onnx_seg plugin runs its own NMS + mask decode, so nms=False / opset=17.
+export_model: true
+export_formats: ["onnx", "openvino"]
+export_nms: false
+export_opset: 17
+export_dynamic: true     # dynamic input → runtime-selectable inference size
+                         # (the dashboard imgsz slider 320..1024). Slightly slower
+                         # at 1024 than a static export, but lets you trade
+                         # speed↔accuracy without re-exporting.
+
+# === Warehouse augmentations ===
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.5
+degrees: 15.0
+translate: 0.1
+scale: 0.5
+shear: 2.0
+perspective: 0.0005
+fliplr: 0.5
+flipud: 0.0
+# colis is rebuilt ORIGINALS-ONLY (offline _aug copies dropped) → online aug does
+# the work each epoch (no mosaic-of-mosaic). Palette ~9:1 over carton/polybag, so
+# copy_paste is turned up: it's mask-aware and pastes carton/polybag instances onto
+# more scenes, directly multiplying the minority classes' exposure.
+mosaic: 1.0
+close_mosaic: 10
+mixup: 0.05
+copy_paste: 0.5               # high — minority (carton/polybag) instance boost
+erasing: 0.4
+camera_aug: true              # MotionBlur + ImageCompression + GaussNoise + Downscale
+
+inference:
+  conf_threshold: 0.3
+  tracker:
+    track_buffer: 60
+    match_thresh: 0.9
+  logging:
+    enabled: true
+    save_interval: 3600
+    log_dir: "logs"
+  udp:
+    enabled: false
+    host: "127.0.0.1"
+    port: 9502

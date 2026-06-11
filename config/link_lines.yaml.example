@@ -1,0 +1,21 @@
+# Distance-line rules for the dashboard floor map (S16).
+#
+# The dashboard draws a thin white line between each matching pair of tracked
+# objects with a live metric distance label at the midpoint. Pure render
+# preference — the Backbone's Track2D UDP envelope is unchanged.
+#
+# Schema:
+#   rules:
+#     - from: <class name>
+#       to:   [<class name>, ...]    # or ['*'] for "every other class"
+#       max_distance_m: <float>      # optional; omit/null = always draw
+#       color: "#rrggbb"             # optional override (default white)
+#
+# Rules are applied undirected at render time — a `from: person, to: [palette]`
+# rule links a (person, palette) pair regardless of which one was tracked first.
+
+rules:
+  # Safety-centric default: connect each person to every nearby non-person.
+  - from: person
+    to: ["*"]
+    max_distance_m: 5.0

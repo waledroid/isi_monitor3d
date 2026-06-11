@@ -1,0 +1,83 @@
+# Example backbone runtime configuration.
+#
+# Copy to `config/backbone.yaml` (gitignored) and edit per node.
+# The orchestrator (S6) reads this; until S6 lands, components are
+# instantiated manually in tests/tools.
+
+calibration_path: ./calibration.json
+
+cameras:
+  cam_a:
+    source:
+      name: rtsp
+      url: rtsp://192.168.1.10/Streaming/Channels/102
+      latency_ms: 100
+  cam_b:
+    source:
+      name: rtsp
+      url: rtsp://192.168.1.11/Streaming/Channels/102
+      latency_ms: 100
+  # USB / UVC camera example (alternative to RTSP). The device appears on Linux
+  # as /dev/videoN; width/height/fps are optional (decodebin negotiates the
+  # codec, so MJPG and raw YUYV cameras both work):
+  # cam_usb:
+  #   source:
+  #     name: v4l2
+  #     device: /dev/video0
+  #     width: 1280
+  #     height: 720
+  #     fps: 30
+
+ingestion:
+  frame_sync:
+    max_skew_ms: 33.0
+    max_age_ms: 1000.0
+    buffer_size: 8
+  frame_bus:
+    default_maxsize: 2
+
+detection:
+  plugin: yolo_onnx
+  onnx_path: ./models/yolo11n.onnx
+  class_names: [person, forklift, pallet]   # update to match your exported model
+  keep_classes: [person, forklift, pallet]
+  confidence_threshold: 0.25
+  iou_threshold: 0.45
+
+# OpenVINO alternative (Intel CPU / iGPU edge node — NOT the NVIDIA GPU). The IR
+# is exported with nms=False so it shares the raw head with the ONNX model.
+# detection:
+#   plugin: yolo_openvino
+#   model_xml: ./models/model.xml      # model.bin must sit beside it
+#   class_names: [palette_vide]
+#   confidence_threshold: 0.25
+#   iou_threshold: 0.45
+#   device: AUTO                        # AUTO | CPU | GPU (Intel iGPU)
+
+homography:
+  cross_cam_fusion:
+    match_distance_m:
+      person: 0.8
+      forklift: 1.6
+      pallet: 0.8
+  disagreement_gate:
+    agreement_distance_m:
+      person: 0.4
+      forklift: 0.8
+      pallet: 0.4
+  tracker:
+    plugin: bytetrack
+    conf_high: 0.5
+    conf_low: 0.1
+    match_distance_m:
+      person: 1.0
+      forklift: 2.0
+      pallet: 1.0
+  track_config:
+    process_noise: 0.1
+    measurement_noise_m: 0.05
+    min_hits_to_confirm: 3
+    max_lost_frames: 30
+    class_history_window: 5
+  stabilizer:
+    min_frames_confirmed: 1

@@ -1,0 +1,61 @@
+"""Phase-run + job-status API. Phase bodies are core/runners functions —
+identical to the CLI paths."""
+
+from __future__ import annotations
+
+from functools import partial
+
+from fastapi import APIRouter, HTTPException, Request
+
+from ...core.runners import (
+    run_captions,
+    run_control_maps,
+    run_export,
+    run_filter,
+    run_generation,
+    run_lora,
+    run_masks,
+    run_scaffolds,
+)
+from .deps import project_dir
+
+router = APIRouter()
+
+_PHASES = {
+    "maps": lambda d: partial(run_control_maps, d),
+    "masks": lambda d: partial(run_masks, d),
+    "captions": lambda d: partial(run_captions, d),
+    "lora": lambda d: partial(run_lora, d),
+    "scaffolds": lambda d: partial(run_scaffolds, d),
+    "generate": lambda d: partial(run_generation, d),
+    "filter": lambda d: partial(run_filter, d),
+    "export": lambda d: partial(run_export, d),
+}
+
+
+@router.post("/api/p/{name}/run/{phase}")
+async def run_phase(request: Request, name: str, phase: str) -> dict:
+    d = project_dir(request, name)
+    factory = _PHASES.get(phase)
+    if factory is None:
+        raise HTTPException(status_code=404,
+                            detail=f"unknown/not-yet-runnable phase {phase!r} "
+                                   f"(runnable: {sorted(_PHASES)})")
+    try:
+        job = request.app.state.jobs.submit(name, phase, factory(d))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True, "job": job.to_dict()}
+
+
+@router.get("/api/jobs")
+async def jobs(request: Request) -> dict:
+    return {"jobs": request.app.state.jobs.list()}
+
+
+@router.get("/api/jobs/{job_id}/log")
+async def job_log(request: Request, job_id: str) -> dict:
+    job = request.app.state.jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"job {job_id!r} not found")
+    return {"job": job.to_dict(), "log": list(job.log)}

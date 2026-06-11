@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Projects</h1>
+  <div id="project-list" class="project-list">loading…</div>
+</section>
+<section class="card">
+  <h2>New project</h2>
+  <form id="create-form" class="create-form">
+    <label>Name <input name="name" required pattern="[A-Za-z0-9_\-]+" placeholder="pallets_v1"></label>
+    <label>Classes <input name="classes" required
+      placeholder="palette:ISI_PLT, carton:ISI_CRTN, polybag:ISI_PLYBG"></label>
+    <button type="submit">Create</button>
+    <span id="create-msg" class="msg"></span>
+  </form>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="/static/js/projects.js"></script>{% endblock %}

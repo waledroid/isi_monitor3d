@@ -1,0 +1,55 @@
+calibration_path: /home/aatanda/isi_monitor3d/config/mode1/calibration.json
+cameras:
+  cam_a:
+    source:
+      name: rtsp
+      url: rtsp://admin:admin@192.168.1.88:554/2
+      latency_ms: 100
+      capture_fps: 12
+ingestion:
+  frame_sync:
+    max_skew_ms: 33.0
+    max_age_ms: 1000.0
+    buffer_size: 8
+    degraded_emit_after_ms: 100.0
+  frame_bus:
+    default_maxsize: 2
+detection:
+  plugin: yolo_onnx_seg
+  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26l-seg_e200_640px_09-06-2026_00-24-57/weights/best.onnx
+  class_names:
+  - palette
+  - carton
+  - polybag
+  confidence_threshold: 0.05
+  pose_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/tests/.cache/yolo11n-pose.onnx
+  pose_confidence_threshold: 0.5
+  iou_threshold: 0.45
+  inference_imgsz: 448
+homography:
+  cross_cam_fusion:
+    match_distance_m:
+      palette_vide: 0.8
+  disagreement_gate:
+    agreement_distance_m:
+      palette_vide: 0.4
+  tracker:
+    plugin: bytetrack
+    conf_high: 0.5
+    conf_low: 0.1
+    match_distance_m:
+      palette_vide: 1.0
+  track_config:
+    process_noise: 0.1
+    measurement_noise_m: 0.05
+    min_hits_to_confirm: 3
+    max_lost_frames: 30
+    class_history_window: 5
+  stabilizer:
+    min_frames_confirmed: 1
+metadata:
+  sinks:
+  - plugin: udp
+    host: 127.0.0.1
+    port: 9001
+zones_path: /home/aatanda/isi_monitor3d/config/zones.yaml

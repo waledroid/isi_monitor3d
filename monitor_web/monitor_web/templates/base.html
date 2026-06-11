@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ t.title or 'ISI Monitor 3D' }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/css/dashboard.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Self-hosted vendor libs (offline / air-gapped — no CDN). HTMX drives the
+       logs panel; Three.js (ESM, via the import map below) renders the 3D floor
+       map (floor_map_3d.js). -->
+  <script src="/static/js/vendor/htmx.min.js" defer></script>
+  <!-- Import map MUST precede any `type="module"` that imports "three". -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/static/js/vendor/three/three.module.min.js",
+      "three/addons/": "/static/js/vendor/three/addons/"
+    }
+  }
+  </script>
+</head>
+<body>
+  {% block content %}{% endblock %}
+
+  <script>
+    window.__monitor_web = {
+      lang: {{ lang | tojson }},
+      availableLangs: {{ available_langs | tojson }},
+      wsUrl: {{ ws_url | tojson }},
+      strings: {{ t | tojson }}
+    };
+  </script>
+  <script type="module" src="/static/js/lang.js"></script>
+  <script type="module" src="/static/js/ws_tracks.js"></script>
+  <script type="module" src="/static/js/floor_map_3d.js"></script>
+  <script type="module" src="/static/js/zone_patch.js"></script>
+  <script type="module" src="/static/js/live_overlay.js"></script>
+  <script type="module" src="/static/js/zone_manager.js"></script>
+  <script type="module" src="/static/js/mp4_unlock.js"></script>
+  <script type="module" src="/static/js/calibration_status.js"></script>
+  <script type="module" src="/static/js/calibration_picker.js"></script>
+  <script type="module" src="/static/js/layout_manager.js"></script>
+
+  <!-- Alpine.js (self-hosted) drives the big-panel reactive state. big_panel.js
+       registers the `bigPanel` store on `alpine:init`; it is a CLASSIC deferred
+       script placed immediately BEFORE Alpine so its listener is guaranteed to
+       run first (module vs. defer execution order is otherwise ambiguous). -->
+  <script defer src="/static/js/big_panel.js"></script>
+  <script defer src="/static/js/vendor/alpine.min.js"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+.venv/
+venv/
+
+models/*.pt
+models/*.onnx
+models/*.engine
+models/*.trt
+*.engine
+*.trt
+
+calibration.json
+config/local.yaml
+
+*.mp4
+*.mkv
+*.avi
+fixtures/recordings/
+
+.vscode/
+.idea/
+*.swp
+
+# training artifacts (multi-GB, never pushed)
+trainer/isidet/runs/
+trainer/isidet/data/
+trainer/isidet/logs/
+trainer/isidet/models/
+trainer/isiGen/runs/
+trainer/isiGen/data/
+trainer/isidet/tests/.cache/
+*.pt
+
+# local scratch (recordings, old videos, slides)
+archive/
+
+# Multical isolated venv
+calibration/.venv-multical/
+
+# WSL Windows-download artifacts
+*:Zone.Identifier
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

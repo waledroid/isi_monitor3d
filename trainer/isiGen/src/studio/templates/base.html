@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>isiGen Studio</title>
+  <link rel="stylesheet" href="/static/css/studio.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">isiGen <span>Studio</span></a>
+  {% block nav %}{% endblock %}
+  <div id="jobbar" class="jobbar" title="latest job"></div>
+</header>
+<main class="page">
+  {% block content %}{% endblock %}
+</main>
+<script type="module" src="/static/js/jobs.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>
