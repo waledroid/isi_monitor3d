@@ -31,8 +31,8 @@ conda run -n isi-train pip install --no-build-isolation \
 conda run -n isi-train python -c "import torch, diffusers, sam2; print(torch.cuda.get_device_capability())"  # (12, 0)
 # All generation models (SDXL base, depth ControlNet, fp16-fix VAE) are UNGATED
 # — no HF login needed. Pre-fetch them (≈9.5 GB) with:
-conda run -n isi-train hf download stabilityai/stable-diffusion-xl-base-1.0 --include "*.json" "*.txt" "*fp16.safetensors"
-conda run -n isi-train hf download diffusers/controlnet-depth-sdxl-1.0 --include "*.json" "*fp16.safetensors"
+conda run -n isi-train hf download stabilityai/stable-diffusion-xl-base-1.0 --include "*.json" --include "*.txt" --include "*fp16.safetensors"
+conda run -n isi-train hf download diffusers/controlnet-depth-sdxl-1.0 --include "*.json" --include "*fp16.safetensors"
 conda run -n isi-train hf download madebyollin/sdxl-vae-fp16-fix
 ```
 
