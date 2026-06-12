@@ -45,7 +45,7 @@ from ..floor_rectify import (
 from ..video_stream import JPEG_BOUNDARY, mjpeg_stream
 from .routes_calibrate import _mode_calibration_path
 from .routes_projection import _load_rig_cached
-from .routes_zone_patches import find_patch, load_patches, patch_pixel_box, patch_rect
+from .routes_zone_patches import find_patch, patch_pixel_box, patch_rect
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +70,11 @@ def _cap_fps(frames: Iterator, fps: float = DISPLAY_FPS) -> Iterator:
         yield image
 
 
-def _backbone_running(request) -> bool:
+def _backbone_running(state) -> bool:
     """True iff the Backbone supervisor is RUNNING. Gates whether the camera views do
-    in-process detection: off (raw feed) until START, on once the Backbone spawns."""
-    sup = getattr(request.app.state, "supervisor", None)
+    in-process detection: off (raw feed) until START, on once the Backbone spawns.
+    Takes the app state (works from both HTTP requests and WebSocket handlers)."""
+    sup = getattr(state, "supervisor", None)
     try:
         return bool(sup) and sup.state == "running"
     except Exception:
@@ -148,38 +149,28 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
     Gated by ``is_running`` (the Backbone-running check): until START, yields the RAW
     frame — no detection, pose or lines — so the cam view just confirms the camera.
 
-    STRICT zone rule: the moment a camera has ANY zone patch, this view runs NO
-    full-frame object detector — objects come SOLELY from the background
-    :class:`~monitor_web.zone_worker.ZoneDetectionWorker`'s snapshot
+    STRICT rule: the cam view NEVER runs a full-frame object detector. The only
+    model that runs on the full frame here is HUMAN POSE; objects come SOLELY from
+    the background :class:`~monitor_web.zone_worker.ZoneDetectionWorker`'s snapshot
     (``get_zone_dets`` closure: one coherent frame's worth, already person-free and
-    cross-zone deduped at publish time), and the only thing that runs on the full
-    frame here is HUMAN POSE. With NO zones, it falls back to the classic full-frame
-    detector. Pose re-fetched per frame (cached) so a model swap applies live."""
+    cross-zone deduped at publish time) — naturally empty when the camera has no
+    zones. Pose re-fetched per frame (cached) so a model swap applies live."""
+    pose = dist_view = dets = None
     for image in frames:
         if is_running is not None and not is_running():
-            yield image            # Backbone stopped → raw camera feed only
+            # Backbone stopped → raw camera feed only. DROP the previous
+            # iteration's refs: a suspended generator's locals otherwise pin
+            # the pose engine (its CUDA session) and the dets' full-frame
+            # masks after STOP, defeating reset_detector()'s memory release
+            # for as long as the panel stays open.
+            pose = dist_view = dets = None
+            yield image
             continue
         dist_view = _warp_camera(cfg, camera_id) if distances_enabled(cfg) else None
         dist_style = distance_line_style(cfg)
         pose = get_pose_detector(cfg)
-        patches = [p for p in load_patches(cfg) if (p.get("camera") or "cam_a") == camera_id]
-        if patches:
-            # Zone-based (STRICT): the cam's OWN object detector is OFF — render the
-            # worker's published detections; pose on the full frame.
-            dets = get_zone_dets() if get_zone_dets is not None else []
-            yield annotate_frame(image, None, cam_id=camera_id, detections=dets,
-                                 show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
-                                 show_boxes=boxes_enabled(cfg), pose_detector=pose,
-                                 dist_view=dist_view, dist_max_m=person_pallet_max_m(cfg),
-                                 show_occupancy=occupancy_enabled(cfg), dist_style=dist_style)
-            continue
-        # No zones → classic full-frame detection.
-        try:
-            detector = get_detector(cfg)
-        except HTTPException:
-            yield image
-            continue
-        yield annotate_frame(image, detector, cam_id=camera_id,
+        dets = get_zone_dets() if get_zone_dets is not None else []
+        yield annotate_frame(image, None, cam_id=camera_id, detections=dets,
                              show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
                              show_boxes=boxes_enabled(cfg), pose_detector=pose,
                              dist_view=dist_view, dist_max_m=person_pallet_max_m(cfg),
@@ -218,6 +209,7 @@ def _warp_detect_iter(frames: Iterator, cfg, camera_id: str, cam, M, out_wh, do_
     _M = M
     _out_wh = out_wh
     _checked = False
+    detector = None
     for image in frames:
         if not _checked:
             _checked = True
@@ -232,6 +224,7 @@ def _warp_detect_iter(frames: Iterator, cfg, camera_id: str, cam, M, out_wh, do_
         warped = rectify_frame(image, cam.K, cam.D, cam.H, out_wh=_out_wh, M=_M)
         # Detect only when ?detect=1 AND the Backbone is running (gated per frame).
         if not do_detect or (is_running is not None and not is_running()):
+            detector = None   # don't pin the session in the suspended frame after STOP
             yield warped
             continue
         try:
@@ -260,12 +253,21 @@ def _to_crop(d, x0: int, y0: int, ch: int, cw: int):
                      keypoints_uv=d.keypoints_uv, mask=mask)
 
 
+_ZONE_STATUS_LABELS = {
+    "no_vram": "MODEL UNAVAILABLE (VRAM)",
+    "error": "DETECTION ERROR",
+}
+
+
 def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
-                      infer_size: int = 320, is_running=None, get_dets=None) -> Iterator:
+                      infer_size: int = 320, is_running=None, get_dets=None,
+                      get_status=None) -> Iterator:
     """Pure RENDERER for a zone panel — NO detection in the HTTP path. Crops each
     frame to the zone's bounding rect, draws the background worker's published
     detections for this zone (translated to crop coords), then downsizes to the
-    panel display size. Backbone stopped → raw crop (the pre-START state)."""
+    panel display size. Backbone stopped → raw crop (the pre-START state). A zone
+    the worker disabled (circuit breaker) gets its status banner drawn instead of
+    silently looking object-free."""
     for image in frames:
         ih, iw = image.shape[:2]
         box = patch_pixel_box(rect, stored_wh, (iw, ih))
@@ -281,6 +283,12 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
                                   show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
                                   show_boxes=boxes_enabled(cfg), pose_detector=None,
                                   show_occupancy=occupancy_enabled(cfg))
+            label = _ZONE_STATUS_LABELS.get(get_status() if get_status else "")
+            if label:
+                cv2.putText(crop, label, (8, max(20, ch - 12)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
+                cv2.putText(crop, label, (8, max(20, ch - 12)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (60, 60, 255), 1, cv2.LINE_AA)
         # Downscale to the panel display size (longest side = infer_size) for
         # bandwidth parity with the old fed-image stream.
         longest = max(ch, cw)
@@ -291,32 +299,43 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
         yield crop
 
 
+def build_zone_stream(state, patch_id: str) -> Iterator:
+    """Frame iterator for one zone-patch panel (crop + worker detections + status
+    banner). Shared by the MJPEG endpoint and /ws/video. Raises ``LookupError``
+    when the ROI or its camera isn't configured."""
+    cfg = state.settings
+    patch = find_patch(cfg, patch_id)
+    if patch is None:
+        raise LookupError(f"zone patch {patch_id!r} not found")
+    camera_id = patch.get("camera", "cam_a")
+    cameras = _load_cameras_from_backbone_yaml(cfg.backbone_config_path)
+    if camera_id not in cameras:
+        raise LookupError(f"camera {camera_id!r} not configured")
+    src_cfg = cameras[camera_id].get("source", {})
+    rect = patch_rect(patch)   # polygon bounding box (or stored rect)
+    if rect is None:
+        raise LookupError(f"zone patch {patch_id!r} has no rect/polygon")
+    manager = getattr(state, "zone_manager", None)
+    frames = _cap_fps(_frame_iter(camera_id, src_cfg), display_fps(cfg))
+    return _zone_render_iter(
+        frames, cfg, camera_id, rect, patch.get("frame_wh"),
+        infer_size=int(patch.get("infer_size") or 320),
+        is_running=lambda: _backbone_running(state),
+        get_dets=(lambda: manager.zone_dets(patch_id)) if manager is not None else None,
+        get_status=(lambda: manager.zone_status(patch_id)) if manager is not None else None,
+    )
+
+
 @router.get("/stream/zone/{patch_id}")
 async def zone_patch_stream(patch_id: str, request: Request) -> StreamingResponse:
     """Live MJPEG of one zone-patch ROI: the camera feed cropped to the watch box with
     the background worker's detections overlaid (the panel never detects itself).
     Reuses the shared CameraHub session, so it adds no extra RTSP load. 404 if the
     ROI or its camera isn't configured."""
-    cfg = request.app.state.settings
-    patch = find_patch(cfg, patch_id)
-    if patch is None:
-        raise HTTPException(status_code=404, detail=f"zone patch {patch_id!r} not found")
-    camera_id = patch.get("camera", "cam_a")
-    cameras = _load_cameras_from_backbone_yaml(cfg.backbone_config_path)
-    if camera_id not in cameras:
-        raise HTTPException(status_code=404, detail=f"camera {camera_id!r} not configured")
-    src_cfg = cameras[camera_id].get("source", {})
-    rect = patch_rect(patch)   # polygon bounding box (or stored rect)
-    if rect is None:
-        raise HTTPException(status_code=404, detail=f"zone patch {patch_id!r} has no rect/polygon")
-    manager = getattr(request.app.state, "zone_manager", None)
-    frames = _cap_fps(_frame_iter(camera_id, src_cfg), display_fps(cfg))
-    frames = _zone_render_iter(
-        frames, cfg, camera_id, rect, patch.get("frame_wh"),
-        infer_size=int(patch.get("infer_size") or 320),
-        is_running=lambda: _backbone_running(request),
-        get_dets=(lambda: manager.zone_dets(patch_id)) if manager is not None else None,
-    )
+    try:
+        frames = build_zone_stream(request.app.state, patch_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return StreamingResponse(
         mjpeg_stream(frames),
         media_type=f"multipart/x-mixed-replace; boundary={JPEG_BOUNDARY}",
@@ -366,61 +385,63 @@ def _unified_iter(cam_ids, src_cfgs, views, fps=DISPLAY_FPS) -> Iterator:
             hub.release(s)
 
 
+def build_unified_stream(state) -> Iterator:
+    """Frame iterator for the Mode-2 unified bird's-eye composite. Shared by the
+    MJPEG endpoint and /ws/video. Raises ``LookupError`` when unavailable."""
+    cfg = state.settings
+    cameras = _load_cameras_from_backbone_yaml(cfg.backbone_config_path)
+    cal_path = _mode_calibration_path(cfg)
+    if not cal_path.exists():
+        raise LookupError("no Mode-2 calibration — run calibrate-all")
+    try:
+        rig = _load_rig_cached(str(cal_path.resolve()), cal_path.stat().st_mtime_ns)
+    except Exception as exc:
+        raise LookupError(f"calibration unreadable: {exc}") from exc
+    cam_ids = [c for c in ("cam_a", "cam_b") if c in cameras and c in rig]
+    if len(cam_ids) < 2:
+        raise LookupError("unified view needs 2 configured+calibrated cameras")
+    views = {cid: rig[cid] for cid in cam_ids}
+    src_cfgs = {cid: cameras[cid].get("source", {}) for cid in cam_ids}
+    return _unified_iter(cam_ids, src_cfgs, views, display_fps(cfg))
+
+
 @router.get("/stream/unified")
 async def unified_stream(request: Request) -> StreamingResponse:
     """Mode-2 unified bird's-eye view: every configured camera warped to the shared
     metric floor and composited into one top-down picture. Needs the Mode-2 (joint)
     calibration so the cameras share one world frame. 404 if <2 cameras are
     configured-and-calibrated. Degrades to the live cameras if one feed is down."""
-    cfg = request.app.state.settings
-    cameras = _load_cameras_from_backbone_yaml(cfg.backbone_config_path)
-    cal_path = _mode_calibration_path(cfg)
-    if not cal_path.exists():
-        raise HTTPException(status_code=404, detail="no Mode-2 calibration — run calibrate-all")
     try:
-        rig = _load_rig_cached(str(cal_path.resolve()), cal_path.stat().st_mtime_ns)
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail=f"calibration unreadable: {exc}") from exc
-    cam_ids = [c for c in ("cam_a", "cam_b") if c in cameras and c in rig]
-    if len(cam_ids) < 2:
-        raise HTTPException(status_code=404, detail="unified view needs 2 configured+calibrated cameras")
-    views = {cid: rig[cid] for cid in cam_ids}
-    src_cfgs = {cid: cameras[cid].get("source", {}) for cid in cam_ids}
+        frames = build_unified_stream(request.app.state)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return StreamingResponse(
-        mjpeg_stream(_unified_iter(cam_ids, src_cfgs, views, display_fps(cfg))),
+        mjpeg_stream(frames),
         media_type=f"multipart/x-mixed-replace; boundary={JPEG_BOUNDARY}",
     )
 
 
-@router.get("/stream/video/{camera_id}")
-async def video_stream(
-    camera_id: str,
-    request: Request,
-    detect: bool = False,
-    warp: bool = False,
-) -> StreamingResponse:
-    """Live MJPEG for a camera.
+def build_cam_stream(state, camera_id: str, *, detect: bool = False,
+                     warp: bool = False) -> Iterator:
+    """Frame iterator for a camera view. Shared by the MJPEG endpoint and
+    /ws/video. Raises ``LookupError`` when the camera isn't configured.
 
-    - ``?detect=1`` runs the configured detector in-process and overlays boxes
-      (+ foot nodes if Settings allows) — needs **no calibration**.
-    - ``?warp=1`` auto-rectifies the feed to a bird's-eye floor view through the
-      current mode's calibration homography (the frontend adds this only when the
-      camera is calibrated). The output is auto-fit to the warped frame's bounds
-      so no content is cropped. When combined with ``detect``, detection runs on
-      the RECTIFIED frame. Best-effort: if the camera isn't calibrated, falls back
-      to the raw (+detect) feed — the stream never 503s.
+    - ``detect`` overlays pose (+ zone-worker detections + distance lines) once
+      the Backbone runs — needs **no calibration**.
+    - ``warp`` auto-rectifies through the current mode's calibration homography;
+      best-effort (uncalibrated camera → raw feed).
     """
-    cfg = request.app.state.settings
+    cfg = state.settings
     cameras = _load_cameras_from_backbone_yaml(cfg.backbone_config_path)
     if camera_id not in cameras:
-        raise HTTPException(status_code=404, detail=f"camera {camera_id!r} not configured")
+        raise LookupError(f"camera {camera_id!r} not configured")
     src_cfg = cameras[camera_id].get("source", {})
     # Gate in-process detection on the Backbone RUNNING — checked PER FRAME (via the
     # `is_running` closure) so an already-open cam stream flips from raw → detection
     # the instant START fires, no reload. Before START the cam views show only the
-    # RAW feed (confirm the camera; status AMBER "ready — press START"); detection,
-    # pose + distance lines begin with the Backbone. Also spares idle GPU/RAM.
-    is_running = lambda: _backbone_running(request)   # noqa: E731
+    # RAW feed (confirm the camera; status AMBER "ready — press START"); pose +
+    # distance lines begin with the Backbone. Also spares idle GPU/RAM.
+    is_running = lambda: _backbone_running(state)   # noqa: E731
     warp_cam = _warp_camera(cfg, camera_id) if warp else None
     frames = _frame_iter(camera_id, src_cfg)
     if warp_cam is not None:
@@ -435,12 +456,36 @@ async def video_stream(
                                    is_running=is_running)
     elif detect:
         # Per-frame detector lookup (see _detect_iter) so model changes apply live.
-        manager = getattr(request.app.state, "zone_manager", None)
+        manager = getattr(state, "zone_manager", None)
         frames = _detect_iter(
             _cap_fps(frames, display_fps(cfg)), cfg, camera_id,
             is_running=is_running,
             get_zone_dets=(lambda: manager.camera_dets(camera_id)) if manager is not None else None,
         )
+    return frames
+
+
+@router.get("/stream/video/{camera_id}")
+async def video_stream(
+    camera_id: str,
+    request: Request,
+    detect: bool = False,
+    warp: bool = False,
+) -> StreamingResponse:
+    """Live MJPEG for a camera.
+
+    - ``?detect=1`` overlays pose + zone-worker detections in-process (+ foot
+      nodes if Settings allows) — needs **no calibration**.
+    - ``?warp=1`` auto-rectifies the feed to a bird's-eye floor view through the
+      current mode's calibration homography (the frontend adds this only when the
+      camera is calibrated). The output is auto-fit to the warped frame's bounds
+      so no content is cropped. Best-effort: if the camera isn't calibrated, falls
+      back to the raw (+detect) feed — the stream never 503s.
+    """
+    try:
+        frames = build_cam_stream(request.app.state, camera_id, detect=detect, warp=warp)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return StreamingResponse(
         mjpeg_stream(frames),
         media_type=f"multipart/x-mixed-replace; boundary={JPEG_BOUNDARY}",

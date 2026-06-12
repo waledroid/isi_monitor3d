@@ -24,8 +24,9 @@ JPEG_QUALITY = 75
 MAX_HEIGHT_PX = 720
 
 
-def encode_mjpeg_frame(image: np.ndarray) -> bytes:
-    """Encode a BGR ``(H, W, 3)`` ndarray as one multipart MJPEG chunk."""
+def encode_jpeg(image: np.ndarray) -> bytes:
+    """Encode a BGR ``(H, W, 3)`` ndarray as bare JPEG bytes (≤720p downscale).
+    Shared by the MJPEG multipart wrapper below and the /ws/video binary frames."""
     if image.ndim != 3 or image.shape[2] != 3:
         raise ValueError(f"expected (H, W, 3) BGR, got {image.shape}")
     if image.shape[0] > MAX_HEIGHT_PX:
@@ -35,11 +36,17 @@ def encode_mjpeg_frame(image: np.ndarray) -> bytes:
     ok, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
     if not ok:
         raise RuntimeError("cv2.imencode failed")
+    return buf.tobytes()
+
+
+def encode_mjpeg_frame(image: np.ndarray) -> bytes:
+    """Encode a BGR ``(H, W, 3)`` ndarray as one multipart MJPEG chunk."""
+    payload = encode_jpeg(image)
     return (
         b"--" + JPEG_BOUNDARY.encode() + b"\r\n"
         b"Content-Type: image/jpeg\r\n"
-        b"Content-Length: " + str(len(buf)).encode() + b"\r\n\r\n"
-        + buf.tobytes() + b"\r\n"
+        b"Content-Length: " + str(len(payload)).encode() + b"\r\n\r\n"
+        + payload + b"\r\n"
     )
 
 

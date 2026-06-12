@@ -1,7 +1,7 @@
 # ISI Monitor 3D — Project Task Reference
 
 > Heavy reference / running to-do. Phase-by-phase status of the warehouse-vision system.
-> **Last updated:** 2026-06-09 · **Tests:** 370 backbone + 196 monitor_web (all green).
+> **Last updated:** 2026-06-12 · **Tests:** 370 backbone + 235 monitor_web (all green).
 
 ## What this is
 A single **Backbone** process turns RTSP video into **metric, identity-stable metadata** published over
@@ -58,8 +58,11 @@ KPI gates (reprojection ≤2 px, triangulation ≤5–8 px, latency p95 <200 ms)
 | Feature | Status | Notes |
 |---|---|---|
 | Big panel MAP / CAM1 / CAM2 / UNIFIED / MP4 toggle | ✅ | `big_panel.js` Alpine store |
-| Live MJPEG per cam (one shared RTSP session via CameraHub) | ✅ | `camera_hub.py`, `/stream/video/{cam}` |
+| **Single-WebSocket video transport** (all panels over one `/ws/video`; MJPEG kept for debug/MP4) | ✅ | `routes_ws_video.py`, `video_ws.js` |
+| One shared RTSP session per cam via CameraHub | ✅ | `camera_hub.py` |
+| **Cam views POSE-ONLY** (no full-frame detector ever; objects solely from zone workers) | ✅ | `_detect_iter` (routes_video.py) |
 | Detection overlay (boxes/masks/foot-nodes) + pose + occupancy badge | ✅ | `detection_overlay.py` |
+| **Zone isolation guards**: VRAM admission + per-zone circuit breaker + per-zone `max_fps` | ✅ | `zone_worker.py`, `get_zone_detector` |
 | Pallet occupancy `palette_vide / palette_carton / palette_polybag / …` | ✅ | image-overlap (A) + metric (B) hybrid |
 | Person↔pallet distance lines (elastic + distance badge) | ✅ | needs calibration |
 | Pixi floor map (digital twin: sprites, zones, danger rings, arrows) | ✅ | `floor_map.js` |
@@ -75,8 +78,10 @@ KPI gates (reprojection ≤2 px, triangulation ≤5–8 px, latency p95 <200 ms)
 | START/STOP supervisor, GB/FR i18n, hidden MP4 dev viewer | ✅ | — |
 | Hidden MP4 viewer occupancy overlay | ✅ | parity with CAM preview |
 
-**Runtime perf (just added):** ✅ no pose inside zone patches · ✅ configurable display-FPS cap (default 10)
-on all detect/patch/unified streams · ⬜ detector **idle-release** (reclaim a stopped session's GPU memory).
+**Runtime perf:** ✅ no pose inside zone patches · ✅ configurable display-FPS cap (default 10)
+on all detect/patch/unified streams · ✅ per-zone `max_fps` budget (heavy zone stops dragging light ones) ·
+✅ VRAM admission before zone-session builds (no more CUDA-700 from over-admission) ·
+⬜ detector **idle-release** (reclaim a stopped session's GPU memory).
 
 ---
 
@@ -129,7 +134,7 @@ mounted + jointly calibrated.
 | GPU memory probe in heartbeat (`gpu=used/total MB`) | ✅ | `hardware.gpu_memory_mb` |
 | Repo reorg: `archive/` (media/scratch), `docs/specs/` (PDFs), `config/mode{1,2}/` | ✅ | root 14 items |
 | **trainer/ prune** (22 GB old `runs/`, dup weights, `mytest_*`) | ⬜ | **blocked until training finishes** (~10–15 GB reclaimable) |
-| Version control (no git today — moves are the only undo) | ⚠️ ⬜ | **→ Part G** (do *before* Docker) |
+| Version control | ✅ | repo on GitHub `waledroid/isi_monitor3d`, branch `main` (2026-06-12) |
 
 ---
 
@@ -139,13 +144,13 @@ Reproducible, version-controlled, supervised deployment. None of this exists yet
 and the system runs from the `monitor3d` conda env + the dashboard's dev START/STOP supervisor.
 **Do the git/repo steps FIRST — Docker + ops build on a committed repo.**
 
-### G.1 — Repo & version control (do first)
+### G.1 — Repo & version control — ✅ DONE (2026-06-12)
 | Item | Status | Notes |
 |---|---|---|
-| **`git init` + initial commit** | ⬜ | foundational — no VCS today, moves are currently the only undo |
-| **`.gitignore`** (`*.egg-info/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `archive/`, `trainer/isidet/runs/`, large `*.onnx`/`*.pt`, `*:Zone.Identifier`) | ⬜ | |
-| **`.gitattributes` / Git LFS** for model weights + big binaries (`*.onnx`, `*.pt`) | ⬜ | keep the code repo lean |
-| Repo layout + branch model (main + feature branches) + remote (e.g. GitHub) | ⬜ | |
+| **`git init` + initial commit** | ✅ | 386 files / ~11 MB; identity `waledroid <22135232+waledroid@users.noreply.github.com>` |
+| **`.gitignore`** | ✅ | trainer `runs/data/logs/models` (~28 GB), `archive/` (2.1 GB), all `*.pt`, media, caches, `.venv-multical`, `*:Zone.Identifier`, `.claude/` local files |
+| **`.gitattributes` / Git LFS** for weights | ✅ superseded | weights/datasets are **gitignored**, not LFS-tracked — the repo stays code-only; models ship via the deploy volume |
+| Remote + branch model | ✅ | pushed to **github.com/waledroid/isi_monitor3d** `main` (public — note: live `config/backbone.yaml` incl. LAN rtsp creds committed by explicit choice); gh CLI 2.94 in `~/.local/bin`, auth via browser flow |
 
 ### G.2 — Containerization, deployment & health (build on the committed repo)
 | Item | Status | Notes |
@@ -280,14 +285,60 @@ All suites green throughout: **backbone 370**, **monitor_web 216** (as of the 06
 
 ---
 
+## 📓 Session log — 2026-06-12 (git + dashboard architecture rework)
+
+**Version control — repo live on GitHub** ✅ *(closes G.1 / priority item 4)*
+- gh CLI 2.94 installed user-local (`~/.local/bin`, no sudo), browser-flow auth as **waledroid**, git identity set to the GitHub noreply form. `git init -b main`, `.gitignore` extended (trainer `runs/data/logs/models` ≈28 GB, `archive/` 2.1 GB, all `*.pt`, test caches, `.venv-multical`, WSL `:Zone.Identifier`, `.claude/` local files) — **386 files / ~11 MB** committed, rebased onto GitHub's auto-README, pushed to **github.com/waledroid/isi_monitor3d** (`main`, public; spec PDFs + live configs incl. the LAN rtsp URL included by explicit choice). LFS skipped deliberately: weights are ignored, repo stays code-only.
+
+**Cam views POSE-ONLY — "no zones → full detection" removed** ✅
+- `_detect_iter` (routes_video.py) lost its fallback branch: the big CAM views **never** build the full-frame detector now. Once the Backbone runs, the only full-frame model is **pose**; object boxes come solely from the zone-worker snapshot (no zones ⇒ skeletons only). `get_detector`'s remaining consumers: MP4 dev viewer + warp verification. +3 tests (`test_detect_iter.py`) pin it (monkeypatched `get_detector` raises if touched).
+
+**Zone isolation guards (in-process — subprocess sandboxing explicitly rejected)** ✅
+- Decision discussed & locked: per-model subprocesses would cost ~0.5 GB CUDA context EACH on the 12 GB card + IPC + the orphan-reaping problem class; the dominant failure (CUDA-700) is *preventable over-admission*, not a random fault. Escalation path if it ever still bites: ONE supervisor-restarted inference subprocess, never per-model.
+- **VRAM admission:** `get_zone_detector` raises `ZoneModelUnavailable("no_vram")` instead of building a session when free VRAM < 1.5 GB (ORT OOM mid-build = CUDA-700 = every session in the process dies).
+- **Per-zone circuit breaker** (`zone_worker.py`): a zone whose detector fails (refused / build / inference) is disabled 30 s then retried — **other zones keep detecting**; status `ok|no_vram|error` published in the snapshot and drawn as a red banner on the zone panel (`_zone_render_iter`). Zone-save clears the breaker.
+- **Per-zone `max_fps`** (`PatchRect.max_fps`, config-only): budgeted zone re-infers only when due, last dets carry forward — a heavy RF-DETR zone at 2–4 fps no longer drags the light zones below display FPS. +5 tests (`test_zone_isolation.py`).
+
+**Settings-save freeze — root-caused & fixed structurally (MJPEG → one WebSocket)** ✅
+- **Root cause:** up to 7 simultaneous MJPEG `<img>` streams (hidden big-panel tabs kept streaming under `x-show` + 3 zone panels) exhausted the browser's ~6-connection HTTP/1.1 cap → the settings POST/response + reloads starved → "frozen until a new tab". Secondary: the POST handler blocked the event loop (gc.collect 0.5–2 s, onnx.load, fsync, worker reload).
+- **New transport:** all dashboard video over ONE multiplexed **`/ws/video`** (`routes_ws_video.py`): client subs/unsubs JSON, frames binary `uint8 idLen | stream-id | JPEG`; ids `cam:<id>` / `cam:<id>:warp` / `zone:<patch_id>` / `unified`. Server reuses the SAME sync pipelines (extracted `build_cam_stream`/`build_zone_stream`/`build_unified_stream`) in per-subscription daemon threads with a one-slot drop-oldest holder. MJPEG endpoints kept for curl debug + MP4 dev tab.
+- **Client:** `static/js/video_ws.js` (`window.__videoWS`, first deferred script in head) renders blob URLs into the existing `<img>`s — CSS/expand untouched; auto-reconnect w/ backoff; **resubscribes on `config:saved`** so model/camera changes apply live (replaces the `streamNonce` URL juggling; only the visible panel holds a stream). `big_panel.js` effect + `zone_patch.js` rewired.
+- **Event loop unblocked:** `post_config` + `post_zone_patches` are now deliberately **sync `def`** handlers → FastAPI runs their blocking tails in the threadpool.
+- **Verified live (:8100, sandboxed config):** one socket carried cam + zone simultaneously, unknown-stream JSON errors, unsub stops one stream while the other flows; `POST /api/config` → **200 in 23 ms with streams open**, frames kept flowing after the save; `/api/status` responsive throughout; server log clean. +4 WS tests (`test_ws_video.py`).
+- One pre-existing test-pollution gotcha fixed: `test_detector_selection` reloads `detection_overlay` mid-suite, rebinding exception classes — the new isolation test references `overlay.ZoneModelUnavailable` through the module.
+
+**Docs:** CLAUDE.md dashboard section rewritten (WS transport, pose-only cam views, zone isolation, script-order constraints, MP4 viewer now `get_detector`'s main consumer).
+
+**Settings cleanup (same day, follow-up)** ✅
+- **"Modèle de détection" is pose-only now:** removed the ONNX model picker, OpenVINO .xml field, auto-detected classes, confidence threshold and the imgsz slider from the modal (object models are per-zone). Save sends a new lightweight `pose` payload — `post_config` splices ONLY `pose_onnx_path`/`pose_confidence_threshold` into the detection block, never the object-model keys (+2 tests).
+- **Display prefs auto-save:** show nodes/masks/boxes toggles + distance-line opacity/colour/thickness now POST `/api/ui-settings` on change (overlay reads prefs per frame ⇒ instant effect, no Save button). `post_ui_settings` made sync `def` (threadpool).
+- **Per-zone FPS in the UI:** each Settings ▸ Zones row gained an `fps` box (`PatchRect.max_fps`; blank = global). First attempt was invisible — the row's CSS grid had exactly 8 column slots, so the 9th input wrapped off-grid; fixed by moving the dims text (`@(x,y) W×Hpx · Npts`) into the small `.zm-coords` line as `slice: … polygon: …`, freeing its column.
+- **General FPS box (Cameras tab):** new auto-synced `display_fps` field (1–30, default 10) — caps cam streams, unified view + the zone worker tick; per-zone fps can only go BELOW it. EN/FR labels updated.
+- **Zone label on cam view** now anchors to the polygon's most-top-right VERTEX (max x−y), hugging the actual zone lines — not the floating bounding-box corner (was: first-drawn vertex).
+
+**Blinking detections — root-caused & fixed (anti-blink)** ✅
+- The zone snapshot expired after a hard 1.0 s (`SNAPSHOT_MAX_AGE_S`); two trips made the overlay boxes flicker: (a) cam1 delivering no NEW frame >1 s (RTSP jitter @ capture_fps 12) while the worker stayed silent instead of re-confirming; (b) at zone fps 25, full re-infer passes + GPU contention with the Backbone pushed the publish gap past 1 s.
+- Fix: worker ts-bumps the snapshot while the frame is unchanged (the panels show that same held frame, so its detections remain correct), and each snapshot carries `valid_s = max(1.0, 2.5×pass_duration)` so slow inference can't expire its own result. Dead worker still clears in ~seconds (no ghosts). +2 tests.
+- **Advised defaults:** General FPS 10 (camera captures at 12); light zones blank (= global); heavy zones (RF-DETR) 2–4. Per-zone values above the general cap have no effect.
+
+**STOP memory — measured + quick win** ✅ (full fix planned)
+- Measured the STOP-path release (real CUDA sessions, `reset_detector`+gc+malloc_trim): session VRAM DOES free (283 of 329 MB), but **~1.24 GB host RSS never returns** — CUDA context + cuDNN/cuBLAS/ORT library mappings are unreleasable in-process by design.
+- **Generator-pinning leak fixed:** suspended cam-view generators kept their last running iteration's locals — `pose` (CUDA session) + dets' full-frame masks in `_detect_iter`, `detector` in `_warp_detect_iter` — pinning them after STOP for as long as the panel stayed open, defeating `reset_detector()`. Now the stopped branch drops the refs (+1 test inspecting `gen.gi_frame.f_locals`).
+- **Agreed full fix (to schedule):** ONE dashboard-supervised **inference subprocess** owning all GPU work (zones + pose + MP4 preview) — STOP/idle kills it ⇒ OS-guaranteed 100% VRAM+RAM release while the UI stays open; also delivers the CUDA-700 isolation escalation + the long-open "detector idle-release". Costs: ~0.5 GB extra context while running, crop IPC, ~3–5 s warmup on START.
+
+Suites green: **backbone 370**, **monitor_web 235** (was 216 at session start). On-rig items unchanged (pose overlay quality + VRAM banner under real GPU pressure → Part D).
+
+---
+
 ## ▶ What's actually left, prioritized
 
 1. **✅ yolo26l-seg trained + exported + wired** (2026-06-10): finalize pass → dynamic ONNX + OpenVINO; `backbone.yaml` detection now points at `yolo26l-seg .../best.onnx`. Remaining is the on-rig KPI check (item 2). *(Part B/D)*
 2. **🔬 Mode 1 on-rig validation:** ≥5-point recalibration + KPI check (latency/reproj/mAP/occupancy) + sustained live run. *(Part D)*
 3. **🔬 Mode 2 bring-up:** mount cam_b → `calibrate-all` joint calibration → validate unified view + 3D + single-view fallback on the rig. *(Part E)*
-4. **⬜ Version control & repo (FIRST):** `git init` + `.gitignore` + `.gitattributes`/Git LFS for weights + initial commit + branch model + remote — **before** any deploy/Docker work. *(Part G.1)*
-5. **⬜ Deployment & ops:** Docker images (Backbone + dashboard) + `docker-compose` + `ops/` launch scripts + **`ops/system_health.sh`** go/no-go probe; container `HEALTHCHECK` / graceful restart; detector idle-release; trainer prune (post-training). *(Part D / F / G.2)*
-6. **⏸ Later:** S5.5 pose-3D, N-cam aniposelib, full SAHI tiling, Jetson image. *(Part H)*
+4. **✅ Version control & repo** (2026-06-12): repo live at github.com/waledroid/isi_monitor3d (`main`); weights gitignored instead of LFS. *(Part G.1)*
+5. **⬜ Single inference subprocess** (agreed design): all dashboard GPU work in one supervised worker process — STOP/idle kill ⇒ total VRAM+RAM release with the UI open; subsumes detector idle-release + CUDA-700 isolation escalation. *(Part C/F)*
+6. **⬜ Deployment & ops:** Docker images (Backbone + dashboard) + `docker-compose` + `ops/` launch scripts + **`ops/system_health.sh`** go/no-go probe; container `HEALTHCHECK` / graceful restart; trainer prune (post-training). *(Part D / F / G.2)*
+7. **⏸ Later:** S5.5 pose-3D, N-cam aniposelib, full SAHI tiling, Jetson image. *(Part H)*
 
 **Bottom line:** the software for **Mode 1 is complete** (pending model swap + on-rig KPI sign-off), and **Mode 2 is
 code-ready** (pending the physical second camera + joint calibration). The remaining work is mostly **validation on

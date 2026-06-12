@@ -10,8 +10,8 @@ import { startDraw } from "/static/js/draw_mode.js";
 const MAX_PATCHES = 6;   // max zones the operator can create (drawn on CAM)
 
 let patches = [];   // [{id, name, camera, polygon:[[u,v]..], rect:[x0,y0,x1,y1], frame_wh:[W,H], model, infer_size}]
-let nonce = 0;      // cache-buster so panels reconnect after a save
 let models = [];    // [{path, label}] trained detection models for the per-zone picker
+let panelStreamIds = [];   // /ws/video streams currently attached to the ZONE panels
 
 async function loadModels() {
   try {
@@ -44,7 +44,6 @@ async function save() {
   } catch (e) {
     console.warn("zone_patch: save failed", e);
   }
-  nonce += 1;
   renderPanels();
   renderSettingsList();
   updateDrawButton();
@@ -119,10 +118,16 @@ function addZoneFromPanel() {
   startPatchDraw();
 }
 
-// Fill the three ZONE panels with the first three ROIs' cropped streams. An
-// undeclared slot shows a clickable "+ Add zone" placeholder. Vanilla DOM —
-// the panels' tall expand stays Alpine-driven.
+// Fill the three ZONE panels with the first three ROIs' cropped streams (over
+// the shared /ws/video socket — no per-panel HTTP connection). An undeclared
+// slot shows a clickable "+ Add zone" placeholder. Vanilla DOM — the panels'
+// tall expand stays Alpine-driven.
 function renderPanels() {
+  const VWS = window.__videoWS;
+  // Drop the previous render's subscriptions; re-attached below for the
+  // current zone set (a deleted/re-ordered zone must not keep streaming).
+  if (VWS) panelStreamIds.forEach((id) => VWS.detach(id));
+  panelStreamIds = [];
   const slots = [
     { body: "zone-1-body", badge: "zone-1-badge", fallback: "ZONE 1" },
     { body: "zone-2-body", badge: "zone-2-badge", fallback: "ZONE 2" },
@@ -146,9 +151,12 @@ function renderPanels() {
     if (panel) panel.classList.add("zone-synced");   // a zone is declared + saved here
     // Just the centred slice — the model + detect-size live in Settings ▸ Camera
     // zones, not overlaid on the panel.
-    body.innerHTML =
-      `<img class="zone-patch-img" alt="${p.name}" ` +
-      `src="/stream/zone/${encodeURIComponent(p.id)}?n=${nonce}">`;
+    body.innerHTML = `<img class="zone-patch-img" alt="${p.name}">`;
+    if (VWS) {
+      const sid = `zone:${p.id}`;
+      VWS.attach(body.querySelector("img"), sid);
+      panelStreamIds.push(sid);
+    }
     if (badge) badge.textContent = p.name || slot.fallback;
   });
 }
@@ -178,16 +186,17 @@ function renderSettingsList() {
     row.innerHTML =
       `<span class="config-zone-num">${i + 1}</span>` +
       `<input class="zm-name" value="${p.name || ""}" placeholder="zone name" />` +
-      `<span class="zm-dims">@(${x0},${y0}) ${w}×${h}px · ${npts}pts</span>` +
       `<select class="zm-model" title="Detection model (this zone)">${modelOptions(p.model || "")}</select>` +
       `<input class="zm-size" type="number" min="64" max="1280" step="32" value="${p.infer_size || 320}" title="Detect size (px)" />` +
       `<input class="zm-conf" type="number" min="0" max="1" step="0.05" value="${p.confidence ?? ""}" placeholder="conf" title="Confidence 0–1 (this zone) — blank = global" />` +
+      `<input class="zm-fps" type="number" min="0.1" max="30" step="0.5" value="${p.max_fps ?? ""}" placeholder="fps" title="Max detection FPS (this zone) — blank = global cap (10). Lower a heavy model's zone so it stops slowing the others." />` +
       `<input class="zm-color" type="color" value="${color}" title="Zone outline colour" />` +
       `<button type="button" class="glass-btn zm-iconbtn zm-delete" title="Delete this zone" aria-label="Delete zone">` +
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
       '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>' +
       '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>' +
-      `<div class="zm-coords"><b>polygon:</b> ${polyStr || "—"}</div>`;
+      `<div class="zm-coords"><b>slice:</b> @(${x0},${y0}) ${w}×${h}px · ${npts}pts` +
+      ` &nbsp;<b>polygon:</b> ${polyStr || "—"}</div>`;
     row.querySelector(".zm-name").addEventListener("change", (e) => { p.name = e.target.value.trim(); save(); });
     row.querySelector(".zm-model").addEventListener("change", (e) => { p.model = e.target.value || null; save(); });
     row.querySelector(".zm-size").addEventListener("change", (e) => {
@@ -198,6 +207,11 @@ function renderSettingsList() {
     row.querySelector(".zm-conf").addEventListener("change", (e) => {
       const v = parseFloat(e.target.value);
       p.confidence = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;   // blank = global
+      save();
+    });
+    row.querySelector(".zm-fps").addEventListener("change", (e) => {
+      const v = parseFloat(e.target.value);
+      p.max_fps = Number.isFinite(v) && v > 0 ? Math.max(0.1, Math.min(30, v)) : null;  // blank = global
       save();
     });
     row.querySelector(".zm-color").addEventListener("change", (e) => { p.color = e.target.value; save(); });

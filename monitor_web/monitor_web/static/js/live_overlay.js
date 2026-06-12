@@ -117,20 +117,27 @@ function drawZonePatches(ctx, img, camId) {
     ctx.strokeStyle = p.color || "#ff3b3b";   // per-zone outline colour (Settings)
     ctx.setLineDash([9, 6]);          // dashed outline, no fill
     ctx.beginPath();
-    let lx = 0, ly = 0;
+    // Label anchor: the polygon VERTEX nearest its top-right (max x−y score) —
+    // ON the zone outline itself, not the floating bounding-box corner.
+    let vx = 0, vy = 0, best = -Infinity;
     for (let i = 0; i < poly.length; i++) {
       const [dx, dy] = sourceToDisplay(img, poly[i][0] * sx, poly[i][1] * sy, natW, natH);
-      if (i === 0) { ctx.moveTo(dx, dy); lx = dx; ly = dy; } else ctx.lineTo(dx, dy);
+      if (i === 0) ctx.moveTo(dx, dy); else ctx.lineTo(dx, dy);
+      if (dx - dy > best) { best = dx - dy; vx = dx; vy = dy; }
     }
     ctx.closePath();
     ctx.stroke();
     ctx.setLineDash([]);              // reset so other overlays stay solid
     const label = p.name || "";
     const tw = ctx.measureText(label).width;
+    // Tag hugs that corner: box right-aligned at the vertex, just above it;
+    // clamped so it never slips off the canvas at the image's top/right edge.
+    const bx = Math.max(0, Math.min(vx - tw - 8, ctx.canvas.width - tw - 8));
+    const by = Math.max(0, vy - 17);
     ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.fillRect(lx, ly - 16, tw + 8, 15);
+    ctx.fillRect(bx, by, tw + 8, 15);
     ctx.fillStyle = "#fff";
-    ctx.fillText(label, lx + 4, ly - 4);
+    ctx.fillText(label, bx + 4, by + 11);
   }
 }
 

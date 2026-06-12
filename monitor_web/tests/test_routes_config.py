@@ -710,3 +710,48 @@ def test_rfdetr_model_save_sets_plugin_and_infers_classes(populated_app, tmp_pat
     assert det["onnx_path"] == str(rf)
     assert det["class_names"] == ["palette", "carton", "polybag"]
     assert "iou_threshold" not in det and "inference_imgsz" not in det
+
+
+# ---- pose-only payload (the current Settings modal) ----
+
+
+def test_pose_payload_updates_only_pose_keys(tmp_path: Path) -> None:
+    """`pose` splices the pose keys into the detection block WITHOUT touching the
+    object-model keys (those are managed per zone now)."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {},
+        "detection": {"plugin": "yolo_onnx", "onnx_path": "./models/best.onnx",
+                      "class_names": ["palette"], "confidence_threshold": 0.4},
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml,
+                   ui_settings_path=tmp_path / "ui.yaml", udp_port=0, port=0)
+    with TestClient(create_app(cfg)) as client:
+        res = client.post("/api/config", json={"cameras": {}, "pose": {
+            "pose_onnx_path": "/models/yolo11n-pose.onnx",
+            "pose_confidence_threshold": 0.4}})
+        assert res.status_code == 200, res.text
+    det = yaml.safe_load(backbone_yaml.read_text())["detection"]
+    assert det["pose_onnx_path"] == "/models/yolo11n-pose.onnx"
+    assert det["pose_confidence_threshold"] == 0.4
+    # Object-model keys are exactly as they were on disk.
+    assert det["onnx_path"] == "./models/best.onnx"
+    assert det["plugin"] == "yolo_onnx"
+    assert det["class_names"] == ["palette"]
+    assert det["confidence_threshold"] == 0.4
+
+
+def test_pose_payload_empty_path_clears(tmp_path: Path) -> None:
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {},
+        "detection": {"onnx_path": "./m.onnx", "pose_onnx_path": "/old-pose.onnx"},
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml,
+                   ui_settings_path=tmp_path / "ui.yaml", udp_port=0, port=0)
+    with TestClient(create_app(cfg)) as client:
+        res = client.post("/api/config", json={"cameras": {}, "pose": {"pose_onnx_path": ""}})
+        assert res.status_code == 200, res.text
+    det = yaml.safe_load(backbone_yaml.read_text())["detection"]
+    assert "pose_onnx_path" not in det
+    assert det["onnx_path"] == "./m.onnx"

@@ -21,11 +21,11 @@ detection:
   - palette
   - carton
   - polybag
-  confidence_threshold: 0.05
+  confidence_threshold: 0.1
   pose_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/tests/.cache/yolo11n-pose.onnx
   pose_confidence_threshold: 0.5
   iou_threshold: 0.45
-  inference_imgsz: 448
+  inference_imgsz: 640
 homography:
   cross_cam_fusion:
     match_distance_m:

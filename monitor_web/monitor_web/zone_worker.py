@@ -36,6 +36,7 @@ import numpy as np
 from .api.routes_zone_patches import load_patches, patch_pixel_box, patch_rect
 from .camera_hub import get_hub
 from .detection_overlay import (
+    ZoneModelUnavailable,
     display_fps,
     get_pose_detector,
     get_zone_detector,
@@ -44,9 +45,21 @@ from .detection_overlay import (
 
 logger = logging.getLogger(__name__)
 
-# How long a published snapshot stays valid. Older ⇒ consumers draw nothing
-# (worker dead / camera down) instead of stale ghost boxes.
+# How long a published snapshot stays valid (floor). Older ⇒ consumers draw
+# nothing (worker dead) instead of stale ghost boxes. A snapshot can carry its
+# own longer `valid_s` when the detect pass itself is slow (heavy models / GPU
+# contention), so the boxes never blink just because inference takes a while.
 SNAPSHOT_MAX_AGE_S = 1.0
+
+
+def _snapshot_fresh(snap: dict) -> bool:
+    valid = float(snap.get("valid_s", SNAPSHOT_MAX_AGE_S))
+    return time.time() - snap.get("frame_ts", 0.0) <= max(SNAPSHOT_MAX_AGE_S, valid)
+
+# Circuit breaker: a zone whose detector failed (build OR inference) is skipped
+# for this long, then retried — so a refused/broken model self-heals when VRAM
+# frees up, while the other zones keep running undisturbed in between.
+ZONE_RETRY_COOLDOWN_S = 30.0
 
 # Humans are rendered by POSE only on the cam views — any person-class box the
 # zone object-model emits is dropped so a person isn't boxed AND skeletoned.
@@ -165,6 +178,13 @@ class ZoneDetectionWorker:
         self._stop = threading.Event()
         self._reload = threading.Event()
         self._thread: threading.Thread | None = None
+        # Per-zone isolation state (worker-thread only — no locking needed):
+        # circuit breaker {zone_id: (blocked_until_monotonic, reason)}, and the
+        # per-zone cadence budget {zone_id: next_due_monotonic} + the last good
+        # detections carried forward while a budgeted zone is not yet due.
+        self._zone_breaker: dict[str, tuple[float, str]] = {}
+        self._zone_next_due: dict[str, float] = {}
+        self._zone_last_dets: dict[str, list] = {}
 
     # ---- lifecycle ----
 
@@ -185,10 +205,14 @@ class ZoneDetectionWorker:
 
     def set_patches(self, patches: list[dict], src_cfg: dict | None = None) -> None:
         """Swap in a fresh zone list (and optionally a new camera source); the loop
-        picks it up at the next iteration via the reload event."""
+        picks it up at the next iteration via the reload event. Clears the per-zone
+        breaker/cadence state so a config save gives every zone a fresh chance."""
         self._patches = list(patches)
         if src_cfg is not None:
             self._src_cfg = dict(src_cfg)
+        self._zone_breaker.clear()
+        self._zone_next_due.clear()
+        self._zone_last_dets.clear()
         self._reload.set()
 
     # ---- read API (any thread) ----
@@ -199,13 +223,21 @@ class ZoneDetectionWorker:
 
     def zone_dets(self, zone_id: str) -> list:
         snap = self._snapshot
-        if time.time() - snap.get("frame_ts", 0.0) > SNAPSHOT_MAX_AGE_S:
+        if not _snapshot_fresh(snap):
             return []
         return list(snap.get("zones", {}).get(str(zone_id), []))
 
+    def zone_status(self, zone_id: str) -> str:
+        """The zone's last published health: "ok", "no_vram", "error" — or "" when
+        this worker hasn't (recently) covered the zone."""
+        snap = self._snapshot
+        if not _snapshot_fresh(snap):
+            return ""
+        return str(snap.get("status", {}).get(str(zone_id), ""))
+
     def all_dets(self) -> list:
         snap = self._snapshot
-        if time.time() - snap.get("frame_ts", 0.0) > SNAPSHOT_MAX_AGE_S:
+        if not _snapshot_fresh(snap):
             return []
         out: list = []
         for dets in snap.get("zones", {}).values():
@@ -245,7 +277,14 @@ class ZoneDetectionWorker:
                 frame = stream.latest_real_frame()
                 if frame is None or frame is last_frame_id:
                     # No (new) genuine frame yet — placeholder or camera slower
-                    # than our tick. Don't burn GPU re-detecting the same image.
+                    # than our tick. Don't burn GPU re-detecting the same image,
+                    # but KEEP the snapshot alive: the panels are still showing
+                    # this same held frame, so its detections remain correct. A
+                    # camera stalling >1 s used to expire the snapshot and make
+                    # the overlay boxes blink off/on with RTSP jitter.
+                    snap = self._snapshot
+                    if snap.get("zones"):
+                        self._snapshot = {**snap, "frame_ts": time.time()}
                     self._stop.wait(0.1)
                     continue
                 last_frame_id = frame
@@ -263,17 +302,55 @@ class ZoneDetectionWorker:
     def _detect_all_zones(self, frame, patches: list[dict]) -> None:
         """Run every zone on THIS frame, resolve cross-zone overlaps, publish once.
         Also runs PERSON POSE on the full frame (the map's digital twin needs people
-        positions even while no cam stream is open, e.g. on the MAP view)."""
+        positions even while no cam stream is open, e.g. on the MAP view).
+
+        Per-zone isolation: a zone whose detector fails (VRAM admission refused,
+        build error, inference error) is disabled for ZONE_RETRY_COOLDOWN_S and its
+        status published — the OTHER zones keep detecting. A zone with a ``max_fps``
+        budget only re-infers when due; in between, its last detections are carried
+        forward so the overlay stays stable without burning GPU."""
         ih, iw = frame.shape[:2]
         ts = time.time()
+        now = time.monotonic()
         det_cfg = read_backbone(self._cfg).get("detection") or {}
         global_conf = float(det_cfg.get("confidence_threshold", 0.3))
         per_zone: dict[str, list] = {}
+        statuses: dict[str, str] = {}
         polys: dict[str, np.ndarray | None] = {}
         for patch in patches:
             zone_id = str(patch.get("id"))
             polys[zone_id] = _scaled_polygon(patch, (iw, ih))
-            per_zone[zone_id] = self._detect_zone(frame, patch, iw, ih, global_conf)
+            blocked_until, reason = self._zone_breaker.get(zone_id, (0.0, ""))
+            if now < blocked_until:
+                per_zone[zone_id], statuses[zone_id] = [], reason
+                continue
+            max_fps = patch.get("max_fps")
+            if max_fps and now < self._zone_next_due.get(zone_id, 0.0):
+                # Not due yet — carry the last good result forward (no inference).
+                per_zone[zone_id] = list(self._zone_last_dets.get(zone_id, []))
+                statuses[zone_id] = "ok"
+                continue
+            try:
+                dets = self._detect_zone(frame, patch, iw, ih, global_conf)
+            except ZoneModelUnavailable as exc:
+                self._zone_breaker[zone_id] = (now + ZONE_RETRY_COOLDOWN_S, exc.reason)
+                per_zone[zone_id], statuses[zone_id] = [], exc.reason
+                logger.warning("zone worker[%s]: zone %s disabled for %.0fs (%s): %s",
+                               self.camera_id, zone_id, ZONE_RETRY_COOLDOWN_S,
+                               exc.reason, exc)
+                continue
+            except Exception:
+                self._zone_breaker[zone_id] = (now + ZONE_RETRY_COOLDOWN_S, "error")
+                per_zone[zone_id], statuses[zone_id] = [], "error"
+                logger.warning("zone worker[%s]: zone %s failed — disabled for %.0fs",
+                               self.camera_id, zone_id, ZONE_RETRY_COOLDOWN_S,
+                               exc_info=True)
+                continue
+            self._zone_breaker.pop(zone_id, None)
+            if max_fps:
+                self._zone_next_due[zone_id] = now + 1.0 / max(0.1, float(max_fps))
+            self._zone_last_dets[zone_id] = dets
+            per_zone[zone_id], statuses[zone_id] = dets, "ok"
         resolved = self._resolve_overlaps(per_zone, polys)
         # People (full-frame pose, foot points in source px) — best-effort.
         people: list = []
@@ -289,13 +366,22 @@ class ZoneDetectionWorker:
             logger.warning("zone worker[%s]: pose failed", self.camera_id, exc_info=True)
         # Publish: ONE fresh dict, one assignment — atomic under the GIL, so every
         # consumer sees a coherent single-frame result with a single timestamp.
-        self._snapshot = {"frame_ts": ts, "frame_wh": (iw, ih),
-                          "zones": resolved, "people": people}
+        # `valid_s` scales the consumers' staleness window with the ACTUAL pass
+        # duration, so a slow pass (heavy models re-inferring + GPU contention
+        # with the live Backbone) can't expire the snapshot between publishes —
+        # that gap is exactly what made the overlay boxes blink rhythmically.
+        pass_dt = time.time() - ts
+        valid_s = max(SNAPSHOT_MAX_AGE_S, 2.5 * pass_dt)
+        self._snapshot = {"frame_ts": time.time(), "frame_wh": (iw, ih),
+                          "zones": resolved, "status": statuses, "people": people,
+                          "valid_s": valid_s}
 
     def _detect_zone(self, frame, patch: dict, iw: int, ih: int,
                      global_conf: float) -> list:
         """One zone on one frame → full-frame-coordinate detections (person-free,
-        confidence-filtered, polygon-clipped). Same pipeline the HTTP path used."""
+        confidence-filtered, polygon-clipped). Detector build/inference failures
+        PROPAGATE — the caller (_detect_all_zones) owns the per-zone circuit
+        breaker, so one zone's failure never silently looks like 'no objects'."""
         from backbone.core.types import Frame, FramePair
         rect = patch_rect(patch)
         if rect is None:
@@ -313,24 +399,14 @@ class ZoneDetectionWorker:
             s = infer_size / float(longest)
             fed = cv2.resize(crop, (max(1, round(cw * s)), max(1, round(ch * s))),
                              interpolation=cv2.INTER_AREA)
-        try:
-            detector = self._detector_factory(patch.get("model"), self._cfg, infer_size)
-        except Exception as exc:
-            logger.warning("zone worker[%s]: no detector for zone %s: %s",
-                           self.camera_id, patch.get("id"), exc)
-            return []
+        detector = self._detector_factory(patch.get("model"), self._cfg, infer_size)
         fh, fw = fed.shape[:2]
         ts = time.time()
         pair = FramePair(capture_ts=ts, frame_idx=0,
                          frames={self.camera_id: Frame(camera_id=self.camera_id,
                                                        capture_ts=ts, frame_idx=0,
                                                        image=fed)})
-        try:
-            dets = list(detector.detect(pair).get(self.camera_id, []))
-        except Exception:
-            logger.warning("zone worker[%s]: detect failed for zone %s",
-                           self.camera_id, patch.get("id"), exc_info=True)
-            return []
+        dets = list(detector.detect(pair).get(self.camera_id, []))
         # Per-zone confidence as a POST-FILTER (session runs at a low floor).
         conf = patch.get("confidence")
         eff_conf = float(conf) if conf is not None else global_conf
@@ -474,6 +550,16 @@ class ZoneWorkerManager:
                 return dets
         return []
 
+    def zone_status(self, zone_id: str) -> str:
+        """Health of one zone across workers ("" when no worker covers it)."""
+        with self._lock:
+            workers = list(self._workers.values())
+        for w in workers:
+            status = w.zone_status(zone_id)
+            if status:
+                return status
+        return ""
+
     def camera_dets(self, camera_id: str) -> list:
         with self._lock:
             worker = self._workers.get(camera_id)
@@ -491,6 +577,6 @@ class ZoneWorkerManager:
         if worker is None:
             return None
         snap = worker.snapshot()
-        if time.time() - snap.get("frame_ts", 0.0) > SNAPSHOT_MAX_AGE_S:
+        if not _snapshot_fresh(snap):
             return None
         return snap

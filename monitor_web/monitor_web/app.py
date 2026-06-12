@@ -26,6 +26,7 @@ from .api import (
     routes_status,
     routes_video,
     routes_ws,
+    routes_ws_video,
     routes_zone_patches,
 )
 from .backbone_supervisor import BackboneSupervisor
@@ -177,6 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes_video.router)
     app.include_router(routes_map.router)
     app.include_router(routes_ws.router)
+    app.include_router(routes_ws_video.router)
     app.include_router(routes_zone_patches.router)
 
     return app

@@ -60,21 +60,8 @@ async function populateModelSelect(selId, endpoint) {
   return files;
 }
 
-// Detection ONNX (trainer/isidet/runs/**/*.onnx) and person-pose ONNX
-// (pose *.onnx under runs/ + models/), newest first.
-async function loadOnnxFiles() {
-  await populateModelSelect("zm-model-onnx", "/api/detection/onnx-files");
-  const sel = el("zm-model-onnx");
-  if (sel && !sel._classHook) {        // refresh the displayed classes on model change
-    sel._classHook = true;
-    sel.addEventListener("change", refreshModelClasses);
-  }
-  const imgsz = el("zm-model-imgsz");
-  if (imgsz && !imgsz._hook) {         // live px readout as the slider moves
-    imgsz._hook = true;
-    imgsz.addEventListener("input", updateImgszLabel);
-  }
-}
+// Person-pose ONNX (pose *.onnx under runs/ + models/), newest first. Object
+// models are picked PER ZONE (Settings ▸ Zones) — no global model picker here.
 async function loadPoseOnnxFiles() {
   await populateModelSelect("zm-model-pose-onnx", "/api/detection/pose-onnx-files");
 }
@@ -185,8 +172,10 @@ function collectPayload() {
   // No `zones` key: the metric-zone editor is gone, so Save leaves zones.yaml
   // untouched (the backend treats an omitted `zones` as "no change").
   const payload = { cameras };
-  const detection = collectDetection();
-  if (detection) payload.detection = detection;
+  // Pose model only — object models live per zone; the display toggles +
+  // distance-line styles auto-save on change (see wireUiPrefSync), so the Save
+  // button no longer carries a `detection` block.
+  payload.pose = collectPose();
   // S16: distance lines — always send the field (empty list clears the file).
   payload.link_lines = collectLinkLines();
   return payload;
@@ -280,78 +269,49 @@ function collectLinkLines() {
 }
 
 // ---- detection model section ----
-// Backend is decided by the server from the host's hardware (GPU → yolo_onnx,
-// CPU-only → yolo_openvino). The modal shows only the relevant model path.
+// Pose model only. Object-detection models are configured per zone (Settings ▸
+// Zones); the display toggles + distance-line styles below auto-save on change.
 
-let _modelBackend = "yolo_onnx";   // last backend reported by /api/config
-let _modelClasses = [];            // class names auto-detected from the selected ONNX
-const IMGSZ_STEPS = [320, 448, 512, 640, 1024];   // inference-size slider stops
-
-function updateImgszLabel() {
-  const v = IMGSZ_STEPS[parseInt(el("zm-model-imgsz")?.value ?? "4", 10)] ?? 1024;
-  const span = el("zm-model-imgsz-val");
-  if (span) span.textContent = v;
+function collectPose() {
+  const v = parseFloat(el("zm-model-pose-conf")?.value);
+  return {
+    pose_onnx_path: el("zm-model-pose-onnx")?.value.trim() || "",   // "" = clear
+    pose_confidence_threshold: Number.isFinite(v) ? v : 0.3,
+  };
 }
 
-// The detector self-configures its classes from the ONNX metadata, so the modal
-// DISPLAYS them read-only (no list to keep in sync). Refresh whenever the model
-// changes; falls back to empty if the model carries none.
-async function refreshModelClasses() {
-  const path = el("zm-model-onnx")?.value || "";
-  const field = el("zm-model-classes");
-  const sl = el("zm-model-imgsz");
-  const span = el("zm-model-imgsz-val");
-  if (!path) { _modelClasses = []; if (field) field.value = ""; return; }
-  let info = { classes: [], fixed_input: false, input_wh: null, family: "yolo" };
-  try {
-    const res = await fetch(`/api/detection/classes?path=${encodeURIComponent(path)}`);
-    if (res.ok) info = await res.json();
-  } catch { /* keep defaults */ }
-  _modelClasses = info.classes || [];
-  if (field) field.value = _modelClasses.join(", ");
-  // The inference-size slider only applies to a DYNAMIC ONNX. A fixed-input model
-  // (e.g. RF-DETR @432, or a YOLO exported with dynamic=False) ignores it — disable
-  // the slider and show the model's own fixed size so it doesn't look broken.
-  if (sl) {
-    sl.disabled = !!info.fixed_input;
-    if (info.fixed_input && info.input_wh) {
-      if (span) span.textContent = `${info.input_wh[0]} (fixed by model)`;
-    } else {
-      updateImgszLabel();
+// Auto-save a UI display preference. The server merges it into the UI-settings
+// YAML atomically and the overlay re-reads prefs per frame, so the effect is
+// immediate — no Save button, no stream reconnect.
+function syncUiPref(patch) {
+  fetch("/api/ui-settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  }).catch(() => showToast(t("save_failed", "Save failed"), true));
+}
+
+// Wire the change → POST hooks once (the modal markup is static).
+function wireUiPrefSync() {
+  const hooks = [
+    ["zm-general-fps",
+      (e) => ({ display_fps: Math.max(1, Math.min(30, parseInt(e.value, 10) || 10)) })],
+    ["zm-model-show-nodes", (e) => ({ show_nodes: !!e.checked })],
+    ["zm-model-show-masks", (e) => ({ show_masks: !!e.checked })],
+    ["zm-model-show-boxes", (e) => ({ show_boxes: !!e.checked })],
+    ["zm-model-dist-opacity",
+      (e) => ({ distance_line_opacity: Math.max(0.05, Math.min(1, parseFloat(e.value) || 0.25)) })],
+    ["zm-model-dist-color", (e) => ({ distance_line_color: e.value || "#ffffff" })],
+    ["zm-model-dist-thickness",
+      (e) => ({ distance_line_thickness: Math.max(1, Math.min(8, parseInt(e.value, 10) || 2)) })],
+  ];
+  for (const [id, toPatch] of hooks) {
+    const e = el(id);
+    if (e && !e._prefHook) {
+      e._prefHook = true;
+      e.addEventListener("change", () => syncUiPref(toPatch(e)));
     }
   }
-}
-
-function collectDetection() {
-  const onnx = el("zm-model-onnx")?.value.trim() || "";
-  const xml = el("zm-model-xml")?.value.trim() || "";
-  const classes = _modelClasses.slice();   // auto-detected from the model metadata
-  // Only send if the active backend's path + ≥1 class are set; an untouched
-  // section is omitted (the server would otherwise 400/422).
-  const activePath = _modelBackend === "yolo_openvino" ? xml : onnx;
-  if (!activePath || classes.length === 0) return null;
-  const conf = parseFloat(el("zm-model-conf")?.value);
-  const pose = el("zm-model-pose-onnx")?.value.trim() || "";
-  const imgsz = IMGSZ_STEPS[parseInt(el("zm-model-imgsz")?.value ?? "4", 10)] || 1024;
-  return {
-    onnx_path: onnx || null,
-    model_xml: xml || null,
-    pose_onnx_path: pose || null,
-    pose_confidence_threshold: (() => {
-      const v = parseFloat(el("zm-model-pose-conf")?.value);
-      return Number.isFinite(v) ? v : 0.3;
-    })(),
-    class_names: classes,
-    inference_imgsz: imgsz,
-    confidence_threshold: Number.isFinite(conf) ? conf : 0.25,
-    show_nodes: !!el("zm-model-show-nodes")?.checked,
-    show_masks: !!el("zm-model-show-masks")?.checked,
-    show_boxes: !!el("zm-model-show-boxes")?.checked,
-    display_fps: Math.max(1, Math.min(30, parseInt(el("zm-model-display-fps")?.value, 10) || 10)),
-    distance_line_opacity: Math.max(0.05, Math.min(1, parseFloat(el("zm-model-dist-opacity")?.value) || 0.25)),
-    distance_line_color: el("zm-model-dist-color")?.value || "#ffffff",
-    distance_line_thickness: Math.max(1, Math.min(8, parseInt(el("zm-model-dist-thickness")?.value, 10) || 2)),
-  };
 }
 
 // Select a configured path in a model dropdown. If it isn't among the discovered
@@ -371,44 +331,23 @@ function selectModelOption(selId, path) {
 
 function fillModelSection(det) {
   if (!det) return;
-  _modelBackend = det.backend || "yolo_onnx";
   const set = (id, v) => { const e = el(id); if (e != null) e.value = v ?? ""; };
-  selectModelOption("zm-model-onnx", det.onnx_path || "");
   selectModelOption("zm-model-pose-onnx", det.pose_onnx_path || "");
-  set("zm-model-xml", det.model_xml || "");
-  // Class names are read-only and come from the model, not the config.
-  refreshModelClasses();
-  set("zm-model-conf", det.confidence_threshold ?? 0.25);
   set("zm-model-pose-conf", det.pose_confidence_threshold ?? 0.3);
-  // Inference-size slider: map the configured px to its step index (default 1024).
-  const sl = el("zm-model-imgsz");
-  if (sl) {
-    const idx = IMGSZ_STEPS.indexOf(det.inference_imgsz ?? 1024);
-    sl.value = String(idx >= 0 ? idx : IMGSZ_STEPS.length - 1);
-    updateImgszLabel();
-  }
+  set("zm-general-fps", det.display_fps ?? 10);   // Camera-tab general FPS cap
   const cbNodes = el("zm-model-show-nodes");
   if (cbNodes) cbNodes.checked = det.show_nodes !== false;   // default true if undefined
   const cbMasks = el("zm-model-show-masks");
   if (cbMasks) cbMasks.checked = det.show_masks !== false;
   const cbBoxes = el("zm-model-show-boxes");
   if (cbBoxes) cbBoxes.checked = det.show_boxes !== false;
-  const fpsInput = el("zm-model-display-fps");
-  if (fpsInput) fpsInput.value = det.display_fps ?? 10;
   const opEl = el("zm-model-dist-opacity");
   if (opEl) opEl.value = det.distance_line_opacity ?? 0.25;
   const colEl = el("zm-model-dist-color");
   if (colEl) colEl.value = det.distance_line_color ?? "#ffffff";
   const thEl = el("zm-model-dist-thickness");
   if (thEl) thEl.value = det.distance_line_thickness ?? 2;
-  // Show only the path field for the detected backend; hide the other.
-  const openvino = _modelBackend === "yolo_openvino";
-  for (const [id, hidden] of [
-    ["zm-model-onnx", openvino], ["zm-model-onnx-label", openvino],
-    ["zm-model-xml", !openvino], ["zm-model-xml-label", !openvino],
-  ]) {
-    el(id)?.classList.toggle("hidden", hidden);
-  }
+  wireUiPrefSync();   // change → POST /api/ui-settings (idempotent wiring)
 }
 
 function showToast(message, isError) {
@@ -454,7 +393,6 @@ async function revealMp4IfUnlocked() {
 async function open() {
   invalidateCalibrationCache();   // reload calibration status each time modal opens
   await loadDevices();   // populate the per-camera device dropdowns first
-  await loadOnnxFiles();   // populate the ONNX-path picker with trained exports
   await loadPoseOnnxFiles();   // populate the pose-model picker
   try {
     const res = await fetch("/api/config");

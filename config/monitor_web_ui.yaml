@@ -34,7 +34,8 @@ zone_patches:
     model: /home/aatanda/isi_monitor3d/trainer/isidet/models/rfdetr/rfdetr-medium-seg_e41_432px/inference_model.onnx
     infer_size: 320
     color: null
-    confidence: 0.05
+    confidence: 0.15
+    max_fps: 10.0
   - id: zp_mq8fyc6q
     name: Zone 2
     camera: cam_a
@@ -56,9 +57,10 @@ zone_patches:
     - 640
     - 352
     model: /home/aatanda/isi_monitor3d/trainer/isidet/models/rfdetr/rfdetr-medium-seg_e41_432px/inference_model.onnx
-    infer_size: 640
+    infer_size: 320
     color: '#ffcb3d'
-    confidence: 0.05
+    confidence: 0.15
+    max_fps: 10.0
 link_lines:
   rules:
   - from: person

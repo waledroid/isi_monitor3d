@@ -54,12 +54,10 @@
       // calibration. Off by default and never persisted — detection must come
       // back live on reload. Out-of-domain for the detector, so no boxes here.
       showWarp: false,
-      // Bumped on `config:saved` / calibration change; folded into the stream URLs
-      // so the browser drops the old MJPEG connection and reopens a fresh one
-      // (picks up a new model, or switches into/out of the warped view).
+      // Bumped on `config:saved` so the MP4 dev viewer (still MJPEG) reconnects.
+      // Live cam / unified / zone video runs over the single /ws/video socket
+      // (video_ws.js) — see the subscription effect in boot().
       streamNonce: 0,
-      // A pending auto-reconnect timer for a failed live <img> (see onStreamError).
-      _retryTimer: null,
 
       // ---- getters ----
       get badge() {
@@ -79,33 +77,14 @@
       get isWarped() {
         return this.showWarp && this.canVerify;
       },
-      // Stream URL when this camera is the active view, else null (Alpine drops
-      // the src attribute → the MJPEG connection stops). Default is the live
-      // `detect=1` feed on the RAW frame; only the on-demand verification toggle
-      // (showWarp) switches to `warp=1`. The `n` cache-buster forces a reconnect
-      // after a settings save / calibration change / warp toggle.
-      camSrc(cam) {
-        if (this.view !== cam) return null;
-        if (this.showWarp && this.calibratedCams.includes(cam)) {
-          // Verification only: plain rectified floor view, NO detection. The
-          // detector runs on the raw frame (production path); warped frames are
-          // out-of-domain for it, so we don't draw boxes here.
-          return `/stream/video/${cam}?warp=1&n=${this.streamNonce}`;
-        }
-        // The CAM view always runs in-process detection + pose + distance lines so
-        // the operator sees them drawn on the camera image (the FPS cap keeps it
-        // light). It overlaps the Backbone's own detection while running — accepted
-        // for the on-camera visualisation.
-        return `/stream/video/${cam}?detect=1&n=${this.streamNonce}`;
-      },
       // Flip between the live (raw + detection) feed and the rectified
-      // verification view for the active camera. Bumping the nonce reconnects.
+      // verification view for the active camera. The /ws/video subscription
+      // effect in boot() reacts to `isWarped` and swaps the stream.
       toggleWarp() {
         this.showWarp = !this.showWarp;
-        this.streamNonce += 1;
       },
       // Refresh which cameras are calibrated (gates the verification toggle's
-      // availability) and reconnect the active stream without a page reload.
+      // availability) and resubscribe so a new calibration applies live.
       async refreshCalibration() {
         try {
           const res = await fetch("/api/calibrate/status");
@@ -115,41 +94,17 @@
         } catch {
           this.calibratedCams = [];
         }
-        this.streamNonce += 1;
-      },
-      // Auto-reconnect a live <img> only when it's GENUINELY broken. Changing the
-      // src (warp toggle / nonce bump) aborts the in-flight MJPEG load, and the
-      // browser fires `error` for that abort even though the new stream is fine —
-      // reconnecting on those would abort the working stream and loop forever
-      // (a ~1.5s reload flicker). A streaming MJPEG reports naturalWidth > 0, so
-      // we ignore the error unless the element truly has no frame. Re-checked
-      // when the timer fires so a stream that recovered on its own isn't kicked.
-      onStreamError(cam) {
-        if (this.view !== cam || this._retryTimer) return;
-        const img = document.getElementById(`${cam}-img`);
-        if (img && img.naturalWidth > 0) return;   // showing frames → not broken
-        this._retryTimer = setTimeout(() => {
-          this._retryTimer = null;
-          const el = document.getElementById(`${cam}-img`);
-          if (this.view === cam && (!el || el.naturalWidth === 0)) this.streamNonce += 1;
-        }, 1500);
+        if (window.__videoWS) window.__videoWS.resubscribeAll();
       },
       get mp4Src() {
         if (this.view !== "mp4" || !this.mp4Selected) return null;
         const safe = this.mp4Selected.split("/").map(encodeURIComponent).join("/");
         return `/stream/mp4/${safe}?n=${this.streamNonce}`;
       },
-      // Mode-2 unified bird's-eye composite (both cameras → one floor view). Null
-      // unless it's the active view. The backend 404s (and the <img> shows its
-      // alt/onerror) until cam_b is configured + Mode-2-calibrated.
       // The UNIFIED tab is offered only when BOTH cameras are actually live
       // (configured + streaming) — so it appears/disappears with the real feed.
       get unifiedAvailable() {
         return this.hasCamB && !!this.camLive.cam_a && !!this.camLive.cam_b;
-      },
-      get unifiedSrc() {
-        if (this.view !== "unified") return null;
-        return `/stream/unified?n=${this.streamNonce}`;
       },
 
       // ---- view + expand ----
@@ -267,17 +222,38 @@
         window.Alpine.effect(() => {
           if (this.view === "unified" && !this.unifiedAvailable) this.view = "cam_a";
         });
+        // /ws/video subscriptions follow the ACTIVE view: only the visible
+        // panel's stream is subscribed (hidden tabs hold no stream — this is
+        // what freed the browser's per-host connection slots). Reacts to view
+        // switches and the warp verification toggle.
+        window.Alpine.effect(() => {
+          const VWS = window.__videoWS;
+          if (!VWS) return;
+          ["cam_a", "cam_b"].forEach((cam) => {
+            const img = document.getElementById(`${cam}-img`);
+            if (this.view === cam && img) {
+              const warped = this.showWarp && this.calibratedCams.includes(cam);
+              VWS.attach(img, `cam:${cam}${warped ? ":warp" : ""}`);
+            } else {
+              VWS.detach(`cam:${cam}`);
+              VWS.detach(`cam:${cam}:warp`);
+            }
+          });
+          const uimg = document.getElementById("unified-img");
+          if (this.view === "unified" && uimg) VWS.attach(uimg, "unified");
+          else VWS.detach("unified");
+        });
         this.loadUi();
         this.refreshCameras();
         this.refreshCalibration();
         document.addEventListener("config:saved", () => {
           this.refreshCameras();
           // A camera-count change can switch the mode (and thus which calibration
-          // applies), so re-read calibration state too.
+          // applies), so re-read calibration state too. refreshCalibration() also
+          // resubscribes every /ws/video stream, so a changed detection model or
+          // camera source applies live — no reload, no new tab.
           this.refreshCalibration();
-          // Force the active MJPEG stream to reconnect so a changed detection
-          // model (or camera source) is picked up without a manual reload.
-          this.streamNonce++;
+          this.streamNonce++;   // MP4 dev viewer (MJPEG) reconnect
         });
         // Calibration saved/cleared → refresh which cameras can be verified.
         document.addEventListener("calibration:saved", () => this.refreshCalibration());

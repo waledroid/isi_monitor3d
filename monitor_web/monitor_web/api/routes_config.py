@@ -205,6 +205,15 @@ class DetectionConfig(BaseModel):
         return self
 
 
+class PosePayload(BaseModel):
+    """The Settings modal's pose-only model section. Object-detection models are
+    configured per zone (zone_patches); the dashboard no longer manages the
+    global `detection` block — only its pose keys. Empty path = clear."""
+
+    pose_onnx_path: str = ""
+    pose_confidence_threshold: float = 0.3
+
+
 class ConfigPayload(BaseModel):
     cameras: dict[str, CameraConfig]
     # Metric floor-zones (zones.yaml). Now OPTIONAL: the Settings metric-zone editor
@@ -212,6 +221,9 @@ class ConfigPayload(BaseModel):
     # "leave zones.yaml untouched"; an explicit list still rewrites it.
     zones: list[ZoneConfig] | None = Field(default=None, max_length=MAX_ZONES)
     detection: DetectionConfig | None = None
+    # Pose-only update (the current Settings modal). Splices ONLY the pose keys
+    # into backbone.yaml's detection block, never the object-model keys.
+    pose: PosePayload | None = None
     # Distance-line rules (S16). Omitted == "no change"; an empty list explicitly
     # clears all rules on disk (the dashboard sends this when the operator
     # deletes every rule).
@@ -498,8 +510,13 @@ async def detection_classes(request: Request, path: str | None = None) -> JSONRe
 
 
 @router.post("/api/config")
-async def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
-    """Atomically persist cameras + zones. Returns the number of zones written."""
+def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
+    """Atomically persist cameras + zones. Returns the number of zones written.
+
+    Deliberately a SYNC handler: FastAPI runs it in the worker threadpool, so its
+    blocking tail — onnx introspection, fsync'd YAML writes, reset_detector()'s
+    gc.collect(), zone-worker reload — never stalls the event loop (which would
+    freeze every /ws/video frame and API call for the duration)."""
     cfg = request.app.state.settings
     backbone_path = Path(cfg.backbone_config_path)
     backbone_data = _read_backbone(cfg) or {}
@@ -603,6 +620,21 @@ async def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             patch["pose_onnx_path"] = det.pose_onnx_path.strip()
         _merge_ui_settings(cfg, patch)
 
+    # ---- pose-only update (the current Settings modal): splice JUST the pose
+    #      keys into the detection block — onnx_path/plugin/class_names/etc. are
+    #      managed per zone and stay exactly as they are on disk. ----
+    if payload.pose is not None:
+        block = backbone_data.get("detection", {})
+        if not isinstance(block, dict):
+            block = {}
+        pose_path = payload.pose.pose_onnx_path.strip()
+        if pose_path:
+            block["pose_onnx_path"] = pose_path
+        else:
+            block.pop("pose_onnx_path", None)   # empty = clear
+        block["pose_confidence_threshold"] = payload.pose.pose_confidence_threshold
+        backbone_data["detection"] = block
+
     # ---- resolve zones_path; if backbone.yaml has none, default beside it ----
     zones_path = _resolve_zones_path(cfg, backbone_data)
     if zones_path is None:
@@ -689,8 +721,9 @@ async def get_ui_settings(request: Request) -> JSONResponse:
 
 
 @router.post("/api/ui-settings")
-async def post_ui_settings(payload: dict, request: Request) -> JSONResponse:
-    """Merge UI preferences into the YAML store (atomic write)."""
+def post_ui_settings(payload: dict, request: Request) -> JSONResponse:
+    """Merge UI preferences into the YAML store (atomic write). Sync handler on
+    purpose — the fsync'd write runs in the threadpool, off the event loop."""
     try:
         settings = _merge_ui_settings(request.app.state.settings, payload or {})
     except OSError as exc:

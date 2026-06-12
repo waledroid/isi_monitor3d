@@ -113,5 +113,5 @@
   "latency_p95": "Latence p95",
   "latency_p50": "Latence p50",
   "reproj_label": "Reproj",
-  "display_fps": "FPS d'affichage (limite d'inférence)"
+  "display_fps": "FPS général (affichage & zones)"
 }

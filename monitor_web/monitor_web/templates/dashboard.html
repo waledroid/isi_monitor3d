@@ -117,20 +117,21 @@
       <div id="cam_a-wrap" class="big-view" data-view="cam_a" x-cloak
            :class="{ 'cam-flat': $store.bigPanel.isWarped }"
            x-show="$store.bigPanel.view === 'cam_a'">
-        <img id="cam_a-img" :src="$store.bigPanel.camSrc('cam_a')" @error="$store.bigPanel.onStreamError('cam_a')" :class="{ 'fit-contain': $store.bigPanel.isWarped }" alt="cam_a live feed" class="cam-img" />
+        <!-- src driven by video_ws.js via the bigPanel boot() effect (one WS for all video). -->
+        <img id="cam_a-img" :class="{ 'fit-contain': $store.bigPanel.isWarped }" alt="cam_a live feed" class="cam-img" />
         <canvas id="cam_a-overlay" class="cam-overlay"></canvas>
       </div>
       <div id="cam_b-wrap" class="big-view" data-view="cam_b" x-cloak
            :class="{ 'cam-flat': $store.bigPanel.isWarped }"
            x-show="$store.bigPanel.view === 'cam_b'">
-        <img id="cam_b-img" :src="$store.bigPanel.camSrc('cam_b')" @error="$store.bigPanel.onStreamError('cam_b')" :class="{ 'fit-contain': $store.bigPanel.isWarped }" alt="cam_b live feed" class="cam-img" />
+        <img id="cam_b-img" :class="{ 'fit-contain': $store.bigPanel.isWarped }" alt="cam_b live feed" class="cam-img" />
         <canvas id="cam_b-overlay" class="cam-overlay"></canvas>
       </div>
       <div id="unified-wrap" class="big-view" data-view="unified" x-cloak
            x-show="$store.bigPanel.view === 'unified'">
         <!-- Mode-2 unified bird's-eye floor composite of both cameras. Shown full
              frame (contain) since it's a fitted floor canvas, not a camera feed. -->
-        <img id="unified-img" :src="$store.bigPanel.unifiedSrc" alt="unified floor view (needs 2 cameras + Mode-2 calibration)" class="cam-img fit-contain" />
+        <img id="unified-img" alt="unified floor view (needs 2 cameras + Mode-2 calibration)" class="cam-img fit-contain" />
       </div>
       <div id="mp4-wrap" class="big-view" data-view="mp4" x-cloak
            x-show="$store.bigPanel.view === 'mp4'">
@@ -311,6 +312,13 @@
           <section class="config-section">
             <h3 data-i18n="cameras_section">{{ t.cameras_section or 'Cameras' }}</h3>
             <div id="zm-cameras" class="config-cameras"></div>
+            <!-- Global display/inference FPS cap (auto-saves to /api/ui-settings).
+                 Caps the cam streams, the unified view, and the zone worker's
+                 tick; a per-zone fps (Settings ▸ Zones) can only go BELOW it. -->
+            <div class="config-general-fps">
+              <label for="zm-general-fps" data-i18n="display_fps">{{ t.display_fps or 'General FPS (display & zones)' }}</label>
+              <input id="zm-general-fps" type="number" min="1" max="30" step="1" class="zm-input" placeholder="10" />
+            </div>
           </section>
 
           <!-- Hidden MP4 (dev) source -->
@@ -326,24 +334,15 @@
         <div class="settings-tab-content" id="tab-detection">
           <section class="config-section">
             <h3 data-i18n="model_section">{{ t.model_section or 'Detection model' }}</h3>
-            <!-- Backend is auto-selected from the host's hardware (GPU → ONNX, CPU-only
-                 → OpenVINO); only the relevant model-path field is shown. -->
+            <!-- Object-detection models are configured PER ZONE (Settings ▸ Zones) —
+                 the cam views run pose only, so this section manages just the human
+                 pose model + the display preferences. The toggles and distance-line
+                 styles AUTO-SAVE on change (POST /api/ui-settings — read live per
+                 frame by the overlay); only the pose model rides the Save button. -->
             <div class="config-model">
-              <label id="zm-model-onnx-label" data-i18n="model_onnx">{{ t.model_onnx or 'ONNX model (.onnx)' }}</label>
-              <!-- Dropdown of every *.onnx under trainer/isidet/runs/, populated from
-                   /api/detection/onnx-files on modal open. The option VALUE is the
-                   absolute path written to backbone.yaml (loads verbatim); the option
-                   TEXT is the path relative to runs/. -->
-              <select id="zm-model-onnx">
-                <option value="" data-i18n="model_onnx_placeholder">{{ t.model_onnx_placeholder or '— select a model —' }}</option>
-              </select>
-
-              <label id="zm-model-xml-label" data-i18n="model_openvino">{{ t.model_openvino or 'OpenVINO IR (.xml)' }}</label>
-              <input id="zm-model-xml" type="text" placeholder="./models/model.xml" />
-
-              <!-- Person-pose model (separate from the detection model). Dropdown of
-                   pose *.onnx (path contains "pose") from /api/detection/pose-onnx-files.
-                   Option value = absolute path persisted to backbone.yaml. Optional. -->
+              <!-- Person-pose model. Dropdown of pose *.onnx (path contains "pose")
+                   from /api/detection/pose-onnx-files. Option value = absolute path
+                   persisted to backbone.yaml. Optional. -->
               <label data-i18n="model_pose">{{ t.model_pose or 'Pose model (person, .onnx)' }}</label>
               <select id="zm-model-pose-onnx">
                 <option value="" data-i18n="model_pose_placeholder">{{ t.model_pose_placeholder or '— none —' }}</option>
@@ -351,20 +350,6 @@
 
               <label data-i18n="model_pose_conf">{{ t.model_pose_conf or 'Pose confidence threshold' }}</label>
               <input id="zm-model-pose-conf" type="number" step="0.05" min="0" max="1" placeholder="0.3" />
-
-              <label data-i18n="model_classes">{{ t.model_classes or 'Classes (auto-detected from model)' }}</label>
-              <input id="zm-model-classes" type="text" readonly
-                     placeholder="— detected from the selected model —" />
-
-              <label data-i18n="model_conf">{{ t.model_conf or 'Confidence threshold' }}</label>
-              <input id="zm-model-conf" type="number" step="0.05" min="0" max="1" placeholder="0.25" />
-
-              <label data-i18n="model_imgsz">{{ t.model_imgsz or 'Inference image size' }}</label>
-              <div class="zm-imgsz-row">
-                <input id="zm-model-imgsz" type="range" min="0" max="4" step="1" value="4" />
-                <span id="zm-model-imgsz-val">1024</span><span>px</span>
-              </div>
-              <small class="zm-hint" data-i18n="model_imgsz_hint">{{ t.model_imgsz_hint or 'Smaller = faster, less accurate. Requires a dynamic-exported model.' }}</small>
 
               <label for="zm-model-show-nodes" data-i18n="show_nodes">{{ t.show_nodes or 'Show foot nodes' }}</label>
               <input id="zm-model-show-nodes" type="checkbox" class="zm-checkbox" />
@@ -374,9 +359,6 @@
 
               <label for="zm-model-show-boxes" data-i18n="show_boxes">{{ t.show_boxes or 'Show bounding boxes' }}</label>
               <input id="zm-model-show-boxes" type="checkbox" class="zm-checkbox" />
-
-              <label for="zm-model-display-fps" data-i18n="display_fps">{{ t.display_fps or 'Display FPS (inference cap)' }}</label>
-              <input id="zm-model-display-fps" type="number" min="1" max="30" step="1" class="zm-input" />
 
               <label for="zm-model-dist-opacity" data-i18n="dist_opacity">{{ t.dist_opacity or 'Distance line — opacity' }}</label>
               <input id="zm-model-dist-opacity" type="number" min="0.05" max="1" step="0.05" class="zm-input" />

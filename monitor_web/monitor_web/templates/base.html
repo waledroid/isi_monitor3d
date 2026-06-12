@@ -13,6 +13,10 @@
        logs panel; Three.js (ESM, via the import map below) renders the 3D floor
        map (floor_map_3d.js). -->
   <script src="/static/js/vendor/htmx.min.js" defer></script>
+  <!-- Shared /ws/video transport (window.__videoWS). FIRST deferred script so it
+       exists before any module (zone_patch.js) or classic script (big_panel.js)
+       attaches a stream — defer + module scripts execute in document order. -->
+  <script src="/static/js/video_ws.js" defer></script>
   <!-- Import map MUST precede any `type="module"` that imports "three". -->
   <script type="importmap">
   {

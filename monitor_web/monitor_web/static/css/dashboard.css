@@ -1044,6 +1044,25 @@ button.btn-stop:hover {
   align-items: center;
 }
 
+/* General FPS cap row under the camera slots (auto-saves to ui-settings). */
+.config-general-fps {
+  display: grid;
+  grid-template-columns: auto 90px;
+  column-gap: 20px;
+  align-items: center;
+  justify-content: start;
+  margin-top: 16px;
+}
+.config-general-fps input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
 .config-cameras label {
   font-size: 13px;
   font-weight: 600;
@@ -1133,8 +1152,10 @@ button.btn-stop:hover {
 }
 
 .config-zone-row {
+  /* num | name | model | size | conf | fps | colour | delete — the slice/dims
+     text moved into the .zm-coords line below (beside the polygon info). */
   display: grid;
-  grid-template-columns: 28px minmax(80px, 1.4fr) auto 120px 78px 70px 40px 32px;
+  grid-template-columns: 28px minmax(80px, 1.4fr) 120px 78px 70px 70px 40px 32px;
   align-items: center;
   gap: 8px 12px;
   padding: 12px 18px;
@@ -1172,8 +1193,9 @@ button.btn-stop:hover {
 }
 .config-zone-row .zm-delete:hover { color: #f87171; }
 
-/* Per-zone confidence box — tighter padding so the small number field fits. */
-.config-zone-row input.zm-conf { padding: 8px 8px; }
+/* Per-zone confidence + FPS boxes — tighter padding so the small fields fit. */
+.config-zone-row input.zm-conf,
+.config-zone-row input.zm-fps { padding: 8px 8px; }
 
 /* Saved polygon vertices — spans the whole row, wraps under the controls. */
 .config-zone-row .zm-coords {

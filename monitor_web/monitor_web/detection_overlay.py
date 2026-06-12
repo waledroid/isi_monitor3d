@@ -55,8 +55,23 @@ _BOX_COLOR = (80, 220, 80)  # BGR — default / unknown class
 # is the existing nvidia-smi query, cached so it's not run per frame.
 _GPU_MIN_FREE_MB = 900          # skip preview inference when free VRAM < this
 _GPU_PROBE_TTL_S = 1.5          # reuse the (subprocess) VRAM reading this long
+# Building a NEW zone session needs the margin PLUS room for the session itself
+# (weights + arena; ~300 MB for a nano @320, ~1.5 GB for RF-DETR @840 — this is a
+# refuse-early floor, not a sizing model). Below it, get_zone_detector raises
+# ZoneModelUnavailable instead of letting ORT OOM and corrupt the CUDA context.
+_ZONE_SESSION_HEADROOM_MB = 600
 _gpu_probe = {"ts": 0.0, "free_mb": None}
 _gpu_skip_log_ts = 0.0
+
+
+class ZoneModelUnavailable(RuntimeError):
+    """A zone's detector session cannot be (safely) built right now — e.g. not
+    enough free VRAM. The zone worker disables just that zone for a cooldown and
+    keeps the others running; nothing else in the process is affected."""
+
+    def __init__(self, reason: str, detail: str = ""):
+        super().__init__(detail or reason)
+        self.reason = reason
 
 
 def _gpu_free_mb():
@@ -450,6 +465,18 @@ def get_zone_detector(model_path, cfg, input_size: int = 320):
         det = _ZONE_DETECTORS.get(key)
         if det is not None:
             return det
+        # VRAM admission: refuse to even START building when the card is nearly
+        # full — an ORT CUDA OOM mid-build throws error 700, which corrupts the
+        # context for EVERY resident session (Backbone + pose + other zones).
+        # Raising here keeps the failure scoped to this one zone. No GPU /
+        # unknown probe → no check (CPU execution can't trigger it).
+        free = _gpu_free_mb()
+        if free is not None and free < _GPU_MIN_FREE_MB + _ZONE_SESSION_HEADROOM_MB:
+            raise ZoneModelUnavailable(
+                "no_vram",
+                f"refusing to build zone session for {resolved.name}: "
+                f"{free:.0f} MB free < {_GPU_MIN_FREE_MB + _ZONE_SESSION_HEADROOM_MB} MB required",
+            )
         plugin = "yolo_onnx"
         try:
             import onnx as _onnx
