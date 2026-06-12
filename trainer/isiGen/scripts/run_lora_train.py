@@ -1,4 +1,4 @@
-"""Phase 4 — train the project's SD3.5 QLoRA (NF4 base + LoRA, 12 GB recipe).
+"""Phase 4 — train the project's SDXL LoRA (fp16 UNet, 12 GB recipe).
 
   python scripts/run_lora_train.py --project pallets_v1
 """

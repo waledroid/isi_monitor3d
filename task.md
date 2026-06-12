@@ -328,6 +328,11 @@ All suites green throughout: **backbone 370**, **monitor_web 216** (as of the 06
 
 Suites green: **backbone 370**, **monitor_web 235** (was 216 at session start). On-rig items unchanged (pose overlay quality + VRAM banner under real GPU pressure → Part D).
 
+**isiGen generation stack: SD3.5-Large → SDXL + depth ControlNet** ✅ *(same day)*
+- The stalled ~20 GB SD3.5-Large download was cancelled; SD3.5 **Medium** was requested but has **no depth ControlNet** (Stability ships ControlNets for Large only) — user chose **SDXL + `diffusers/controlnet-depth-sdxl-1.0`** instead (~9.5 GB fp16, ungated, faster, cheaper LoRA on the 12 GB card). Design: `docs/superpowers/specs/2026-06-12-isigen-sdxl-design.md`.
+- New `sdxl_controlnet` generator (fp16, `madebyollin/sdxl-vae-fp16-fix` VAE, no quantization knobs, cpu-offload default) + `diffusers_sdxl` LoRA trainer (same 3-stage memory discipline; DDPM epsilon objective + SDXL `add_time_ids`; UNet-only LoRA fp32 via `cast_training_params`; default res 768). SD3.5 modules **deleted** (never GPU-verified; in git history). Configs/template/demo project/runner defaults/Studio labels/README updated. Suite **35 green**, ruff clean. SDXL weights downloaded (fp16-only includes). CLIP ViT-B/32 weight download completed too (was a stale fragment).
+- **Pending GPU verification:** smoke-mint 1 image (`run_generate --limit 1`) + a short LoRA run — same as before, now on SDXL.
+
 ---
 
 ## ▶ What's actually left, prioritized

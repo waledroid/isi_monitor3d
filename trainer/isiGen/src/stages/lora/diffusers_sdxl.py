@@ -1,16 +1,19 @@
-"""SD3.5 QLoRA trainer — Phase 4.
+"""SDXL LoRA trainer — Phase 4.
 
-A memory-disciplined LoRA fine-tune of SD 3.5 on the project's curated images +
+A memory-disciplined LoRA fine-tune of SDXL on the project's curated images +
 anti-bleed captions, sized for the 12 GB RTX 5070:
 
   1. **Precompute prompt embeddings** once per image with the pipeline's own
-     ``encode_prompt`` (CLIP-L/G bf16 + T5-XXL in NF4), then FREE the encoders.
-  2. **Precompute VAE latents** once per image (bf16 VAE), then FREE the VAE.
-  3. Load ONLY the MMDiT transformer — **NF4-quantized** (QLoRA) — attach a
-     PEFT LoRA (rank from config) on the attention projections, enable
-     gradient checkpointing, train with **8-bit AdamW** on the flow-matching
-     objective exactly as diffusers' SD3 training script defines it
-     (logit-normal timestep sampling; ``target = noise - latents``).
+     ``encode_prompt`` (the two CLIPs — no T5 in SDXL), then FREE the encoders.
+  2. **Precompute VAE latents** once per image with the **fp16-fix VAE**
+     (the stock SDXL VAE NaNs in fp16), then FREE the VAE.
+  3. Load ONLY the UNet (fp16) — attach a PEFT LoRA (rank from config) on the
+     attention projections, cast the LoRA params to fp32
+     (``cast_training_params``), enable gradient checkpointing, train with
+     **8-bit AdamW** on the standard epsilon-prediction objective
+     (``DDPMScheduler.add_noise``; ``target = noise``) under
+     ``torch.autocast``.  SDXL's micro-conditioning ``add_time_ids`` is fixed
+     at ``[res, res, 0, 0, res, res]`` — training crops are centered squares.
   4. Save ``pytorch_lora_weights.safetensors`` loadable by
      ``pipe.load_lora_weights(run_dir)`` — set it as
      ``phases.generation.lora_weights`` for phase 5/7.
@@ -33,17 +36,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@LORA_TRAINERS.register("diffusers_sd3")
-class DiffusersSd3LoraTrainer(LoraTrainer):
+@LORA_TRAINERS.register("diffusers_sdxl")
+class DiffusersSdxlLoraTrainer(LoraTrainer):
     def __init__(self, base_model: str | None = None, rank: int = 16,
-                 resolution: int = 512, max_steps: int = 2000, lr: float = 1e-4,
+                 resolution: int = 768, max_steps: int = 2000, lr: float = 1e-4,
                  batch_size: int = 1, grad_accum: int = 4, seed: int = 42,
-                 checkpoint_every: int = 500, **cfg) -> None:
+                 checkpoint_every: int = 500,
+                 vae: str = "madebyollin/sdxl-vae-fp16-fix", **cfg) -> None:
         super().__init__(base_model=base_model, rank=rank, resolution=resolution,
                          max_steps=max_steps, lr=lr, batch_size=batch_size,
                          grad_accum=grad_accum, seed=seed,
-                         checkpoint_every=checkpoint_every, **cfg)
-        self.base_model = base_model or "stabilityai/stable-diffusion-3.5-large"
+                         checkpoint_every=checkpoint_every, vae=vae, **cfg)
+        self.base_model = base_model or "stabilityai/stable-diffusion-xl-base-1.0"
+        self.vae_id = vae
         self.rank = int(rank)
         self.resolution = int(resolution)
         self.max_steps = int(max_steps)
@@ -81,12 +86,11 @@ class DiffusersSd3LoraTrainer(LoraTrainer):
         import torch.nn.functional as F
         from diffusers import (
             AutoencoderKL,
-            BitsAndBytesConfig,
-            FlowMatchEulerDiscreteScheduler,
-            SD3Transformer2DModel,
-            StableDiffusion3Pipeline,
+            DDPMScheduler,
+            StableDiffusionXLPipeline,
+            UNet2DConditionModel,
         )
-        from diffusers.training_utils import compute_density_for_timestep_sampling
+        from diffusers.training_utils import cast_training_params
         from peft import LoraConfig
         from PIL import Image
 
@@ -95,43 +99,36 @@ class DiffusersSd3LoraTrainer(LoraTrainer):
         run_dir = Path(run_dir)
         run_dir.mkdir(parents=True, exist_ok=True)
         device = "cuda"
-        dtype = torch.bfloat16
+        dtype = torch.float16
         torch.manual_seed(self.seed)
 
         items = self._collect(project_dir)
         logger.info("lora: %d training images", len(items))
 
         # ---- 1. prompt embeddings (encoders loaded once, then freed) ----
-        from transformers import BitsAndBytesConfig as HfBnb
-        from transformers import T5EncoderModel
-        logger.info("lora: encoding %d captions (CLIP-L/G + T5-XXL nf4)", len(items))
-        te3 = T5EncoderModel.from_pretrained(
-            self.base_model, subfolder="text_encoder_3",
-            quantization_config=HfBnb(load_in_4bit=True, bnb_4bit_quant_type="nf4",
-                                      bnb_4bit_compute_dtype=dtype),
-            torch_dtype=dtype)
-        enc_pipe = StableDiffusion3Pipeline.from_pretrained(
-            self.base_model, transformer=None, vae=None,
-            text_encoder_3=te3, torch_dtype=dtype)
+        logger.info("lora: encoding %d captions (CLIP-L + CLIP-G)", len(items))
+        enc_pipe = StableDiffusionXLPipeline.from_pretrained(
+            self.base_model, unet=None, vae=None,
+            torch_dtype=dtype, variant="fp16")
         enc_pipe.text_encoder.to(device)
         enc_pipe.text_encoder_2.to(device)
         prompt_embeds_all, pooled_all = [], []
         with torch.no_grad():
             for _, caption in items:
                 pe, _, pool, _ = enc_pipe.encode_prompt(
-                    prompt=caption, prompt_2=caption, prompt_3=caption,
+                    prompt=caption, prompt_2=caption,
                     device=device, num_images_per_prompt=1,
                     do_classifier_free_guidance=False)
                 prompt_embeds_all.append(pe.cpu())
                 pooled_all.append(pool.cpu())
-        del enc_pipe, te3
+        del enc_pipe
         gc.collect()
         torch.cuda.empty_cache()
 
-        # ---- 2. VAE latents (VAE loaded once, then freed) ----
+        # ---- 2. VAE latents (fp16-fix VAE loaded once, then freed) ----
         logger.info("lora: encoding %d images to latents @ %dpx",
                     len(items), self.resolution)
-        vae = AutoencoderKL.from_pretrained(self.base_model, subfolder="vae",
+        vae = AutoencoderKL.from_pretrained(self.vae_id,
                                             torch_dtype=dtype).to(device)
         latents_all = []
         res = self.resolution
@@ -147,45 +144,38 @@ class DiffusersSd3LoraTrainer(LoraTrainer):
                 x = torch.from_numpy(np.array(img)).float() / 127.5 - 1.0
                 x = x.permute(2, 0, 1)[None].to(device, dtype=dtype)
                 lat = vae.encode(x).latent_dist.sample()
-                lat = (lat - vae.config.shift_factor) * vae.config.scaling_factor
+                lat = lat * vae.config.scaling_factor
                 latents_all.append(lat.cpu())
         del vae
         gc.collect()
         torch.cuda.empty_cache()
 
-        # ---- 3. NF4 transformer + LoRA ----
-        logger.info("lora: loading transformer (NF4) + LoRA r=%d", self.rank)
-        transformer = SD3Transformer2DModel.from_pretrained(
-            self.base_model, subfolder="transformer",
-            quantization_config=BitsAndBytesConfig(
-                load_in_4bit=True, bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=dtype),
-            torch_dtype=dtype)
-        transformer.requires_grad_(False)
-        transformer.add_adapter(LoraConfig(
+        # ---- 3. fp16 UNet + LoRA (params in fp32) ----
+        logger.info("lora: loading UNet (fp16) + LoRA r=%d", self.rank)
+        unet = UNet2DConditionModel.from_pretrained(
+            self.base_model, subfolder="unet",
+            torch_dtype=dtype, variant="fp16").to(device)
+        unet.requires_grad_(False)
+        unet.add_adapter(LoraConfig(
             r=self.rank, lora_alpha=self.rank, init_lora_weights="gaussian",
             target_modules=["to_k", "to_q", "to_v", "to_out.0"]))
-        transformer.enable_gradient_checkpointing()
-        lora_params = [p for p in transformer.parameters() if p.requires_grad]
+        cast_training_params(unet, dtype=torch.float32)
+        unet.enable_gradient_checkpointing()
+        lora_params = [p for p in unet.parameters() if p.requires_grad]
         n_train = sum(p.numel() for p in lora_params)
         logger.info("lora: %d trainable params", n_train)
 
         import bitsandbytes as bnb
         optimizer = bnb.optim.AdamW8bit(lora_params, lr=self.lr, weight_decay=1e-4)
-        scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            self.base_model, subfolder="scheduler")
-        sigmas_table = scheduler.sigmas.to(device, dtype=dtype)
-        timesteps_table = scheduler.timesteps.to(device)
+        scheduler = DDPMScheduler.from_pretrained(self.base_model,
+                                                  subfolder="scheduler")
 
-        def sample_sigmas(bsz):
-            u = compute_density_for_timestep_sampling(
-                weighting_scheme="logit_normal", batch_size=bsz,
-                logit_mean=0.0, logit_std=1.0, mode_scale=1.29)
-            idx = (u * scheduler.config.num_train_timesteps).long().clamp(
-                0, len(timesteps_table) - 1)
-            return sigmas_table[idx], timesteps_table[idx]
+        # SDXL micro-conditioning: original size, crop top-left, target size.
+        # Training crops are centered squares at `res`, so this is constant.
+        time_ids = torch.tensor([res, res, 0, 0, res, res],
+                                device=device, dtype=dtype)
 
-        # ---- 4. training loop (flow matching: target = noise - latents) ----
+        # ---- 4. training loop (epsilon prediction: target = noise) ----
         rng = torch.Generator(device="cpu").manual_seed(self.seed)
         losses = []
         for step in range(1, self.max_steps + 1):
@@ -198,14 +188,16 @@ class DiffusersSd3LoraTrainer(LoraTrainer):
                 pe = torch.cat([prompt_embeds_all[i] for i in pick]).to(device, dtype=dtype)
                 pool = torch.cat([pooled_all[i] for i in pick]).to(device, dtype=dtype)
                 noise = torch.randn_like(latents)
-                sigmas, timesteps = sample_sigmas(latents.shape[0])
-                sig = sigmas.view(-1, 1, 1, 1)
-                noisy = (1.0 - sig) * latents + sig * noise
-                pred = transformer(hidden_states=noisy, timestep=timesteps,
-                                   encoder_hidden_states=pe,
-                                   pooled_projections=pool, return_dict=False)[0]
-                target = noise - latents
-                loss = F.mse_loss(pred.float(), target.float()) / self.grad_accum
+                timesteps = torch.randint(
+                    0, scheduler.config.num_train_timesteps,
+                    (latents.shape[0],), generator=rng).to(device)
+                noisy = scheduler.add_noise(latents, noise, timesteps)
+                cond = {"text_embeds": pool,
+                        "time_ids": time_ids.expand(latents.shape[0], -1)}
+                with torch.autocast("cuda", dtype=dtype):
+                    pred = unet(noisy, timesteps, encoder_hidden_states=pe,
+                                added_cond_kwargs=cond, return_dict=False)[0]
+                loss = F.mse_loss(pred.float(), noise.float()) / self.grad_accum
                 loss.backward()
                 accum_loss += float(loss)
             torch.nn.utils.clip_grad_norm_(lora_params, 1.0)
@@ -215,21 +207,21 @@ class DiffusersSd3LoraTrainer(LoraTrainer):
                 logger.info("lora: step %d/%d  loss %.4f", step, self.max_steps,
                             sum(losses[-25:]) / min(25, len(losses)))
             if self.checkpoint_every and step % self.checkpoint_every == 0:
-                self._save(transformer, run_dir / f"checkpoint-{step}")
+                self._save(unet, run_dir / f"checkpoint-{step}")
 
-        weights = self._save(transformer, run_dir)
+        weights = self._save(unet, run_dir)
         (run_dir / "report.md").write_text(self._report(project, len(items), losses))
         logger.info("lora: done — weights at %s", weights)
         return weights
 
     @staticmethod
-    def _save(transformer, out_dir: Path) -> Path:
-        from diffusers import StableDiffusion3Pipeline
+    def _save(unet, out_dir: Path) -> Path:
+        from diffusers import StableDiffusionXLPipeline
         from peft.utils import get_peft_model_state_dict
         out_dir.mkdir(parents=True, exist_ok=True)
-        StableDiffusion3Pipeline.save_lora_weights(
+        StableDiffusionXLPipeline.save_lora_weights(
             out_dir,
-            transformer_lora_layers=get_peft_model_state_dict(transformer))
+            unet_lora_layers=get_peft_model_state_dict(unet))
         return out_dir / "pytorch_lora_weights.safetensors"
 
     def _report(self, project, n_images: int, losses: list[float]) -> str:
@@ -237,7 +229,7 @@ class DiffusersSd3LoraTrainer(LoraTrainer):
         tail = losses[-100:] if len(losses) >= 100 else losses
         return (
             f"# LoRA training — {project.name}\n\n"
-            f"- base: `{self.base_model}` (NF4 QLoRA)\n"
+            f"- base: `{self.base_model}` (fp16 UNet, fp32 LoRA)\n"
             f"- rank {self.rank} · {self.resolution}px · {self.max_steps} steps · "
             f"lr {self.lr} · batch {self.batch_size}x{self.grad_accum} accum\n"
             f"- images: {n_images}\n"

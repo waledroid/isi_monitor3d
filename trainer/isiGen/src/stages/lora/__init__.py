@@ -1,2 +1,2 @@
-from . import diffusers_sd3 as _sd3  # noqa: F401 — fires @register
+from . import diffusers_sdxl as _sdxl  # noqa: F401 — fires @register
 from .base import LORA_TRAINERS, LoraTrainer  # noqa: F401

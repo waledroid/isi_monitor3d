@@ -1,4 +1,4 @@
-"""LoraTrainer seam — Phase 4: train the SD 3.5 Large LoRA (the project's
+"""LoraTrainer seam — Phase 4: train the SDXL LoRA (the project's
 "material and texture dictionary") on the curated images + captions."""
 
 from __future__ import annotations

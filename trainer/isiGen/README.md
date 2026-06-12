@@ -1,4 +1,4 @@
-# isiGen — synthetic dataset generator (SD 3.5 Large + ControlNet)
+# isiGen — synthetic dataset generator (SDXL + depth ControlNet)
 
 A reusable, **project-based** pipeline that turns 50–100 real photos per class
 into an unlimited, perfectly-labeled synthetic dataset:
@@ -8,11 +8,11 @@ into an unlimited, perfectly-labeled synthetic dataset:
    + SAM2 color-coded *ground-truth masks* (the future labels)
 3. **Anti-bleed captions** — unique trigger word per class (`ISI_PLT`, …) +
    exhaustive background description
-4. **LoRA training** (SD 3.5 Large, BF16 + grad-checkpointing + 8-bit AdamW) *(next session)*
-5. **Pipeline init** — SD3.5-Large + depth ControlNet, NF4-quantized + CPU offload *(next session)*
-6. **Synthetic scaffolds** — procedural layouts → paired control map + mask *(next session)*
-7. **Mint** — ControlNet forces geometry, prompts randomize backgrounds *(next session)*
-8. **Auto-label + filter** — mask aligns by construction; CLIP-score filter; YOLO-seg export *(next session)*
+4. **LoRA training** (SDXL UNet, fp16 + grad-checkpointing + 8-bit AdamW)
+5. **Pipeline init** — SDXL + depth ControlNet + fp16-fix VAE, CPU offload
+6. **Synthetic scaffolds** — procedural layouts → paired control map + mask
+7. **Mint** — ControlNet forces geometry, prompts randomize backgrounds
+8. **Auto-label + filter** — mask aligns by construction; CLIP-score filter; YOLO-seg export
 
 Architecture mirrors `trainer/isidet`: ABC + registry per seam (8 seams), YAML
 config per project, an isolated conda env, and headless CLI scripts — plus
@@ -29,8 +29,11 @@ conda run -n isi-train pip install --no-build-isolation \
     "git+https://github.com/facebookresearch/sam2.git"
 # sanity
 conda run -n isi-train python -c "import torch, diffusers, sam2; print(torch.cuda.get_device_capability())"  # (12, 0)
-# HF auth (SD 3.5 is gated; needed from phase 4 on):
-conda run -n isi-train hf auth login
+# All generation models (SDXL base, depth ControlNet, fp16-fix VAE) are UNGATED
+# — no HF login needed. Pre-fetch them (≈9.5 GB) with:
+conda run -n isi-train hf download stabilityai/stable-diffusion-xl-base-1.0 --include "*.json" "*.txt" "*fp16.safetensors"
+conda run -n isi-train hf download diffusers/controlnet-depth-sdxl-1.0 --include "*.json" "*fp16.safetensors"
+conda run -n isi-train hf download madebyollin/sdxl-vae-fp16-fix
 ```
 
 To recreate `isi-train` from scratch on a new machine, use the repo-root spec:
@@ -46,10 +49,10 @@ python scripts/create_project.py --name pallets_v1 \
 python scripts/run_curate.py --project pallets_v1 --source /path/photos --class-name palette
 python scripts/run_maps.py --project pallets_v1 --stage all       # depth + canny + SAM2 masks
 python scripts/run_captions.py --project pallets_v1               # anti-bleed captions
-python scripts/run_lora_train.py --project pallets_v1             # P4: SD3.5 QLoRA (hours, GPU)
+python scripts/run_lora_train.py --project pallets_v1             # P4: SDXL LoRA (hours, GPU)
 #   → set phases.generation.lora_weights to the printed weights path
 python scripts/run_scaffolds.py --project pallets_v1 --count 200  # P6: paired control+mask
-python scripts/run_generate.py --project pallets_v1 [--limit 10]  # P5+7: mint (NF4, ~1-2 min/img)
+python scripts/run_generate.py --project pallets_v1 [--limit 10]  # P5+7: mint (SDXL fp16)
 python scripts/run_export.py --project pallets_v1                 # P8: CLIP filter + YOLO-seg/LabelMe
 # trained next door: point trainer/isidet's dataset_path at
 #   data/pallets_v1/export/yolo_seg

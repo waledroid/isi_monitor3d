@@ -242,7 +242,7 @@ def _build_prompt(project: ProjectConfig, classes: list[str], rng) -> str:
 
 
 def run_generation(project_dir: Path, *, limit: int | None = None) -> dict:
-    """Phases 5+7 — init the SD3.5 ControlNet pipeline once (load()), then mint
+    """Phases 5+7 — init the SDXL ControlNet pipeline once (load()), then mint
     one synthetic image per pending scaffold. Each output lands in generated/
     with its prompt, and joins the manifest as a synthetic record whose MASK is
     the scaffold's ground truth (aligned by construction)."""
@@ -252,7 +252,7 @@ def run_generation(project_dir: Path, *, limit: int | None = None) -> dict:
     project = load_project(project_dir)
     project_dir = Path(project_dir)
     cfg = dict(project.phase("generation"))
-    name = cfg.pop("generator", "sd35_large_controlnet")
+    name = cfg.pop("generator", "sdxl_controlnet")
     seed_cfg = int(cfg.pop("seed", -1))
     generator = IMAGE_GENERATORS.create(name, **cfg)
     entries = load_scaffold_index(project_dir)
@@ -368,7 +368,7 @@ def run_lora(project_dir: Path) -> dict:
     project = load_project(project_dir)
     project_dir = Path(project_dir)
     cfg = dict(project.phase("lora"))
-    name = cfg.pop("trainer", "diffusers_sd3")
+    name = cfg.pop("trainer", "diffusers_sdxl")
     cfg.setdefault("base_model", project.phase("generation").get("base_model"))
     cfg["project_dir"] = str(project_dir)
     trainer = LORA_TRAINERS.create(name, **cfg)

@@ -55,12 +55,11 @@ phases:
         - "a factory floor with yellow safety lines and parked forklifts"
         - "a cold-storage room with frosted walls and bright LED panels"
 
-  # ── Reserved keys (phases 4-8 land next session — schema is FINAL) ─────────
   lora:
-    trainer: diffusers_sd3
+    trainer: diffusers_sdxl
     rank: 16
-    resolution: 512
-    precision: bf16
+    resolution: 768            # 1024 fits the 12 GB card but leaves no margin
+    precision: fp16
     gradient_checkpointing: true
     optimizer: adamw_8bit
     max_steps: 2000
@@ -73,14 +72,13 @@ phases:
     depth_remix: {}
     box3d_procedural: {}
   generation:
-    generator: sd35_large_controlnet
-    base_model: stabilityai/stable-diffusion-3.5-large
-    controlnet: stabilityai/stable-diffusion-3.5-large-controlnet-depth
-    quantization: nf4          # 8B transformer in 4-bit on the 12 GB card
-    text_encoder_3: nf4        # T5-XXL: nf4 | none (12 GB system RAM escape hatch)
+    generator: sdxl_controlnet
+    base_model: stabilityai/stable-diffusion-xl-base-1.0
+    controlnet: diffusers/controlnet-depth-sdxl-1.0
+    vae: madebyollin/sdxl-vae-fp16-fix   # stock SDXL VAE NaNs in fp16
     cpu_offload: true
-    steps: 28
-    guidance: 4.5
+    steps: 30
+    guidance: 7.5
     controlnet_scale: 0.85
     lora_weights: null         # set after phase 4
     width: 1024

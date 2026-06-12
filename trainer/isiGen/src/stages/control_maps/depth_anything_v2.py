@@ -2,7 +2,7 @@
 pipeline (no extra package; ~100 MB checkpoint auto-cached to HF_HOME).
 
 The min-max-normalized uint8 grayscale PNG this produces is exactly the input
-format the SD3.5-Large depth ControlNet expects in phase 7.
+format the SDXL depth ControlNet expects in phase 7.
 """
 
 from __future__ import annotations

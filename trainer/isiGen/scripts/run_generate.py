@@ -1,4 +1,4 @@
-"""Phases 5+7 — init the SD3.5 ControlNet pipeline and mint synthetics from the
+"""Phases 5+7 — init the SDXL ControlNet pipeline and mint synthetics from the
 pending scaffolds. Resumable (index updates after every image).
 
   python scripts/run_generate.py --project pallets_v1 [--limit 5]

@@ -1,6 +1,6 @@
 """ControlMapExtractor seam — Phase 2's generation-side maps.
 
-A control map is what the SD3.5 ControlNet consumes to force geometry: a depth
+A control map is what the depth ControlNet consumes to force geometry: a depth
 map (DepthAnythingV2) or Canny edges. One extractor per map kind; the maps
 runner calls ``load()`` once, ``extract()`` per image, ``close()`` at the end.
 """
