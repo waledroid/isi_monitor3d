@@ -4,7 +4,9 @@
 {% endblock %}
 {% block content %}
 <section class="card">
-  <h1>{{ project }} — pipeline</h1>
+  <h1>{{ project }} — pipeline
+    <button id="refresh-board" class="ghost-btn" title="Refresh status now">⟳ Refresh</button>
+  </h1>
   <div class="classes">
     {% for c in classes %}
     <span class="chip" style="--c: rgb({{ c.color[0] }},{{ c.color[1] }},{{ c.color[2] }})">{{ c.name }} · {{ c.trigger }}</span>

@@ -34,6 +34,12 @@ label { display: inline-flex; flex-direction: column; gap: 4px; font-size: 12px;
 .project-row { display: flex; gap: 14px; align-items: center; padding: 10px 12px;
                border: 1px solid var(--line); border-radius: 10px; }
 .project-row a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.project-del { margin-left: auto; padding: 2px 9px; line-height: 1; color: var(--muted);
+               border-radius: 8px; }
+.project-del:hover { color: var(--bad); border-color: var(--bad); }
+.ghost-btn { margin-left: 12px; font-size: 12px; padding: 3px 10px; vertical-align: middle;
+             color: var(--muted); }
+.ghost-btn:hover { color: var(--accent); }
 
 .classes { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
@@ -52,6 +58,9 @@ label { display: inline-flex; flex-direction: column; gap: 4px; font-size: 12px;
 .phase-card h3 { margin: 0; font-size: 13px; }
 .phase-card .counts { color: var(--muted); font-size: 12px; min-height: 32px; }
 .phase-card.stub { opacity: .45; }
+.phase-card.done { background: rgba(46, 213, 115, .12); border-color: rgba(46, 213, 115, .55);
+                   border-left: 3px solid var(--ok); }
+.phase-card.partial { background: rgba(240, 180, 30, .10); border-left: 3px solid #f0b41e; }
 .phase-card a { color: var(--accent); font-size: 12px; }
 .job-log { background: #0d1117; border: 1px solid var(--line); border-radius: 8px;
            padding: 10px; max-height: 260px; overflow: auto; font-size: 12px;

@@ -54,6 +54,29 @@ def test_records_patch_prompts_caption(tiny_project):
         assert c.get("/media/tiny/thumb/ffffffffffff").status_code == 404
 
 
+def test_status_reports_lora_trained(tiny_project, tmp_path):
+    with _client() as c:
+        assert c.get("/api/p/tiny/status").json()["lora_trained"] is False
+        # drop a fake weights file where run_lora writes (settings.runs_dir/lora)
+        wdir = tmp_path / "runs" / "lora" / "tiny_r16_x"
+        wdir.mkdir(parents=True, exist_ok=True)
+        (wdir / "pytorch_lora_weights.safetensors").write_bytes(b"x")
+        assert c.get("/api/p/tiny/status").json()["lora_trained"] is True
+
+
+def test_delete_project_removes_data_and_lora(tiny_project, tmp_path):
+    pdir, _ = tiny_project
+    wdir = tmp_path / "runs" / "lora" / "tiny_r16_x"
+    wdir.mkdir(parents=True, exist_ok=True)
+    (wdir / "pytorch_lora_weights.safetensors").write_bytes(b"x")
+    with _client() as c:
+        assert c.delete("/api/projects/tiny").json()["ok"] is True
+        assert not pdir.exists()
+        assert not wdir.exists()
+        assert c.get("/api/p/tiny/status").status_code == 404
+        assert c.delete("/api/projects/tiny").status_code == 404      # already gone
+
+
 def test_phase_job_runs_captions(tiny_project):
     with _client() as c:
         r = c.post("/api/p/tiny/run/captions")

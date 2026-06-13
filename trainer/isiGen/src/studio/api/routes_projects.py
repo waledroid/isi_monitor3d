@@ -6,7 +6,13 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ...core.manifest import Manifest
-from ...core.project import ClassSpec, create_project, list_projects, load_project
+from ...core.project import (
+    ClassSpec,
+    create_project,
+    delete_project,
+    list_projects,
+    load_project,
+)
 from .deps import project_dir
 
 router = APIRouter()
@@ -43,6 +49,30 @@ async def create(request: Request, body: CreateProjectBody) -> dict:
     return {"ok": True, "path": str(path)}
 
 
+@router.delete("/api/projects/{name}")
+async def delete(request: Request, name: str) -> dict:
+    settings = request.app.state.settings
+    try:
+        delete_project(settings.data_dir, name, runs_dir=settings.runs_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+def _lora_trained(project_dir, name: str, runs_dir) -> bool:
+    """A project's LoRA is 'done' if its configured weights exist, or any of its
+    runs/lora/<name>_* dirs holds a weights file."""
+    from pathlib import Path
+    cfg = load_project(project_dir)
+    weights = (cfg.phase("generation") or {}).get("lora_weights")
+    if weights:
+        p = Path(weights)
+        if p.is_file() or (p / "pytorch_lora_weights.safetensors").is_file():
+            return True
+    return any((d / "pytorch_lora_weights.safetensors").is_file()
+               for d in (Path(runs_dir) / "lora").glob(f"{name}_*"))
+
+
 @router.get("/api/p/{name}/status")
 async def status(request: Request, name: str) -> dict:
     d = project_dir(request, name)
@@ -50,6 +80,7 @@ async def status(request: Request, name: str) -> dict:
     recs = list(m.records.values())
     active = [r for r in recs if not r.excluded]
     return {
+        "lora_trained": _lora_trained(d, name, request.app.state.settings.runs_dir),
         "records": len(recs),
         "excluded": sum(r.excluded for r in recs),
         "by_class": {c: sum(r.class_name == c for r in active)

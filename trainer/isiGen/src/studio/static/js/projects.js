@@ -14,6 +14,11 @@ async function render() {
         `<span class="chip" style="--c: rgb(${c.color.join(",")})">${c.name}</span>`).join("");
       row.innerHTML = `<a href="/p/${p.name}">${p.name}</a> ${chips}
                        <span class="msg">${p.records} image(s)</span>`;
+      const del = document.createElement("button");
+      del.className = "project-del"; del.textContent = "✕";
+      del.title = `Delete ${p.name} and all its files`;
+      del.onclick = () => deleteProject(p.name);
+      row.appendChild(del);
       host.appendChild(row);
     }
   } catch (e) { host.textContent = `error: ${e.message}`; }
@@ -34,5 +39,11 @@ document.getElementById("create-form").addEventListener("submit", async (ev) => 
     render();
   } catch (e) { flash(document.getElementById("create-msg"), e.message, false); }
 });
+
+async function deleteProject(name) {
+  if (!confirm(`Delete project "${name}" and ALL its data + trained LoRA?\nThis cannot be undone.`)) return;
+  try { await sendJSON(`/api/projects/${name}`, "DELETE"); render(); }
+  catch (e) { alert(`delete failed: ${e.message}`); }
+}
 
 render();

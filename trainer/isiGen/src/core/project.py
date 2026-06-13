@@ -107,3 +107,24 @@ def list_projects(data_dir: Path) -> list[str]:
     if not data_dir.exists():
         return []
     return sorted(p.parent.name for p in data_dir.glob(f"*/{PROJECT_YAML}"))
+
+
+def delete_project(data_dir: Path, name: str, runs_dir: Path | None = None) -> None:
+    """Remove a project's data dir and (if given) its trained LoRA + job logs.
+
+    Guards against path traversal/symlinks: the target must sit directly under
+    ``data_dir`` and contain a ``project.yaml``. Raises FileNotFoundError if no
+    such project exists."""
+    import shutil
+
+    data_dir = Path(data_dir).resolve()
+    project_dir = (data_dir / name).resolve()
+    if project_dir.parent != data_dir or not (project_dir / PROJECT_YAML).is_file():
+        raise FileNotFoundError(f"project {name!r} not found under {data_dir}")
+    shutil.rmtree(project_dir)
+    if runs_dir is not None:
+        runs_dir = Path(runs_dir)
+        for d in (runs_dir / "lora").glob(f"{name}_*"):       # LoRA run dirs
+            shutil.rmtree(d, ignore_errors=True)
+        for f in (runs_dir / "jobs").glob(f"*_{name}_*.log"):  # job log files
+            f.unlink(missing_ok=True)
