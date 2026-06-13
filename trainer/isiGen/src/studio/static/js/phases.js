@@ -18,23 +18,23 @@ const PHASES = [
     state: (s) => { const a = active(s); if (!a) return "todo";
       if (s.depth >= a && s.canny >= a) return "done";
       return (s.depth || s.canny) ? "partial" : "todo"; } },
-  { key: "masks",    n: 2, title: "Ground-truth masks",  page: "maps", run: "masks",
+  { key: "masks",    n: 3, title: "Ground-truth masks",  page: "maps", run: "masks",
     counts: (s) => `${s.masked} masked · ${s.prompted} prompted · ${s.needs_review} review`,
     state: (s) => { const a = active(s); if (!a) return "todo";
       if (s.masked >= a && !s.needs_review) return "done";
       return s.masked ? "partial" : "todo"; } },
-  { key: "captions", n: 3, title: "Anti-bleed captions", page: "captions", run: "captions",
+  { key: "captions", n: 4, title: "Anti-bleed captions", page: "captions", run: "captions",
     counts: (s) => `${s.captioned} written · ${s.caption_edited} edited`,
     state: (s) => { const a = active(s); if (!a) return "todo";
       if (s.captioned >= a) return "done";
       return s.captioned ? "partial" : "todo"; } },
-  { key: "lora",     n: 4, title: "LoRA training (SDXL LoRA)", run: "lora",
+  { key: "lora",     n: 5, title: "LoRA training", run: "lora",
     counts: () => "hours-long GPU job",
     state: (s) => s.lora_trained ? "done" : "todo" },
   { key: "scaffolds",n: 6, title: "Synthetic scaffolds", run: "scaffolds",
     counts: (s) => { const c = s.scaffolds || {}; return `${c.total ?? 0} pairs · ${c.pending ?? 0} pending`; },
     state: (s) => (s.scaffolds?.total ?? 0) > 0 ? "done" : "todo" },
-  { key: "generate", n: 7, title: "Mint synthetics (SDXL)", run: "generate",
+  { key: "generate", n: 7, title: "Mint synthetics", run: "generate",
     counts: (s) => { const c = s.scaffolds || {}; return `${s.synthetic ?? 0} minted · ${c.pending ?? 0} queued`; },
     state: (s) => { const minted = s.synthetic ?? 0, pending = s.scaffolds?.pending ?? 0;
       if (minted > 0 && !pending) return "done";
@@ -50,15 +50,23 @@ async function render() {
   board.innerHTML = "";
   for (const ph of PHASES) {
     const st = ph.stub ? "todo" : (ph.state?.(s) ?? "todo");
+    const glyph = st === "done" ? "✓" : st === "partial" ? "◐" : "";
     const card = document.createElement("div");
     card.className = "phase-card" + (ph.stub ? " stub" : "") +
       (st === "done" ? " done" : st === "partial" ? " partial" : "");
-    card.innerHTML = `<h3>P${ph.n} · ${ph.title}</h3>
-      <div class="counts">${ph.stub ? "lands next session" : (ph.counts?.(s) ?? "")}</div>`;
+    card.innerHTML =
+      `<div class="phase-head">
+         <span class="phase-num">${ph.n}</span>
+         <span class="phase-title">${ph.title}</span>
+         <span class="phase-status">${glyph}</span>
+       </div>
+       <div class="counts">${ph.stub ? "lands next session" : (ph.counts?.(s) ?? "")}</div>
+       <div class="phase-actions"></div>`;
+    const actions = card.querySelector(".phase-actions");
     if (ph.page) {
       const a = document.createElement("a");
       a.href = `/p/${project}/${ph.page}`; a.textContent = "open ›";
-      card.appendChild(a);
+      actions.appendChild(a);
     }
     if (ph.run) {
       const b = document.createElement("button");
@@ -69,7 +77,7 @@ async function render() {
           watchJob(job.id, logEl, render);
         } catch (e) { logEl.textContent = `error: ${e.message}`; }
       };
-      card.appendChild(b);
+      actions.appendChild(b);
     }
     board.appendChild(card);
   }
