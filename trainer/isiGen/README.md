@@ -1,5 +1,9 @@
 # isiGen — synthetic dataset generator (SDXL + depth ControlNet)
 
+> 📖 **New here? Read [`USER_MANUAL.md`](USER_MANUAL.md)** — a step-by-step,
+> phase-by-phase walkthrough of the Studio app. This README is the technical/CLI
+> reference.
+
 A reusable, **project-based** pipeline that turns 50–100 real photos per class
 into an unlimited, perfectly-labeled synthetic dataset:
 
