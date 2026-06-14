@@ -534,10 +534,9 @@ label.chip input, .toolbar label input {
 }
 
 .phase-card {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-left: 3px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
   padding: 14px;
   display: flex;
   flex-direction: column;
@@ -555,7 +554,7 @@ label.chip input, .toolbar label input {
   width: 20px;
   height: 20px;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.10);
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 700;
@@ -593,26 +592,60 @@ label.chip input, .toolbar label input {
 
 .phase-card.stub { opacity: 0.4; }
 
-.phase-card.done { border-left-color: var(--ok); }
-.phase-card.done .phase-num { background: rgba(46, 213, 115, 0.18); color: var(--ok); }
-.phase-card.done .phase-status { color: var(--ok); }
-
-.phase-card.partial { border-left-color: var(--warning); }
-.phase-card.partial .phase-num { background: rgba(245, 171, 53, 0.18); color: var(--warning); }
-.phase-card.partial .phase-status { color: var(--warning); }
-
 .phase-card a {
   color: var(--accent);
   font-size: 12px;
   text-decoration: none;
   font-weight: 600;
 }
-.phase-card a:hover { color: #fff; }
+.phase-card a:hover { text-decoration: underline; }
 
 .phase-card .phase-actions button {
   padding: 5px 14px;
   font-size: 12px;
   border-radius: 8px;
+}
+
+/* Completed — solid light-green card with dark text for readability */
+.phase-card.done {
+  background: #e7f6ec;
+  border-color: #bfe3cb;
+}
+.phase-card.done .phase-title { color: #14321f; }
+.phase-card.done .counts { color: #3f6b50; }
+.phase-card.done .phase-num { background: #cdebd6; color: #1c7a3f; }
+.phase-card.done .phase-status { color: #1c7a3f; }
+.phase-card.done a { color: #1c7a3f; }
+.phase-card.done .phase-actions button {
+  background: #ffffff;
+  border-color: #bfe3cb;
+  color: #14321f;
+}
+.phase-card.done .phase-actions button:hover {
+  background: #d6f0de;
+  border-color: #1c7a3f;
+  color: #14321f;
+}
+
+/* Partly done — solid light-amber card with dark text */
+.phase-card.partial {
+  background: #fdf3e0;
+  border-color: #f0d9a8;
+}
+.phase-card.partial .phase-title { color: #3a2c0c; }
+.phase-card.partial .counts { color: #7a5d1f; }
+.phase-card.partial .phase-num { background: #f6e6c2; color: #95680f; }
+.phase-card.partial .phase-status { color: #95680f; }
+.phase-card.partial a { color: #95680f; }
+.phase-card.partial .phase-actions button {
+  background: #ffffff;
+  border-color: #f0d9a8;
+  color: #3a2c0c;
+}
+.phase-card.partial .phase-actions button:hover {
+  background: #faecd0;
+  border-color: #95680f;
+  color: #3a2c0c;
 }
 
 .job-log {
