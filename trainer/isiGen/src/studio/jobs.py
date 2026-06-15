@@ -19,6 +19,8 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from ..core import progress
+
 
 class Job:
     def __init__(self, project: str, phase: str, fn: Callable[[], dict],
@@ -33,13 +35,14 @@ class Job:
         self.created = datetime.now().isoformat(timespec="seconds")
         self.started: str | None = None
         self.finished: str | None = None
+        self.progress: dict | None = None        # {"done", "total", "label"}
         self.log: deque[str] = deque(maxlen=log_buffer)
 
     def to_dict(self) -> dict:
         return {"id": self.id, "project": self.project, "phase": self.phase,
                 "state": self.state, "result": self.result, "error": self.error,
                 "created": self.created, "started": self.started,
-                "finished": self.finished}
+                "finished": self.finished, "progress": self.progress}
 
 
 class _JobLogHandler(logging.Handler):
@@ -125,6 +128,11 @@ class JobRunner:
             handler = _JobLogHandler(job, self._runs_dir / f"{ts}_{job.project}_{job.phase}.log")
             root = logging.getLogger()
             root.addHandler(handler)
+
+            def _set_progress(done: int, total: int, label: str, _job: Job = job) -> None:
+                _job.progress = {"done": done, "total": total, "label": label}
+
+            progress.set_sink(_set_progress)
             try:
                 job.result = job.fn()
                 job.state = "done"
@@ -133,6 +141,8 @@ class JobRunner:
                 job.state = "failed"
                 logging.getLogger(__name__).exception("job %s failed", job.id)
             finally:
+                progress.set_sink(None)
+                job.progress = None
                 job.finished = datetime.now().isoformat(timespec="seconds")
                 root.removeHandler(handler)
                 handler.close()

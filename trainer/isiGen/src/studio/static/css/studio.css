@@ -603,6 +603,11 @@ label.chip input, .toolbar label input {
 
 .phase-card.stub { opacity: 0.4; }
 
+.job-progress { align-items: center; gap: 12px; margin-bottom: 12px; }
+.job-progress progress { flex: 1; height: 10px; border-radius: 6px; }
+.job-progress progress::-webkit-progress-bar { background: rgba(255,255,255,0.08); border-radius: 6px; }
+.job-progress progress::-webkit-progress-value { background: var(--accent); border-radius: 6px; }
+
 /* Locked — earlier phase in the chain isn't done yet */
 .phase-card.locked { opacity: 0.5; }
 .phase-card.locked .phase-status { filter: grayscale(1); }

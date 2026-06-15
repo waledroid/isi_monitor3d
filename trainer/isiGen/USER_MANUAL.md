@@ -83,6 +83,11 @@ which).
 available, even when the phase is locked); `Run` / `Re-run` starts the job.
 **⟳ Refresh** (top right) updates the counts instantly.
 
+**Progress:** while a phase runs, the **top bar** shows a live `… 60% (6/10)`
+for the active job (on every page), and the pipeline page shows a **progress
+bar** above the Job log. Maps/masks/captions/scaffolds/mint count per item; LoRA
+counts per training step.
+
 ---
 
 ## Step 0 — Create a project

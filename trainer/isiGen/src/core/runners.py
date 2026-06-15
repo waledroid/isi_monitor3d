@@ -18,6 +18,7 @@ from ..stages.captioning.base import CAPTIONERS
 from ..stages.control_maps.base import CONTROL_MAP_EXTRACTORS
 from ..stages.curate.importer import ingest
 from ..stages.masking.base import MASKERS
+from . import progress
 from .manifest import Manifest
 from .project import ProjectConfig, load_project
 
@@ -55,7 +56,8 @@ def run_control_maps(project_dir: Path, *, stages: list[str] | None = None,
         extractor.load()
         done = 0
         try:
-            for rec in todo:
+            for i, rec in enumerate(todo, 1):
+                progress.report(i, len(todo), f"maps:{name}")
                 img = cv2.imread(str(project_dir / rec.image))
                 if img is None:
                     logger.warning("maps[%s]: unreadable %s — skipped", name, rec.image)
@@ -137,7 +139,8 @@ def run_masks(project_dir: Path, *, force: bool = False) -> dict:
     masker.load()
     done = 0
     try:
-        for rec in todo:
+        for i, rec in enumerate(todo, 1):
+            progress.report(i, len(todo), "masks")
             img = cv2.imread(str(project_dir / rec.image))
             if img is None:
                 logger.warning("masks: unreadable %s — skipped", rec.image)
@@ -231,6 +234,7 @@ def run_scaffolds(project_dir: Path, *, count: int | None = None) -> dict:
         sub["project_dir"] = str(project_dir)        # depth_remix reads the manifest
         source = SCAFFOLD_SOURCES.create(name, **sub)
         for control, mask, meta in source.generate(project, per):
+            progress.report(made + 1, total, f"scaffolds:{name}")
             sid = f"sc{seq:06d}"
             seq += 1
             ctrl_rel = f"scaffolds/{sid}_control.png"
@@ -289,7 +293,8 @@ def run_generation(project_dir: Path, *, limit: int | None = None) -> dict:
     generator.load()                                   # Phase 5
     done = 0
     try:
-        for e in todo:
+        for i, e in enumerate(todo, 1):
+            progress.report(i, len(todo), "mint")
             control = cv2.imread(str(project_dir / e["control"]), cv2.IMREAD_GRAYSCALE)
             if control is None:
                 logger.warning("generation: unreadable scaffold %s — skipped", e["id"])
@@ -411,8 +416,10 @@ def run_captions(project_dir: Path, *, force: bool = False) -> dict:
     name = cfg.get("captioner", "template")
     captioner = CAPTIONERS.create(name, **(cfg.get(name) or {}))
     manifest = Manifest.load(project_dir)
+    active = manifest.active()
     done = skipped_edited = 0
-    for rec in manifest.active():
+    for i, rec in enumerate(active, 1):
+        progress.report(i, len(active), "captions")
         if rec.caption_edited:
             skipped_edited += 1
             continue

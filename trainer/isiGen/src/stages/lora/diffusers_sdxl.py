@@ -203,6 +203,8 @@ class DiffusersSdxlLoraTrainer(LoraTrainer):
             torch.nn.utils.clip_grad_norm_(lora_params, 1.0)
             optimizer.step()
             losses.append(accum_loss)
+            from ...core import progress
+            progress.report(step, self.max_steps, "lora")
             if step % 25 == 0 or step == 1:
                 logger.info("lora: step %d/%d  loss %.4f", step, self.max_steps,
                             sum(losses[-25:]) / min(25, len(losses)))
