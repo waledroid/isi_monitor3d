@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block nav %}
+<nav class="crumbs"><a href="/">projects</a> / <a href="/p/{{ project }}">{{ project }}</a> / <b>scaffolds</b></nav>
+{% endblock %}
+{% block content %}
+<section class="card" id="gal-root" data-project="{{ project }}">
+  <h1>Phase 6 — Synthetic scaffolds</h1>
+  <p class="msg">Each pair is a procedural <b>control map</b> (depth the generator follows) + its <b>ground-truth mask</b> (the label the minted image inherits).</p>
+  <div id="scaffold-gallery" class="gallery">loading…</div>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="/static/js/scaffolds.js"></script>{% endblock %}

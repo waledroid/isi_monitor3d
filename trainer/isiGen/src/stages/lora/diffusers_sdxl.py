@@ -211,8 +211,28 @@ class DiffusersSdxlLoraTrainer(LoraTrainer):
 
         weights = self._save(unet, run_dir)
         (run_dir / "report.md").write_text(self._report(project, len(items), losses))
+        self._plot_losses(losses, run_dir / "loss_curve.png")
         logger.info("lora: done — weights at %s", weights)
         return weights
+
+    @staticmethod
+    def _plot_losses(losses: list[float], out_path: Path) -> None:
+        """Save a training loss-curve PNG (Studio shows it). Never fails training."""
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(6, 3.2))
+            ax.plot(range(1, len(losses) + 1), losses, lw=1, color="#1c7a3f")
+            ax.set_xlabel("step")
+            ax.set_ylabel("loss")
+            ax.set_title("LoRA training loss")
+            ax.grid(alpha=0.3)
+            fig.tight_layout()
+            fig.savefig(out_path, dpi=110)
+            plt.close(fig)
+        except Exception as exc:                       # cosmetic only — never fail training
+            logger.warning("lora: loss-curve plot skipped (%s)", exc)
 
     @staticmethod
     def _save(unet, out_dir: Path) -> Path:

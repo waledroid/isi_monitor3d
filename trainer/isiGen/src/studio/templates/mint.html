@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block nav %}
+<nav class="crumbs"><a href="/">projects</a> / <a href="/p/{{ project }}">{{ project }}</a> / <b>mint</b></nav>
+{% endblock %}
+{% block content %}
+<section class="card" id="gal-root" data-project="{{ project }}">
+  <h1>Phase 7 — Minted synthetics</h1>
+  <p class="msg">Generated images (SDXL + depth ControlNet + your LoRA). Each carries the scaffold's mask as its label.</p>
+  <div class="filters">
+    <label class="chip"><input type="checkbox" id="show-mask"> show masks</label>
+    <span id="mint-count" class="msg"></span>
+  </div>
+  <div id="mint-gallery" class="gallery">loading…</div>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="/static/js/mint.js"></script>{% endblock %}

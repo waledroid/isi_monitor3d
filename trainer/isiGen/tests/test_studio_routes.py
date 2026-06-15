@@ -25,7 +25,44 @@ def test_pages_and_project_crud(tmp_path):
         assert c.get("/p/demo/curate").status_code == 200
         assert c.get("/p/demo/maps").status_code == 200      # phase 2 (control maps)
         assert c.get("/p/demo/masks").status_code == 200     # phase 3 (SAM2 masks)
+        assert c.get("/p/demo/scaffolds").status_code == 200  # phase 6 gallery
+        assert c.get("/p/demo/mint").status_code == 200       # phase 7 gallery
+        assert c.get("/p/demo/lora").status_code == 200       # phase 5 viewer
         assert c.get("/p/nope").status_code == 404
+
+
+def test_scaffold_and_lora_galleries(tiny_project, tmp_path):
+    import json
+    pdir, _ = tiny_project
+    # a fake scaffold pair + index
+    sdir = pdir / "scaffolds"
+    sdir.mkdir(exist_ok=True)
+    import cv2
+    import numpy as np
+    cv2.imwrite(str(sdir / "sc000000_control.png"), np.zeros((20, 20), np.uint8))
+    cv2.imwrite(str(sdir / "sc000000_mask.png"), np.zeros((20, 20, 3), np.uint8))
+    (sdir / "index.jsonl").write_text(json.dumps(
+        {"id": "sc000000", "control": "scaffolds/sc000000_control.png",
+         "mask": "scaffolds/sc000000_mask.png", "classes": ["palette"],
+         "source": "box3d_procedural", "status": "pending"}) + "\n")
+    # a fake LoRA run with a plot
+    run = tmp_path / "runs" / "lora" / "tiny_r16_x"
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "report.md").write_text("# LoRA — tiny\n- final loss: 0.10\n")
+    (run / "loss_curve.png").write_bytes(b"\x89PNG\r\n")
+    (run / "pytorch_lora_weights.safetensors").write_bytes(b"x")
+    with _client() as c:
+        sc = c.get("/api/p/tiny/scaffolds").json()["scaffolds"]
+        assert len(sc) == 1 and sc[0]["id"] == "sc000000"
+        assert c.get("/media/tiny/scaffold/sc000000/control").status_code == 200
+        assert c.get("/media/tiny/scaffold/sc000000/mask").status_code == 200
+        assert c.get("/media/tiny/scaffold/nope/control").status_code == 404
+        assert c.get("/media/tiny/scaffold/sc000000/bogus").status_code == 404
+        runs = c.get("/api/p/tiny/lora-runs").json()["runs"]
+        assert len(runs) == 1 and runs[0]["has_plot"] and runs[0]["has_weights"]
+        assert "final loss" in runs[0]["report"]
+        assert c.get("/media/tiny/lora/tiny_r16_x/plot").status_code == 200
+        assert c.get("/media/tiny/lora/evil_x/plot").status_code == 404   # name guard
 
 
 def test_records_patch_prompts_caption(tiny_project):

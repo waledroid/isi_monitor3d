@@ -69,10 +69,12 @@ python scripts/run_studio.py            # http://localhost:8200  (ISIGEN_PORT to
 ```
 
 Pages: **Projects** → **Phase board** (run phases, live job log) → **Curate
-gallery** (retag / exclude) → **Maps viewer** (image | depth | canny | mask,
-SAM2 prompt canvas: click = +point, shift-click = −point, drag = box) →
-**Caption editor** (edits are never overwritten by re-runs). One background
-job at a time — the 12 GB GPU guarantee.
+gallery** (retag / exclude) → **Control maps** (image | depth | canny) →
+**Ground-truth masks** (SAM2 prompt canvas: click = +point, shift-click =
+−point, drag = box) → **Caption editor** (edits never overwritten) → **LoRA**
+(loss curve + report) → **Scaffolds gallery** (control + mask pairs) → **Mint
+gallery** (minted images, mask toggle). One background job at a time — the
+12 GB GPU guarantee.
 
 ## Layout
 

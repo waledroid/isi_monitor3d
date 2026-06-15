@@ -19,6 +19,7 @@ from fastapi.templating import Jinja2Templates
 from .api import (
     routes_captions,
     routes_curate,
+    routes_galleries,
     routes_jobs,
     routes_maps,
     routes_media,
@@ -74,4 +75,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes_captions.router)
     app.include_router(routes_jobs.router)
     app.include_router(routes_media.router)
+    app.include_router(routes_galleries.router)
     return app

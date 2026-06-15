@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block nav %}
+<nav class="crumbs"><a href="/">projects</a> / <a href="/p/{{ project }}">{{ project }}</a> / <b>lora</b></nav>
+{% endblock %}
+{% block content %}
+<section class="card" id="gal-root" data-project="{{ project }}">
+  <h1>Phase 5 — LoRA training</h1>
+  <p class="msg">Training runs for this project (newest first): loss curve + report. The minted images on the Mint page show what the LoRA does to the output.</p>
+  <div id="lora-runs">loading…</div>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="/static/js/lora.js"></script>{% endblock %}

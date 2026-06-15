@@ -704,6 +704,20 @@ button:disabled:hover {
   margin-top: 20px;
 }
 
+/* scaffold pairs (control + mask) */
+.scaffold-tile .pair { display: flex; gap: 4px; }
+.scaffold-tile .pair figure { margin: 0; flex: 1; }
+.scaffold-tile .pair img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.scaffold-tile .pair figcaption { font-size: 11px; color: var(--text-muted); text-align: center; padding: 2px; }
+
+/* LoRA run blocks */
+.lora-run { border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 16px; margin-top: 16px; }
+.lora-run h3 { margin: 0 0 10px; font-size: 14px; }
+.lora-plot { max-width: 520px; width: 100%; border-radius: 8px; background: #fff; }
+.lora-report { background: rgba(7,8,12,0.6); border: 1px solid rgba(255,255,255,0.08);
+               border-radius: 8px; padding: 12px; font-family: "JetBrains Mono", monospace;
+               font-size: 12px; white-space: pre-wrap; margin-top: 12px; }
+
 .tile {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.06);

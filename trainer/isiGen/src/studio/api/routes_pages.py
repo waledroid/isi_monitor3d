@@ -46,3 +46,18 @@ async def masks_page(request: Request, name: str):
 @router.get("/p/{name}/captions", response_class=HTMLResponse)
 async def captions_page(request: Request, name: str):
     return _phase_page(request, name, "captions.html")
+
+
+@router.get("/p/{name}/scaffolds", response_class=HTMLResponse)
+async def scaffolds_page(request: Request, name: str):
+    return _phase_page(request, name, "scaffolds.html")
+
+
+@router.get("/p/{name}/mint", response_class=HTMLResponse)
+async def mint_page(request: Request, name: str):
+    return _phase_page(request, name, "mint.html")
+
+
+@router.get("/p/{name}/lora", response_class=HTMLResponse)
+async def lora_page(request: Request, name: str):
+    return _phase_page(request, name, "lora.html")

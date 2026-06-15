@@ -28,13 +28,13 @@ const PHASES = [
     state: (s) => { const a = active(s); if (!a) return "todo";
       if (s.captioned >= a) return "done";
       return s.captioned ? "partial" : "todo"; } },
-  { key: "lora",     n: 5, title: "LoRA training", run: "lora",
+  { key: "lora",     n: 5, title: "LoRA training", page: "lora", run: "lora",
     counts: () => "hours-long GPU job",
     state: (s) => s.lora_trained ? "done" : "todo" },
-  { key: "scaffolds",n: 6, title: "Synthetic scaffolds", run: "scaffolds",
+  { key: "scaffolds",n: 6, title: "Synthetic scaffolds", page: "scaffolds", run: "scaffolds",
     counts: (s) => { const c = s.scaffolds || {}; return `${c.total ?? 0} pairs · ${c.pending ?? 0} pending`; },
     state: (s) => (s.scaffolds?.total ?? 0) > 0 ? "done" : "todo" },
-  { key: "generate", n: 7, title: "Mint synthetics", run: "generate",
+  { key: "generate", n: 7, title: "Mint synthetics", page: "mint", run: "generate",
     counts: (s) => { const c = s.scaffolds || {}; return `${s.synthetic ?? 0} minted · ${c.pending ?? 0} queued`; },
     state: (s) => { const minted = s.synthetic ?? 0, pending = s.scaffolds?.pending ?? 0;
       if (minted > 0 && !pending) return "done";

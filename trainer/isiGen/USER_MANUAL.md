@@ -295,6 +295,10 @@ This is the longest step.
    RTX 5070. Watch progress in the **Job log**.
 3. When it finishes, the trained weights are saved automatically and the project
    is pointed at them — no manual path-copying needed. The card turns **green**.
+4. **See it:** the card's **open ›** opens the LoRA page — a **training loss
+   curve** + the run report (base, rank, steps, final loss) for each run. (Runs
+   trained before this feature show the report only.) To judge the LoRA's actual
+   effect, look at the minted images on the Mint page.
 
 **Tips:**
 - Fewer steps train faster but learn your objects less well. The default is a good
@@ -314,7 +318,8 @@ synthetic scene (e.g. stacks of cartons on a pallet). No AI yet; this is geometr
 
 **What you do:** click **Run**. To control how many to create, set the scaffold
 **count** in the project config (default 500). Each pair is one future synthetic
-image.
+image. **See it:** the card's **open ›** opens a gallery of every scaffold's
+**control map + mask** side by side.
 
 **Done when:** at least one scaffold pair exists.
 
@@ -330,7 +335,9 @@ image**.
 
 **What you do:** click **Run**. Generated images appear under the project's
 `generated/` folder and as new synthetic records. You can mint in batches and
-re-run to continue where it left off.
+re-run to continue where it left off. **See it:** the card's **open ›** opens a
+gallery of the minted images, with a **show masks** toggle to view each one's
+label.
 
 **Done when:** images are minted and the scaffold queue is empty.
 
