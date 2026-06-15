@@ -113,6 +113,36 @@ def test_clearing_prompts_drops_the_mask(tiny_project):
         assert back["mask"] is None              # cleared, not lingering
 
 
+def test_status_phase_counts_ignore_synthetic_records(tiny_project):
+    """Phases 1-4 measure REAL curated images — minted (synthetic) records must
+    not dilute depth/canny/masked/captioned or the 'real' denominator, else those
+    phases can never go green after minting."""
+    from src.core.manifest import Manifest, ManifestRecord
+    pdir, _ = tiny_project
+    m = Manifest.load(pdir)
+    real = [r for r in m.records.values() if not r.excluded]
+    # mark all 3 real records fully processed
+    for r in real:
+        r.depth_map = f"maps/depth/{r.id}.png"
+        r.canny_map = f"maps/canny/{r.id}.png"
+        r.mask = f"maps/mask/{r.id}.png"
+        r.caption_path = f"captions/{r.id}.txt"
+        r.needs_review = False
+        m.upsert(r)
+    # add a synthetic record with NO depth/canny/caption (a minted image)
+    m.upsert(ManifestRecord(id="synthetic001", sha256="s" * 12,
+                            image="generated/synthetic001.png", class_name="palette",
+                            width=64, height=64, mask="maps/mask/synthetic001.png",
+                            synthetic=True))
+    m.save()
+    with _client() as c:
+        s = c.get("/api/p/tiny/status").json()
+    assert s["real"] == 3                 # 3 real curated, synthetic excluded
+    assert s["depth"] == 3 and s["canny"] == 3      # not diluted to 3/4
+    assert s["captioned"] == 3            # synthetic has no caption, not counted against real
+    assert s["synthetic"] == 1
+
+
 def test_status_reports_lora_trained(tiny_project, tmp_path):
     with _client() as c:
         assert c.get("/api/p/tiny/status").json()["lora_trained"] is False

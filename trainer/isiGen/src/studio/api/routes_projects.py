@@ -79,20 +79,24 @@ async def status(request: Request, name: str) -> dict:
     m = Manifest.load(d)
     recs = list(m.records.values())
     active = [r for r in recs if not r.excluded]
+    # Phases 1-4 (curate/maps/masks/captions) act on REAL curated images; minted
+    # (synthetic) records must not count toward their completion, or those phases
+    # could never go green once minting has added synthetic records.
+    real = [r for r in active if not getattr(r, "synthetic", False)]
     return {
         "lora_trained": _lora_trained(d, name, request.app.state.settings.runs_dir),
         "records": len(recs),
         "excluded": sum(r.excluded for r in recs),
-        "by_class": {c: sum(r.class_name == c for r in active)
-                     for c in {r.class_name for r in active}},
-        "depth": sum(r.depth_map is not None for r in active),
-        "canny": sum(r.canny_map is not None for r in active),
-        "masked": sum(r.mask is not None for r in active),
-        "prompted": sum(bool(r.mask_prompts) for r in active),
-        "needs_review": sum(r.needs_review for r in active),
-        "captioned": sum(r.caption_path is not None and not getattr(r, "synthetic", False)
-                         for r in active),
-        "caption_edited": sum(r.caption_edited for r in active),
+        "real": len(real),
+        "by_class": {c: sum(r.class_name == c for r in real)
+                     for c in {r.class_name for r in real}},
+        "depth": sum(r.depth_map is not None for r in real),
+        "canny": sum(r.canny_map is not None for r in real),
+        "masked": sum(r.mask is not None for r in real),
+        "prompted": sum(bool(r.mask_prompts) for r in real),
+        "needs_review": sum(r.needs_review for r in real),
+        "captioned": sum(r.caption_path is not None for r in real),
+        "caption_edited": sum(r.caption_edited for r in real),
         "scaffolds": _scaffold_counts(d),
         "synthetic": sum(bool(getattr(r, "synthetic", False)) for r in recs),
         "clip_scored": sum(getattr(r, "clip_score", None) is not None for r in recs),

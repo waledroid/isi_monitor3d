@@ -5,27 +5,28 @@ const board = document.getElementById("phase-board");
 const project = board.dataset.project;
 const logEl = document.getElementById("job-log");
 
-// state(s) → "done" (light green) | "partial" (amber) | "todo". `active` is the
-// number of non-excluded records; a phase is done when it covers all of them.
-const active = (s) => (s.records ?? 0) - (s.excluded ?? 0);
+// state(s) → "done" (light green) | "partial" (amber) | "todo".
+// Phases 1-4 act on REAL curated images, so they measure against `real` (active
+// non-synthetic records) — minted/synthetic records must not block them.
+const real = (s) => s.real ?? Math.max(0, (s.records ?? 0) - (s.excluded ?? 0));
 
 const PHASES = [
   { key: "curate",   n: 1, title: "Curate real images",  page: "curate",
-    counts: (s) => `${active(s)} active / ${s.records} total`,
-    state: (s) => active(s) > 0 ? "done" : "todo" },
+    counts: (s) => `${real(s)} images / ${s.records} total`,
+    state: (s) => real(s) > 0 ? "done" : "todo" },
   { key: "maps",     n: 2, title: "Control maps",        page: "maps", run: "maps",
     counts: (s) => `depth ${s.depth} · canny ${s.canny}`,
-    state: (s) => { const a = active(s); if (!a) return "todo";
+    state: (s) => { const a = real(s); if (!a) return "todo";
       if (s.depth >= a && s.canny >= a) return "done";
       return (s.depth || s.canny) ? "partial" : "todo"; } },
   { key: "masks",    n: 3, title: "Ground-truth masks",  page: "masks", run: "masks",
     counts: (s) => `${s.masked} masked · ${s.prompted} prompted · ${s.needs_review} review`,
-    state: (s) => { const a = active(s); if (!a) return "todo";
+    state: (s) => { const a = real(s); if (!a) return "todo";
       if (s.masked >= a && !s.needs_review) return "done";
       return s.masked ? "partial" : "todo"; } },
   { key: "captions", n: 4, title: "Anti-bleed captions", page: "captions", run: "captions",
     counts: (s) => `${s.captioned} written · ${s.caption_edited} edited`,
-    state: (s) => { const a = active(s); if (!a) return "todo";
+    state: (s) => { const a = real(s); if (!a) return "todo";
       if (s.captioned >= a) return "done";
       return s.captioned ? "partial" : "todo"; } },
   { key: "lora",     n: 5, title: "LoRA training", page: "lora", run: "lora",
