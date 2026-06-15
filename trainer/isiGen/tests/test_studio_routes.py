@@ -31,6 +31,25 @@ def test_pages_and_project_crud(tmp_path):
         assert c.get("/p/nope").status_code == 404
 
 
+def test_run_lora_max_steps_override_persists(tiny_project):
+    """The LoRA page's steps box overrides + saves max_steps before training."""
+    from src.core.project import load_project
+    from src.core.runners import run_lora
+    pdir, _ = tiny_project
+    # call the runner override directly (no GPU): it should persist max_steps then
+    # fail at the heavy train step — we only assert the config was updated.
+    try:
+        run_lora(pdir, max_steps=250)
+    except Exception:
+        pass
+    assert load_project(pdir).phase("lora")["max_steps"] == 250
+
+
+def test_lora_runs_reports_max_steps(tiny_project):
+    with _client() as c:
+        assert c.get("/api/p/tiny/lora-runs").json()["max_steps"] == 2000
+
+
 def test_scaffold_and_lora_galleries(tiny_project, tmp_path):
     import json
     pdir, _ = tiny_project

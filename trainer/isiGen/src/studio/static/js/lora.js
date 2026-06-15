@@ -1,14 +1,19 @@
-import { getJSON } from "/static/js/api.js";
+import { flash, getJSON, sendJSON } from "/static/js/api.js";
+import { watchJob } from "/static/js/jobs.js";
 
 const root = document.getElementById("gal-root");
 const project = root.dataset.project;
 const host = document.getElementById("lora-runs");
+const stepsInput = document.getElementById("lora-steps");
+const msg = document.getElementById("lora-msg");
 
 async function load() {
-  let runs = [];
-  try { runs = (await getJSON(`/api/p/${project}/lora-runs`)).runs; }
+  let data = { runs: [], max_steps: 2000 };
+  try { data = await getJSON(`/api/p/${project}/lora-runs`); }
   catch (e) { host.textContent = `error: ${e.message}`; return; }
-  host.innerHTML = runs.length ? "" : "<p class='msg'>no training runs yet — run phase 5</p>";
+  if (document.activeElement !== stepsInput) stepsInput.value = data.max_steps ?? 2000;
+  const runs = data.runs;
+  host.innerHTML = runs.length ? "" : "<p class='msg'>no training runs yet — set steps and Train LoRA</p>";
   for (const r of runs) {
     const block = document.createElement("div");
     block.className = "lora-run";
@@ -22,5 +27,16 @@ async function load() {
     host.appendChild(block);
   }
 }
+
+document.getElementById("lora-train").onclick = async () => {
+  const steps = parseInt(stepsInput.value, 10);
+  if (!steps || steps < 1) { flash(msg, "enter a step count", false); return; }
+  if (!confirm(`Train LoRA for ${steps} steps?\nThis is a long GPU job (≈ ${Math.round(steps * 7 / 60)} min at ~7s/step).`)) return;
+  try {
+    const { job } = await sendJSON(`/api/p/${project}/run/lora`, "POST", { max_steps: steps });
+    flash(msg, `training started (${steps} steps)…`, true);
+    watchJob(job.id, null, () => { flash(msg, "training done", true); load(); });
+  } catch (e) { flash(msg, e.message, false); }
+};
 
 load();

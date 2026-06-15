@@ -6,6 +6,13 @@
 <section class="card" id="gal-root" data-project="{{ project }}">
   <h1>Phase 5 — LoRA training</h1>
   <p class="msg">Training runs for this project (newest first): loss curve + report. The minted images on the Mint page show what the LoRA does to the output.</p>
+  <div class="toolbar">
+    <label>Steps <input id="lora-steps" type="number" min="1" step="50" value="2000"></label>
+    <button id="lora-train">Train LoRA</button>
+    <span id="lora-msg" class="msg"></span>
+  </div>
+  <p class="msg">Default <b>2000</b> (good for ~50–100 images). Fewer (300–1000) for quick tests or small sets; watch the loss curve and stop where it flattens. Setting this also saves it as the project default.</p>
+  <div id="job-progress" class="job-progress" style="display:none"></div>
   <div id="lora-runs">loading…</div>
 </section>
 {% endblock %}

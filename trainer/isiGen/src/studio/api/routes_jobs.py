@@ -6,6 +6,7 @@ from __future__ import annotations
 from functools import partial
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from ...core.runners import (
     reset_phase,
@@ -34,16 +35,25 @@ _PHASES = {
 }
 
 
+class RunBody(BaseModel):
+    max_steps: int | None = None        # LoRA only — overrides + persists step count
+
+
 @router.post("/api/p/{name}/run/{phase}")
-async def run_phase(request: Request, name: str, phase: str) -> dict:
+async def run_phase(request: Request, name: str, phase: str,
+                    body: RunBody | None = None) -> dict:
     d = project_dir(request, name)
     factory = _PHASES.get(phase)
     if factory is None:
         raise HTTPException(status_code=404,
                             detail=f"unknown/not-yet-runnable phase {phase!r} "
                                    f"(runnable: {sorted(_PHASES)})")
+    if phase == "lora" and body and body.max_steps:
+        fn = partial(run_lora, d, max_steps=body.max_steps)
+    else:
+        fn = factory(d)
     try:
-        job = request.app.state.jobs.submit(name, phase, factory(d))
+        job = request.app.state.jobs.submit(name, phase, fn)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True, "job": job.to_dict()}

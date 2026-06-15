@@ -45,7 +45,9 @@ def _lora_dir(request: Request, name: str) -> Path:
 
 @router.get("/api/p/{name}/lora-runs")
 async def lora_runs(request: Request, name: str) -> dict:
-    project_dir(request, name)                              # 404s on unknown project
+    d = project_dir(request, name)                          # 404s on unknown project
+    from ...core.project import load_project
+    max_steps = int((load_project(d).phase("lora") or {}).get("max_steps", 2000))
     root = _lora_dir(request, name)
     runs = []
     if root.is_dir():
@@ -59,7 +61,7 @@ async def lora_runs(request: Request, name: str) -> dict:
                 "has_plot": (dpath / "loss_curve.png").is_file(),
                 "has_weights": (dpath / "pytorch_lora_weights.safetensors").is_file(),
             })
-    return {"runs": runs}
+    return {"runs": runs, "max_steps": max_steps}
 
 
 @router.get("/media/{name}/lora/{run}/plot")

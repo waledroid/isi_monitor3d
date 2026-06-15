@@ -388,13 +388,20 @@ def run_export(project_dir: Path) -> dict:
     return out
 
 
-def run_lora(project_dir: Path) -> dict:
-    """Phase 4 — train the project LoRA; returns the weights path."""
+def run_lora(project_dir: Path, *, max_steps: int | None = None) -> dict:
+    """Phase 4 — train the project LoRA; returns the weights path.
+
+    ``max_steps`` overrides the configured step count for this run AND persists
+    it to project.yaml (so it becomes the new default)."""
     from datetime import datetime
 
     from ..stages.lora.base import LORA_TRAINERS
+    from .project import save_project
     project = load_project(project_dir)
     project_dir = Path(project_dir)
+    if max_steps is not None:
+        project.phase("lora")["max_steps"] = int(max_steps)
+        save_project(project_dir, project)
     cfg = dict(project.phase("lora"))
     name = cfg.pop("trainer", "diffusers_sdxl")
     cfg.setdefault("base_model", project.phase("generation").get("base_model"))
