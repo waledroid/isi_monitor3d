@@ -1,12 +1,13 @@
 # ISI Monitor 3D — Project Task Reference
 
 > Heavy reference / running to-do. Phase-by-phase status of the warehouse-vision system.
-> **Last updated:** 2026-06-12 · **Tests:** 370 backbone + 235 monitor_web (all green).
+> **Last updated:** 2026-06-15 · **Tests:** 370 backbone + 235 monitor_web + 56 isiGen (all green).
 
 ## What this is
 A single **Backbone** process turns RTSP video into **metric, identity-stable metadata** published over
-**UDP/JSON**, an operator **dashboard** (`monitor_web`) consumes that contract, and an external **trainer**
-(`isidet`) produces the detection `.onnx`. Two operating modes:
+**UDP/JSON**, an operator **dashboard** (`monitor_web`) consumes that contract, and external **trainers**
+produce the detection `.onnx`: `isidet` (real-data training) and `isiGen` (synthetic-dataset generation →
+fed into `isidet`). Two operating modes:
 
 | Mode | Cameras | Calibration | Output |
 |---|---|---|---|
@@ -50,6 +51,30 @@ KPI gates (reprojection ≤2 px, triangulation ≤5–8 px, latency p95 <200 ms)
 | **yolo26l-seg @ 640, 200 ep, patience 20** (3-class palette/carton/polybag) | 🔄 | epoch ~104; `best.pt` saved; far/small aug applied |
 | Export winner `.onnx` + wire into `backbone.yaml detection:` | ⬜ | currently **RF-DETR-672 stopgap** is configured |
 | Production training that meets mAP ≥ 0.90 / occupancy P-R ≥ 0.95/0.93 | ⬜ 🔬 | held-out + on-site eval |
+
+---
+
+## Part B2 — isiGen: synthetic dataset generator (trainer-world) — ✅ pipeline complete, GPU-verified
+
+`trainer/isiGen/` — turns 50–100 real photos per class into an unlimited, perfectly-labeled **synthetic**
+dataset (SDXL + depth ControlNet), exported as YOLO-seg for `isidet`. Mirrors isidet conventions: 8 ABC
+seams + registries, per-project YAML + `manifest.jsonl`, headless CLIs, and **isiGen Studio** (FastAPI on
+:8200, launch with the `gen` alias). Runs in the existing **`isi-train`** conda env. 8 phases, gated as a
+sequential chain in the UI: **1** curate → **2** control maps (depth+canny) → **3** SAM2 masks → **4**
+captions → **5** SDXL LoRA → **6** scaffolds → **7** mint → **8** filter+export.
+
+| Area | Status | Notes |
+|---|---|---|
+| Foundation: 8 seams/registries, project model, manifest, Studio (pages per phase) | ✅ | `src/{core,stages,studio}/` |
+| Phases 1–3 live (curate dedupe/EXIF-strip, DepthAnythingV2 + Canny, SAM2 masks) | ✅ | depth/canny/sam2 cached locally |
+| Phases 4–8 (captions, LoRA, scaffolds, mint, CLIP-filter + YOLO-seg/LabelMe export) | ✅ | code-complete |
+| **Generation stack: SD3.5-Large → SDXL + `controlnet-depth-sdxl-1.0`** | ✅ | SD3.5 Medium has no depth ControlNet; SDXL fp16 fits 12 GB, ungated; fp16-fix VAE |
+| **GPU-verified**: smoke-mint (~29 s/img) + 100-step LoRA (7 s/step, ~7.6 GB) → mint with LoRA | ✅ | all 8 phases exercised on the 5070 |
+| **Studio UX**: phase done-state (green/amber), Refresh, Re-run, deletable projects, flat board, chain gating | ✅ | `phases.js`, `projects.js`, `routes_projects.py` |
+| **SAM2 fixes**: auto-fallback picks single main object (not whole scene); Clear wipes prompts+mask | ✅ | `_pick_main_mask`, `routes_maps` PUT |
+| **Mask import at curate** — LabelMe / YOLO / COCO auto-detected → skip SAM2 (coexists per-record) | ✅ | `stages/curate/mask_import.py`; `mask_source="imported"` |
+| `USER_MANUAL.md` (phase-by-phase) + README | ✅ | arbitrary classes, folder structure, import formats |
+| **Production run**: curate real set → full LoRA (2000 steps ≈ 4 h) → mint N → export → train in isidet | ⬜ | the actual dataset build is still to do |
 
 ---
 
@@ -335,6 +360,29 @@ Suites green: **backbone 370**, **monitor_web 235** (was 216 at session start). 
 
 ---
 
+## 📓 Session log — 2026-06-13 → 15 (isiGen Studio UX + masking)
+
+**isiGen Studio rework** ✅ — phase board: per-phase **done-state** (green ✓ / amber ◐ from `/status`, new
+`lora_trained` field), **⟳ Refresh** + **Re-run** relabel, **deletable projects** (✕ + confirm; removes data
+**and** `runs/lora/<proj>_*` + job logs), flatten to a compact non-glass grid (later restyled: soft outline,
+solid light-green completed cards), and **sequential-chain gating** (a phase's Run is locked 🔒 until the prior
+phase is done; UI-only, run API stays open). `docs/superpowers/specs/2026-06-13-isigen-studio-*.md`.
+
+**SAM2 masking fixes** ✅ (systematic-debug) — root cause of "mask covers the whole scene": the promptless
+**auto-fallback unioned every** SAM2 automatic mask. Now `_pick_main_mask` keeps the single main subject
+(largest central region; drops full-frame background + specks). "Clear" was canvas-only → now PUTs empty
+prompts (drops `rec.mask`) + blanks the preview. Documented the point/box prompt workflow.
+
+**Import existing masks at curate (skip SAM2)** ✅ — `stages/curate/mask_import.py` auto-detects per-image
+**LabelMe** (`<stem>.json`) and **YOLO** (`<stem>.txt`, normalized; idx→name via `data.yaml`/`classes.txt`
+or project order), and a dataset-level **COCO** `*.json` (matched by `file_name`; polygon seg or bbox/RLE→bbox).
+All rasterize to the same color-coded `maps/mask/<id>.png` (`mask_source="imported"`), coexist with SAM2
+per-record (precedence COCO → LabelMe → YOLO), and flow straight to export. E2E verified for all three formats
+(curate-import → `run_export` → correct YOLO-seg labels). Suite **56 green**, ruff clean. Pushed to both remotes
+(`waledroid` + `IsitecVision`).
+
+---
+
 ## ▶ What's actually left, prioritized
 
 1. **✅ yolo26l-seg trained + exported + wired** (2026-06-10): finalize pass → dynamic ONNX + OpenVINO; `backbone.yaml` detection now points at `yolo26l-seg .../best.onnx`. Remaining is the on-rig KPI check (item 2). *(Part B/D)*
@@ -343,8 +391,11 @@ Suites green: **backbone 370**, **monitor_web 235** (was 216 at session start). 
 4. **✅ Version control & repo** (2026-06-12): repo live at github.com/waledroid/isi_monitor3d (`main`); weights gitignored instead of LFS. *(Part G.1)*
 5. **⬜ Single inference subprocess** (agreed design): all dashboard GPU work in one supervised worker process — STOP/idle kill ⇒ total VRAM+RAM release with the UI open; subsumes detector idle-release + CUDA-700 isolation escalation. *(Part C/F)*
 6. **⬜ Deployment & ops:** Docker images (Backbone + dashboard) + `docker-compose` + `ops/` launch scripts + **`ops/system_health.sh`** go/no-go probe; container `HEALTHCHECK` / graceful restart; trainer prune (post-training). *(Part D / F / G.2)*
-7. **⏸ Later:** S5.5 pose-3D, N-cam aniposelib, full SAHI tiling, Jetson image. *(Part H)*
+7. **⬜ isiGen production dataset:** curate a real set (or import existing LabelMe/YOLO/COCO masks) → full
+   SDXL LoRA (~4 h) → mint N → export → train in isidet. Pipeline is GPU-verified; the actual build is to do. *(Part B2)*
+8. **⏸ Later:** S5.5 pose-3D, N-cam aniposelib, full SAHI tiling, Jetson image. *(Part H)*
 
-**Bottom line:** the software for **Mode 1 is complete** (pending model swap + on-rig KPI sign-off), and **Mode 2 is
-code-ready** (pending the physical second camera + joint calibration). The remaining work is mostly **validation on
-real hardware**, not new code.
+**Bottom line:** the software for **Mode 1 is complete** (pending model swap + on-rig KPI sign-off), **Mode 2 is
+code-ready** (pending the physical second camera + joint calibration), and **isiGen is pipeline-complete &
+GPU-verified** (pending a real production dataset build). The remaining work is mostly **validation on real
+hardware** + the training-data build, not new code.
