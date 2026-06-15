@@ -38,6 +38,11 @@ async def maps_page(request: Request, name: str):
     return _phase_page(request, name, "maps.html")
 
 
+@router.get("/p/{name}/masks", response_class=HTMLResponse)
+async def masks_page(request: Request, name: str):
+    return _phase_page(request, name, "masks.html")
+
+
 @router.get("/p/{name}/captions", response_class=HTMLResponse)
 async def captions_page(request: Request, name: str):
     return _phase_page(request, name, "captions.html")

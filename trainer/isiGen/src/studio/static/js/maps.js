@@ -1,7 +1,12 @@
 import { flash, getJSON, sendJSON } from "/static/js/api.js";
 import { watchJob } from "/static/js/jobs.js";
 
-const root = document.getElementById("maps-root");
+// Shared by BOTH the Control-maps (phase 2) and Ground-truth-masks (phase 3)
+// pages — each page only contains the elements it needs, so every wiring below
+// is feature-detected (guarded) and no-ops when its element is absent.
+const el = (id) => document.getElementById(id);
+
+const root = el("maps-root");
 const project = root.dataset.project;
 const classes = JSON.parse(root.dataset.classes);
 let records = [];
@@ -9,10 +14,12 @@ let current = null;          // active record
 let prompts = [];            // working prompt list for `current`
 let dragStart = null;
 
-const img = document.getElementById("v-image");
-const canvas = document.getElementById("prompt-canvas");
-const clsSel = document.getElementById("prompt-class");
-clsSel.innerHTML = classes.map((c) => `<option value="${c.name}">${c.name}</option>`).join("");
+const img = el("v-image");
+const canvas = el("prompt-canvas");
+const clsSel = el("prompt-class");
+if (clsSel) {
+  clsSel.innerHTML = classes.map((c) => `<option value="${c.name}">${c.name}</option>`).join("");
+}
 
 function colorOf(name) {
   const c = classes.find((x) => x.name === name);
@@ -26,8 +33,8 @@ async function load() {
 }
 
 function renderStrip() {
-  const onlyReview = document.getElementById("only-review").checked;
-  const strip = document.getElementById("record-strip");
+  const onlyReview = el("only-review")?.checked;
+  const strip = el("record-strip");
   strip.innerHTML = "";
   for (const r of records) {
     if (onlyReview && !r.needs_review) continue;
@@ -39,16 +46,21 @@ function renderStrip() {
   }
 }
 
+function setSrc(id, url) {
+  const e = el(id);
+  if (e) e.src = url;
+}
+
 function select(r) {
   current = r;
   prompts = (r.mask_prompts || []).map((p) => ({ ...p }));
   const n = Date.now();
-  img.src = `/media/${project}/image/${r.id}?n=${n}`;
-  document.getElementById("v-depth").src = r.depth_map ? `/media/${project}/depth/${r.id}?n=${n}` : "";
-  document.getElementById("v-canny").src = r.canny_map ? `/media/${project}/canny/${r.id}?n=${n}` : "";
-  document.getElementById("v-mask").src = r.mask ? `/media/${project}/mask/${r.id}?n=${n}` : "";
+  setSrc("v-image", `/media/${project}/image/${r.id}?n=${n}`);
+  setSrc("v-depth", r.depth_map ? `/media/${project}/depth/${r.id}?n=${n}` : "");
+  setSrc("v-canny", r.canny_map ? `/media/${project}/canny/${r.id}?n=${n}` : "");
+  setSrc("v-mask", r.mask ? `/media/${project}/mask/${r.id}?n=${n}` : "");
   renderStrip();
-  img.onload = drawPrompts;
+  if (img) img.onload = drawPrompts;
 }
 
 function canvasPos(e) {
@@ -59,6 +71,7 @@ function canvasPos(e) {
 }
 
 function drawPrompts() {
+  if (!canvas || !img) return;
   const rect = img.getBoundingClientRect();
   canvas.width = rect.width; canvas.height = rect.height;
   const ctx = canvas.getContext("2d");
@@ -78,24 +91,28 @@ function drawPrompts() {
   }
 }
 
-canvas.addEventListener("pointerdown", (e) => { dragStart = canvasPos(e); });
-canvas.addEventListener("pointerup", (e) => {
-  if (!current || !dragStart) return;
-  const end = canvasPos(e);
-  const dist = Math.hypot(end[0] - dragStart[0], end[1] - dragStart[1]);
-  if (dist > 8) {
-    prompts.push({ kind: "box", class_name: clsSel.value,
-                   xyxy: [Math.min(dragStart[0], end[0]), Math.min(dragStart[1], end[1]),
-                          Math.max(dragStart[0], end[0]), Math.max(dragStart[1], end[1])] });
-  } else {
-    prompts.push({ kind: "point", class_name: clsSel.value, xy: end,
-                   label: e.shiftKey ? 0 : 1 });
-  }
-  dragStart = null;
-  drawPrompts();
-});
+if (canvas) {
+  canvas.addEventListener("pointerdown", (e) => { dragStart = canvasPos(e); });
+  canvas.addEventListener("pointerup", (e) => {
+    if (!current || !dragStart) return;
+    const end = canvasPos(e);
+    const dist = Math.hypot(end[0] - dragStart[0], end[1] - dragStart[1]);
+    if (dist > 8) {
+      prompts.push({ kind: "box", class_name: clsSel.value,
+                     xyxy: [Math.min(dragStart[0], end[0]), Math.min(dragStart[1], end[1]),
+                            Math.max(dragStart[0], end[0]), Math.max(dragStart[1], end[1])] });
+    } else {
+      prompts.push({ kind: "point", class_name: clsSel.value, xy: end,
+                     label: e.shiftKey ? 0 : 1 });
+    }
+    dragStart = null;
+    drawPrompts();
+  });
+  window.addEventListener("resize", drawPrompts);
+}
 
-document.getElementById("prompt-clear").onclick = async () => {
+const clearBtn = el("prompt-clear");
+if (clearBtn) clearBtn.onclick = async () => {
   prompts = [];
   drawPrompts();                                   // wipe the canvas dots
   if (!current) return;
@@ -105,36 +122,36 @@ document.getElementById("prompt-clear").onclick = async () => {
     await sendJSON(`/api/p/${project}/records/${current.id}/prompts`, "PUT", { prompts: [] });
     current.mask_prompts = [];
     current.mask = null;
-    document.getElementById("v-mask").src = "";
-    flash(document.getElementById("maps-msg"), "prompts + mask cleared", true);
-  } catch (e) { flash(document.getElementById("maps-msg"), e.message, false); }
+    setSrc("v-mask", "");
+    flash(el("maps-msg"), "prompts + mask cleared", true);
+  } catch (e) { flash(el("maps-msg"), e.message, false); }
 };
-document.getElementById("prompt-save").onclick = async () => {
+
+const saveBtn = el("prompt-save");
+if (saveBtn) saveBtn.onclick = async () => {
   if (!current) return;
   await sendJSON(`/api/p/${project}/records/${current.id}/prompts`, "PUT", { prompts });
   current.mask_prompts = prompts;
-  flash(document.getElementById("maps-msg"), "prompts saved — run masks to apply", true);
+  flash(el("maps-msg"), "prompts saved — run masks to apply", true);
 };
 
 function runner(phase) {
   return async () => {
     try {
       const { job } = await sendJSON(`/api/p/${project}/run/${phase}`, "POST", {});
-      flash(document.getElementById("maps-msg"), `${phase} running…`, true);
+      flash(el("maps-msg"), `${phase} running…`, true);
       watchJob(job.id, null, async (j) => {
-        flash(document.getElementById("maps-msg"),
-              j.state === "done" ? `${phase} done` : j.error, j.state === "done");
+        flash(el("maps-msg"), j.state === "done" ? `${phase} done` : j.error, j.state === "done");
         const keep = current?.id;
         await load();
         const again = records.find((r) => r.id === keep);
         if (again) select(again);
       });
-    } catch (e) { flash(document.getElementById("maps-msg"), e.message, false); }
+    } catch (e) { flash(el("maps-msg"), e.message, false); }
   };
 }
-document.getElementById("run-maps").onclick = runner("maps");
-document.getElementById("run-masks").onclick = runner("masks");
-document.getElementById("only-review").addEventListener("change", renderStrip);
-window.addEventListener("resize", drawPrompts);
+if (el("run-maps")) el("run-maps").onclick = runner("maps");
+if (el("run-masks")) el("run-masks").onclick = runner("masks");
+el("only-review")?.addEventListener("change", renderStrip);
 
 load();

@@ -18,7 +18,7 @@ const PHASES = [
     state: (s) => { const a = active(s); if (!a) return "todo";
       if (s.depth >= a && s.canny >= a) return "done";
       return (s.depth || s.canny) ? "partial" : "todo"; } },
-  { key: "masks",    n: 3, title: "Ground-truth masks",  page: "maps", run: "masks",
+  { key: "masks",    n: 3, title: "Ground-truth masks",  page: "masks", run: "masks",
     counts: (s) => `${s.masked} masked · ${s.prompted} prompted · ${s.needs_review} review`,
     state: (s) => { const a = active(s); if (!a) return "todo";
       if (s.masked >= a && !s.needs_review) return "done";

@@ -23,6 +23,8 @@ def test_pages_and_project_crud(tmp_path):
         assert names == ["demo"]
         assert c.get("/p/demo").status_code == 200
         assert c.get("/p/demo/curate").status_code == 200
+        assert c.get("/p/demo/maps").status_code == 200      # phase 2 (control maps)
+        assert c.get("/p/demo/masks").status_code == 200     # phase 3 (SAM2 masks)
         assert c.get("/p/nope").status_code == 404
 
 

@@ -222,8 +222,8 @@ Notes:
 These are *inputs to generation*, not labels.
 
 **What you do:** just click **Run** on the Control maps card. It's automatic and
-fast. Check results on the **Maps viewer** (the maps page shows image / depth /
-canny / mask side by side).
+fast. Its **open ›** page (Phase 2 — Control maps) shows **image / depth / canny**
+side by side. Masks are a separate page (Phase 3).
 
 **Done when:** depth and canny exist for every active image.
 
@@ -246,8 +246,9 @@ for everything downstream**, so this is the one phase worth your attention.
    SAM2 **auto-guesses the single main object** (the largest, most central thing
    in the frame) and masks just that — it does *not* mask the whole scene. The
    guess can still be wrong, so review it.
-2. Open the **Maps viewer** and check each mask. Multi-class auto-guesses are
-   flagged **needs review** (which class is ambiguous).
+2. Open the **Ground-truth masks** page (the masks card's **open ›**) and check
+   each mask. Multi-class auto-guesses are flagged **needs review** (which class
+   is ambiguous).
 3. To fix or set a mask precisely, use the **SAM2 prompt canvas** on that image:
    - **click** = add a *positive* point (this pixel is the object),
    - **shift-click** = add a *negative* point (this pixel is NOT the object),
@@ -377,7 +378,7 @@ what the Backbone's detector consumes.
 | See if a phase is done | Card is **green ✓**; **amber ◐** = partly done |
 | Update counts now | **⟳ Refresh** (top right of the pipeline) |
 | Re-do a phase | Click **Re-run** on its card |
-| Fix a mask | Maps viewer → click / shift-click / drag, then Re-run masks |
+| Fix a mask | Ground-truth masks page → click / shift-click / drag, then Re-run masks |
 | Edit a caption | Caption editor (edits survive re-runs) |
 | Delete a project | **✕** on its row → confirm (removes data **and** its LoRA) |
 | Find the final dataset | `data/<project>/export/yolo_seg/` |
@@ -387,7 +388,8 @@ what the Backbone's detector consumes.
 - **A phase won't start / seems stuck** — another GPU job is running (only one at
   a time). Watch the Job log; wait for it to finish.
 - **Card stays amber** — some items aren't done. For masks, that usually means
-  images still flagged *needs review*; open the Maps viewer and prompt them.
+  images still flagged *needs review*; open the Ground-truth masks page and
+  prompt them.
 - **Minting/LoRA errors about model weights** — the SDXL weights aren't cached
   yet. See `README.md` → Setup for the one-time `hf download` commands (SDXL is
   ungated, no login needed).

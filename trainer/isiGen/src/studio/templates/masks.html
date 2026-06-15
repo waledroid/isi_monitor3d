@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block nav %}
+<nav class="crumbs"><a href="/">projects</a> / <a href="/p/{{ project }}">{{ project }}</a> / <b>ground-truth masks</b></nav>
+{% endblock %}
+{% block content %}
+<section class="card" id="maps-root" data-project="{{ project }}" data-classes='{{ classes | tojson }}'>
+  <h1>Phase 3 — Ground-truth masks (SAM2)</h1>
+  <p class="msg">Box/click to mask just the class object, then Save + Run masks. Records with imported masks already have one.</p>
+  <div class="toolbar">
+    <button id="run-masks">Run masks (SAM2)</button>
+    <label class="chip"><input type="checkbox" id="only-review"> needs review only</label>
+    <span id="maps-msg" class="msg"></span>
+  </div>
+  <div id="record-strip" class="record-strip">loading…</div>
+  <div class="fourup">
+    <figure><figcaption>image <span id="prompt-help">(click = +point · shift-click = −point · drag = box)</span></figcaption>
+      <div class="canvas-wrap"><img id="v-image"><canvas id="prompt-canvas"></canvas></div>
+      <div class="prompt-tools">
+        <select id="prompt-class"></select>
+        <button id="prompt-clear">Clear prompts</button>
+        <button id="prompt-save">Save prompts</button>
+      </div>
+    </figure>
+    <figure><figcaption>ground-truth mask</figcaption><img id="v-mask"></figure>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="/static/js/maps.js"></script>{% endblock %}
