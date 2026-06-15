@@ -11,9 +11,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import cv2
+
 from ...core.manifest import Manifest, ManifestRecord
 from ...core.project import ProjectConfig
 from ...utils.images import IMAGE_EXTS, resave_clean, sha256_file
+from .mask_import import labelme_to_mask, sidecar_json
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,7 @@ def ingest(project_dir: Path, project: ProjectConfig, source: Path, *,
 
     manifest = Manifest.load(project_dir)
     known_hashes = {r.sha256 for r in manifest.records.values()}
-    added = skipped = warned = 0
+    added = skipped = warned = masks_imported = 0
 
     files = sorted(p for p in Path(source).rglob("*")
                    if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
@@ -66,15 +69,34 @@ def ingest(project_dir: Path, project: ProjectConfig, source: Path, *,
             logger.warning("curate: %s is small (%dx%d < min_side %d) — kept, review it",
                            path.name, w, h, min_side)
             warned += 1
-        manifest.upsert(ManifestRecord(
+        rec = ManifestRecord(
             id=rec_id, sha256=digest, source_path=str(path),
             image=rel_image, class_name=cls, width=w, height=h,
-        ))
+        )
+        # Import an existing LabelMe mask if a sidecar JSON sits beside the image
+        # (skips SAM2 for this record; coexists with SAM2 for promptless ones).
+        sc = sidecar_json(path)
+        if sc is not None:
+            try:
+                mask_bgr = labelme_to_mask(sc, project, (h, w))
+            except Exception as exc:
+                logger.warning("curate: mask import failed for %s (%s)", sc.name, exc)
+                mask_bgr = None
+            if mask_bgr is not None:
+                rel_mask = f"maps/mask/{rec_id}.png"
+                (project_dir / rel_mask).parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(project_dir / rel_mask), mask_bgr)
+                rec.mask = rel_mask
+                rec.mask_source = "imported"
+                rec.needs_review = False
+                masks_imported += 1
+        manifest.upsert(rec)
         known_hashes.add(digest)
         added += 1
 
     manifest.save()
-    logger.info("curate: %d added, %d skipped, %d size-warnings (%d total records)",
-                added, skipped, warned, len(manifest.records))
+    logger.info("curate: %d added, %d skipped, %d size-warnings, %d masks imported "
+                "(%d total records)", added, skipped, warned, masks_imported,
+                len(manifest.records))
     return {"added": added, "skipped": skipped, "warned": warned,
-            "total": len(manifest.records)}
+            "masks_imported": masks_imported, "total": len(manifest.records)}

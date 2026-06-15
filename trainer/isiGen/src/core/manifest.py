@@ -66,7 +66,7 @@ class ManifestRecord(BaseModel):
     canny_map: str | None = None              # maps/canny/<id>.png
     mask: str | None = None                   # maps/mask/<id>.png (color-coded ground truth)
     mask_prompts: list[MaskPrompt] = Field(default_factory=list)
-    mask_source: Literal["prompted", "auto"] | None = None
+    mask_source: Literal["prompted", "auto", "imported"] | None = None
     needs_review: bool = False                # auto-mask in a multi-class project
 
     # Phase 3 — captions
