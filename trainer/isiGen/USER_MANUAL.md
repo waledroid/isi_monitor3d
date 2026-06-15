@@ -47,20 +47,40 @@ The result is exported as a YOLO-segmentation dataset you train with `isidet`.
 
 ## The pipeline at a glance
 
-The project page shows 8 phase cards. They run **in order** — each one needs the
-previous one's output. A card turns **green ✓** when it's fully done, **amber ◐**
-when partly done, and its button reads **Re-run** once complete.
+The project page shows 8 phase cards. They are **roughly** sequential, but it's a
+dependency *graph*, not a strict chain — only **Curate** is always required first.
+A card turns **green ✓** when it's fully done, **amber ◐** when partly done, and
+its button reads **Re-run** once complete.
 
-| # | Phase | What it produces | Needs a GPU? |
-|---|-------|------------------|:---:|
-| 1 | Curate real images | Cleaned, class-tagged photos | no |
-| 2 | Control maps | Depth + edge maps (generation guides) | yes (fast) |
-| 3 | Ground-truth masks | Per-object masks (your future labels) | yes |
-| 4 | Anti-bleed captions | One text prompt per image | no |
-| 5 | LoRA training | A small model of *your* objects' look | yes (hours) |
-| 6 | Synthetic scaffolds | Procedural layouts → control map + mask pairs | no |
-| 7 | Mint synthetics | The generated, auto-labeled images | yes |
-| 8 | Filter + export | Quality-filtered YOLO dataset | yes (fast) |
+| # | Phase | What it produces | Needs (besides curate) | GPU? |
+|---|-------|------------------|------------------------|:---:|
+| 1 | Curate real images | Cleaned, class-tagged photos | — (foundation) | no |
+| 2 | Control maps | Depth + edge maps (generation guides) | — | yes (fast) |
+| 3 | Ground-truth masks | Per-object masks (your future labels) | — | yes |
+| 4 | Anti-bleed captions | One text prompt per image | — | no |
+| 5 | LoRA training | A small model of *your* objects' look | captions (4) | yes (hours) |
+| 6 | Synthetic scaffolds | Layout → control map + mask pairs | maps+masks (2,3) *only if* `depth_remix` | no |
+| 7 | Mint synthetics | The generated, auto-labeled images | scaffolds (6); LoRA (5) optional | yes |
+| 8 | Filter + export | Quality-filtered YOLO dataset | masked records — real (3) or minted (7) | yes (fast) |
+
+### What actually depends on what
+
+- **Curate (1)** is the only universal prerequisite.
+- **Maps (2), Masks (3), Captions (4)** each read **only the curated images** —
+  they're independent siblings. Run them in any order, or skip ones you don't
+  need. (Masks come from the photo via SAM2, *not* from the control maps.)
+- **LoRA (5)** needs **captions (4)** + the real images — nothing else.
+- **Scaffolds (6)** with the default `box3d_procedural` source needs **only your
+  class definitions**; only the `depth_remix` source reuses **maps + masks**.
+- **Mint (7)** needs **scaffolds (6)**, and uses the LoRA from (5) **if** you
+  trained one (without it you get generic objects, not yours).
+- **Export (8)** needs **masked records** and works on real masks (3) *or*
+  minted synthetics (7); the CLIP filter only touches synthetics.
+
+> **Shortcut paths exist.** Want a YOLO dataset from just your hand-checked real
+> images? Run **1 → 3 → 8** (curate, masks, export) and skip captions, LoRA,
+> scaffolds, and minting entirely. The synthetic-augmentation path
+> (5 → 6 → 7 → 8) is what multiplies a small real set into a large one.
 
 **Buttons on each card:** `open ›` jumps to that phase's detail page; `Run` /
 `Re-run` starts the job. **⟳ Refresh** (top right) updates the counts instantly.
