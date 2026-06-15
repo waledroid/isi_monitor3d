@@ -16,7 +16,7 @@ import cv2
 from ...core.manifest import Manifest, ManifestRecord
 from ...core.project import ProjectConfig
 from ...utils.images import IMAGE_EXTS, resave_clean, sha256_file
-from .mask_import import labelme_to_mask, sidecar_json
+from .mask_import import import_mask, prepare_source
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ def ingest(project_dir: Path, project: ProjectConfig, source: Path, *,
     known_hashes = {r.sha256 for r in manifest.records.values()}
     added = skipped = warned = masks_imported = 0
 
+    ctx = prepare_source(Path(source))      # load any COCO / YOLO-names once
     files = sorted(p for p in Path(source).rglob("*")
                    if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
     for path in files:
@@ -73,23 +74,22 @@ def ingest(project_dir: Path, project: ProjectConfig, source: Path, *,
             id=rec_id, sha256=digest, source_path=str(path),
             image=rel_image, class_name=cls, width=w, height=h,
         )
-        # Import an existing LabelMe mask if a sidecar JSON sits beside the image
-        # (skips SAM2 for this record; coexists with SAM2 for promptless ones).
-        sc = sidecar_json(path)
-        if sc is not None:
-            try:
-                mask_bgr = labelme_to_mask(sc, project, (h, w))
-            except Exception as exc:
-                logger.warning("curate: mask import failed for %s (%s)", sc.name, exc)
-                mask_bgr = None
-            if mask_bgr is not None:
-                rel_mask = f"maps/mask/{rec_id}.png"
-                (project_dir / rel_mask).parent.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(str(project_dir / rel_mask), mask_bgr)
-                rec.mask = rel_mask
-                rec.mask_source = "imported"
-                rec.needs_review = False
-                masks_imported += 1
+        # Import an existing mask (LabelMe / YOLO / COCO) if one is present for
+        # this image — skips SAM2 for this record; promptless ones still go to
+        # phase 3.
+        try:
+            mask_bgr = import_mask(path, project, (h, w), ctx)
+        except Exception as exc:
+            logger.warning("curate: mask import failed for %s (%s)", path.name, exc)
+            mask_bgr = None
+        if mask_bgr is not None:
+            rel_mask = f"maps/mask/{rec_id}.png"
+            (project_dir / rel_mask).parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(project_dir / rel_mask), mask_bgr)
+            rec.mask = rel_mask
+            rec.mask_source = "imported"
+            rec.needs_review = False
+            masks_imported += 1
         manifest.upsert(rec)
         known_hashes.add(digest)
         added += 1

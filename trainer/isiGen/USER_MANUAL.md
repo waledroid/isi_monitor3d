@@ -26,9 +26,9 @@ isiGen solves both problems at once:
 The result is exported as a YOLO-segmentation dataset you train with `isidet`.
 
 > **You don't *need* to import annotations** — isiGen produces the labels itself,
-> so importing *photos only* is the normal path. But if you **already have
-> LabelMe masks**, you can import them during curate (drop the `.json` next to
-> the image) and skip the masking phase for those images. See Phase 1.
+> so importing *photos only* is the normal path. But if you **already have masks**
+> (**LabelMe**, **YOLO**, or **COCO**), curate imports them automatically and
+> skips the masking phase for those images. See Phase 1.
 
 ---
 
@@ -173,21 +173,34 @@ the tree is just your own class names:
 
 ### Already have masks? Import them (skip SAM2)
 
-If you already labeled some images in **LabelMe**, drop each `image.json` **next
-to** its `image.jpg` in the same folder. Curate detects the sidecar JSON
-automatically and rasterizes its polygons into the project-colored mask — those
-records arrive **already masked** (phase 3 turns green for them, no SAM2 needed).
-The ingest result reports `masks_imported: N`.
+If you already labeled some images, curate **auto-detects** the annotations and
+rasterizes them into the project-colored mask — those records arrive **already
+masked** (phase 3 turns green for them, no SAM2 needed). The ingest result
+reports `masks_imported: N`. Three formats are supported:
 
-- Each shape's `label` must be one of your project's class names (others are
-  skipped + logged). A single JSON may carry multiple classes.
-- **Mix freely:** images with a JSON get the imported mask; images without one
-  still go through SAM2 in Phase 3. SAM2 never overwrites an imported mask.
+| Format | Where it goes | What's read |
+|---|---|---|
+| **LabelMe** | `image.json` next to `image.jpg` (same name) | `shapes` — polygon / linestrip / rectangle |
+| **YOLO** | `image.txt` next to `image.jpg` (same name) | each line `cls x1 y1 …` (polygon-seg) or `cls cx cy w h` (box) — normalized |
+| **COCO** | **one** `*.json` at the ingest-folder root (has `images`/`annotations`/`categories`) | polygon `segmentation` (or `bbox`; RLE → box) |
+
+Class mapping per format:
+- **LabelMe / COCO** — the shape `label` / category `name` must match one of your
+  project's class names (others are skipped + logged). One file may carry
+  multiple classes.
+- **YOLO** — class **indices** are mapped to names via a `data.yaml` (`names:`)
+  or `classes.txt` at the ingest root if present; otherwise by your **project's
+  class order** (index 0 = first project class). Keep them aligned.
+
+Notes:
+- **Mix freely:** images with annotations get the imported mask; images without
+  any still go through SAM2 in Phase 3. SAM2 never overwrites an imported mask.
+  Precedence when several are present: **COCO → LabelMe → YOLO**.
 - With masks imported, the quickest real-only dataset is just **curate → export**
   (Phase 8) — no captions/LoRA/scaffolds/minting.
-- *Limitation:* points are scaled if the JSON's image size differs from the
-  stored image, but EXIF **rotation** isn't corrected — annotate on already-
-  oriented images.
+- *Limitation:* coordinates are scaled if the annotation's declared image size
+  differs from the stored image, but EXIF **rotation** isn't corrected — annotate
+  on already-oriented images.
 
 **Tips for good photos:**
 - **Keep the environment — don't crop tight.** Whole scenes (object in a real
@@ -222,7 +235,7 @@ canny / mask side by side).
 **color-coded mask** (each class gets its color). **These masks become the labels
 for everything downstream**, so this is the one phase worth your attention.
 
-> Records whose masks you **imported** in Phase 1 (LabelMe) already have a mask
+> Records whose masks you **imported** in Phase 1 (LabelMe/YOLO/COCO) already have a mask
 > and are **skipped** here — SAM2 only fills the un-masked ones, so import and
 > SAM2 coexist. To redo an imported mask, prompt + **Save** on it in the Maps
 > viewer (that clears the mask), then **Run masks**.
