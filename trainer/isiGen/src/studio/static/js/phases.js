@@ -89,6 +89,22 @@ async function render() {
         } catch (e) { logEl.textContent = `error: ${e.message}`; }
       };
       actions.appendChild(b);
+      // Reset: wipe this phase's outputs so it can be re-run cleanly.
+      if (st !== "todo") {
+        const rb = document.createElement("button");
+        rb.className = "reset-btn";
+        rb.textContent = "Reset";
+        rb.title = `Delete ${ph.title} outputs`;
+        rb.onclick = async () => {
+          if (!confirm(`Reset "${ph.title}"?\nThis deletes this phase's outputs so you can re-run it cleanly.`)) return;
+          try {
+            const r = await sendJSON(`/api/p/${project}/reset/${ph.run}`, "POST", {});
+            logEl.textContent = `reset ${ph.run}: ${JSON.stringify(r.reset)}`;
+            render();
+          } catch (e) { logEl.textContent = `error: ${e.message}`; }
+        };
+        actions.appendChild(rb);
+      }
     }
     board.appendChild(card);
     prevState = st;

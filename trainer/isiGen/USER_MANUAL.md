@@ -315,6 +315,16 @@ This is the longest step.
 **What it does:** procedurally generates **layout pairs** — a **control map**
 (depth) plus its **perfect mask** — describing where objects will sit in each new
 synthetic scene (e.g. stacks of cartons on a pallet). No AI yet; this is geometry.
+Two **sources** (set `scaffolds.sources` in the project config):
+- **`depth_remix`** — jittered copies of your **real** depth+mask pairs; faithful
+  to your data and your classes. Best for single-class or realistic layouts.
+- **`box3d_procedural`** — invented stacked-box geometry for **all** project
+  classes; looks abstract/blocky and will include classes your data doesn't have
+  (e.g. carton/palette when you only shot polybags). Drop it if that's not what
+  you want. `count` (default 500) sets how many pairs — lower it for quick tests.
+
+Each scaffold's `status` is **`pending`** until it's minted in phase 7 — that's a
+queue marker, **not** a quality flag.
 
 **What you do:** click **Run**. To control how many to create, set the scaffold
 **count** in the project config (default 500). Each pair is one future synthetic
@@ -385,6 +395,7 @@ what the Backbone's detector consumes.
 | See if a phase is done | Card is **green ✓**; **amber ◐** = partly done |
 | Update counts now | **⟳ Refresh** (top right of the pipeline) |
 | Re-do a phase | Click **Re-run** on its card |
+| Re-do a phase **cleanly** | Click **Reset** on its card → confirm (deletes that phase's outputs), then Run. Mask-reset keeps your prompts; caption-reset keeps hand-edited captions. |
 | Fix a mask | Ground-truth masks page → click / shift-click / drag, then Re-run masks |
 | Edit a caption | Caption editor (edits survive re-runs) |
 | Delete a project | **✕** on its row → confirm (removes data **and** its LoRA) |

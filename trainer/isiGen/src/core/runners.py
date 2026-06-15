@@ -428,3 +428,116 @@ def run_captions(project_dir: Path, *, force: bool = False) -> dict:
     manifest.save()
     logger.info("captions: %d written, %d edited (preserved)", done, skipped_edited)
     return {"captioned": done, "preserved_edited": skipped_edited}
+
+
+# ---------------------------------------------------------------------------
+# Per-phase reset — delete a phase's outputs so it can be re-run cleanly
+# ---------------------------------------------------------------------------
+
+# Phases whose outputs can be wiped from the Studio (curate is excluded — use
+# the gallery's exclude or delete the whole project instead).
+RESETTABLE = ("maps", "masks", "captions", "lora", "scaffolds", "generate", "export")
+
+
+def _rm_dir_files(d: Path) -> int:
+    n = 0
+    if d.exists():
+        for f in d.glob("*"):
+            if f.is_file():
+                f.unlink()
+                n += 1
+    return n
+
+
+def reset_phase(project_dir: Path, phase: str, *, runs_dir: Path | None = None) -> dict:
+    """Delete a phase's artifacts (files + manifest fields) so it re-runs clean.
+
+    Mask reset keeps saved SAM2 prompts; caption reset keeps hand-edited
+    captions. Returns a small summary of what was cleared."""
+    import shutil
+
+    project_dir = Path(project_dir)
+    if phase not in RESETTABLE:
+        raise ValueError(f"phase {phase!r} is not resettable (one of {RESETTABLE})")
+    m = Manifest.load(project_dir)
+    cleared = 0
+
+    if phase == "maps":
+        files = _rm_dir_files(project_dir / "maps" / "depth") + \
+                _rm_dir_files(project_dir / "maps" / "canny")
+        for r in m.records.values():
+            if r.depth_map or r.canny_map:
+                r.depth_map = r.canny_map = None
+                cleared += 1
+        m.save()
+        return {"phase": phase, "files_deleted": files, "records_cleared": cleared}
+
+    if phase == "masks":
+        files = _rm_dir_files(project_dir / "maps" / "mask")
+        for r in m.records.values():
+            if r.mask or r.mask_source or r.needs_review:
+                r.mask = None
+                r.mask_source = None
+                r.needs_review = False        # prompts (r.mask_prompts) kept on purpose
+                cleared += 1
+        m.save()
+        return {"phase": phase, "files_deleted": files, "records_cleared": cleared}
+
+    if phase == "captions":
+        files = 0
+        for r in m.records.values():
+            if r.caption_path and not r.caption_edited:      # keep hand-edited
+                fp = project_dir / r.caption_path
+                if fp.exists():
+                    fp.unlink()
+                    files += 1
+                r.caption_path = None
+                cleared += 1
+        m.save()
+        return {"phase": phase, "files_deleted": files, "records_cleared": cleared}
+
+    if phase == "lora":
+        from .project import save_project
+        removed = 0
+        project = load_project(project_dir)
+        if runs_dir is not None:
+            for dpath in (Path(runs_dir) / "lora").glob(f"{project.name}_*"):
+                shutil.rmtree(dpath, ignore_errors=True)
+                removed += 1
+        gen = project.phase("generation")
+        if gen.get("lora_weights"):
+            gen["lora_weights"] = None
+            save_project(project_dir, project)
+        return {"phase": phase, "runs_deleted": removed}
+
+    if phase == "scaffolds":
+        d = project_dir / "scaffolds"
+        files = sum(1 for _ in d.glob("*")) if d.exists() else 0
+        if d.exists():
+            shutil.rmtree(d)
+        return {"phase": phase, "files_deleted": files}
+
+    if phase == "generate":                  # minted synthetics
+        files = _rm_dir_files(project_dir / "generated")
+        syn = [rid for rid, r in m.records.items() if getattr(r, "synthetic", False)]
+        for rid in syn:
+            del m.records[rid]
+        m.save()
+        entries = load_scaffold_index(project_dir)
+        reset = 0
+        for e in entries:
+            if e.get("status") == "generated":
+                e["status"] = "pending"
+                reset += 1
+        if reset:
+            save_scaffold_index(project_dir, entries)
+        return {"phase": phase, "files_deleted": files,
+                "synthetic_removed": len(syn), "scaffolds_repending": reset}
+
+    if phase == "export":
+        d = project_dir / "export"
+        if d.exists():
+            shutil.rmtree(d)
+        return {"phase": phase, "export_deleted": True}
+
+    return {"phase": phase}                   # unreachable (guarded above)

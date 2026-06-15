@@ -166,6 +166,14 @@ def test_delete_project_removes_data_and_lora(tiny_project, tmp_path):
         assert c.delete("/api/projects/tiny").status_code == 404      # already gone
 
 
+def test_reset_phase_route(tiny_project):
+    with _client() as c:
+        r = c.post("/api/p/tiny/reset/scaffolds")
+        assert r.status_code == 200 and r.json()["ok"] is True
+        assert r.json()["reset"]["phase"] == "scaffolds"
+        assert c.post("/api/p/tiny/reset/curate").status_code == 404   # not resettable
+
+
 def test_phase_job_runs_captions(tiny_project):
     with _client() as c:
         r = c.post("/api/p/tiny/run/captions")

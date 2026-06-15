@@ -585,10 +585,21 @@ label.chip input, .toolbar label input {
 .phase-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-top: auto;
 }
+.phase-actions a { margin-right: auto; }   /* keep "open ›" left, buttons right */
+
+.phase-card .phase-actions .reset-btn {
+  padding: 5px 10px; font-size: 11px; color: var(--text-muted);
+  background: transparent; border-color: rgba(255,255,255,0.14);
+}
+.phase-card .phase-actions .reset-btn:hover {
+  color: var(--bad); border-color: var(--bad); background: transparent;
+}
+.phase-card.done .phase-actions .reset-btn { color: #3f6b50; border-color: #bfe3cb; }
+.phase-card.done .phase-actions .reset-btn:hover { color: #b00020; border-color: #b00020; }
 
 .phase-card.stub { opacity: 0.4; }
 

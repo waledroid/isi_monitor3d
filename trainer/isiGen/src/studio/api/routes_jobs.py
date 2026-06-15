@@ -8,6 +8,7 @@ from functools import partial
 from fastapi import APIRouter, HTTPException, Request
 
 from ...core.runners import (
+    reset_phase,
     run_captions,
     run_control_maps,
     run_export,
@@ -46,6 +47,18 @@ async def run_phase(request: Request, name: str, phase: str) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True, "job": job.to_dict()}
+
+
+@router.post("/api/p/{name}/reset/{phase}")
+async def reset(request: Request, name: str, phase: str) -> dict:
+    """Wipe a phase's outputs so it can be re-run cleanly (not a job — fast)."""
+    d = project_dir(request, name)
+    try:
+        summary = reset_phase(d, phase,
+                              runs_dir=request.app.state.settings.runs_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True, "reset": summary}
 
 
 @router.get("/api/jobs")
