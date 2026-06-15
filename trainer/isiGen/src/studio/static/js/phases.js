@@ -48,11 +48,17 @@ async function render() {
   let s = {};
   try { s = await getJSON(`/api/p/${project}/status`); } catch { /* keep zeros */ }
   board.innerHTML = "";
+  // Sequential chain: a not-yet-done phase is locked until its predecessor is
+  // done. Already-done phases stay re-runnable. `prev` carries the previous
+  // phase's state (and number, for the hint); the first phase is never locked.
+  let prevState = "done";
+  let prevPhase = null;
   for (const ph of PHASES) {
     const st = ph.stub ? "todo" : (ph.state?.(s) ?? "todo");
-    const glyph = st === "done" ? "✓" : st === "partial" ? "◐" : "";
+    const locked = prevState !== "done" && st !== "done";
+    const glyph = locked ? "🔒" : st === "done" ? "✓" : st === "partial" ? "◐" : "";
     const card = document.createElement("div");
-    card.className = "phase-card" + (ph.stub ? " stub" : "") +
+    card.className = "phase-card" + (ph.stub ? " stub" : "") + (locked ? " locked" : "") +
       (st === "done" ? " done" : st === "partial" ? " partial" : "");
     card.innerHTML =
       `<div class="phase-head">
@@ -71,6 +77,10 @@ async function render() {
     if (ph.run) {
       const b = document.createElement("button");
       b.textContent = st === "done" ? "Re-run" : "Run";
+      if (locked) {
+        b.disabled = true;
+        b.title = `Complete phase ${prevPhase?.n ?? ""} first`;
+      }
       b.onclick = async () => {
         try {
           const { job } = await sendJSON(`/api/p/${project}/run/${ph.run}`, "POST", {});
@@ -80,6 +90,8 @@ async function render() {
       actions.appendChild(b);
     }
     board.appendChild(card);
+    prevState = st;
+    prevPhase = ph;
   }
 }
 

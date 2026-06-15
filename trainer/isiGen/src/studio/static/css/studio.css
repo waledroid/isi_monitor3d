@@ -592,6 +592,18 @@ label.chip input, .toolbar label input {
 
 .phase-card.stub { opacity: 0.4; }
 
+/* Locked — earlier phase in the chain isn't done yet */
+.phase-card.locked { opacity: 0.5; }
+.phase-card.locked .phase-status { filter: grayscale(1); }
+
+button:disabled,
+button:disabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .phase-card a {
   color: var(--accent);
   font-size: 12px;
