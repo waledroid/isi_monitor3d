@@ -75,6 +75,13 @@ On the **Projects** page, use the **New project** form:
 - **Classes** — comma-separated, as `name:TRIGGER`, e.g.
   `palette:ISI_PLT, carton:ISI_CRTN, polybag:ISI_PLYBG`.
 
+> **Your classes are entirely up to you.** `palette / carton / polybag` is just
+> the example. Nothing is hardcoded — create a project with whatever classes you
+> need (e.g. `forklift, worker_vest, shelf_label`) and the rest of the pipeline
+> works the same. The trigger is optional; leave it off and isiGen fills in
+> `ISI_<NAME>` automatically. **Remember the exact class names you choose** — your
+> photo folders must match them (see Phase 1).
+
 ### What is the `TRIGGER` (`ISI_PLT`)?
 
 The **class name** (`palette`) is your real label — it's what the final dataset
@@ -99,16 +106,50 @@ row and confirm.
 EXIF/orientation data, and tags each image with its class. Idempotent — re-running
 the same folder adds nothing new.
 
+### Preferred folder structure (recommended)
+
+Sort your photos into **one subfolder per class, named exactly like your project
+classes**, then point isiGen at the parent folder once:
+
+```
+~/photos/                  ← this is the "Server folder" you enter
+├── palette/               ← folder name = class name (must match EXACTLY)
+│   ├── img_0001.jpg
+│   ├── img_0002.jpg
+│   └── ...
+├── carton/
+│   ├── ...
+└── polybag/
+    └── ...
+```
+
+The class name is taken **from the folder name** — so for a different project
+the tree is just your own class names:
+
+```
+~/photos/
+├── forklift/
+├── worker_vest/
+└── shelf_label/
+```
+
+> **Exact match matters.** A subfolder whose name isn't one of your project's
+> classes is **skipped** (you'll see it noted in the job log). `Palette` ≠
+> `palette`. Files directly in the parent (not in a class subfolder) are skipped
+> in folder-name mode. Sub-subfolders are fine — ingest scans recursively and
+> uses each image's *immediate* parent folder as its class, so
+> `palette/aisle3/img.jpg` → class `palette`.
+
 **What you do:**
 
 1. Click **open ›** on the Curate card (or the Curate page).
-2. In the **Ingest** form, set **Server folder** to your photo folder path and
-   pick the **Class** from the dropdown. Click **Ingest**.
-   - *Shortcut:* if you sorted photos into subfolders named exactly `palette/`,
-     `carton/`, `polybag/`, point the folder at the parent and leave the class on
-     **"— from subfolder names —"** to tag all classes in one go.
-3. Repeat once per class folder.
-4. **Review the gallery:** use the class chips to filter, click a thumbnail to
+2. In the **Ingest** form, set **Server folder** to the **parent** folder
+   (`~/photos`) and leave **Class** on the default **"— from subfolder names —"**.
+   Click **Ingest** — every class is imported and tagged in one pass.
+   - *Alternative:* if your images aren't sorted into class folders, pick a
+     specific **Class** from the dropdown instead, and every image in that folder
+     is tagged with it. Then repeat per class folder.
+3. **Review the gallery:** use the class chips to filter, click a thumbnail to
    **retag** (wrong class) or **exclude** it (blurry, off-topic, near-duplicate).
    Excluded images stay but are skipped by every later phase.
 

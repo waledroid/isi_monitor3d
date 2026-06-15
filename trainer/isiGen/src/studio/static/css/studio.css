@@ -665,6 +665,26 @@ label.chip input, .toolbar label input {
 
 /* ---------------- Curate Gallery ---------------- */
 
+.ingest-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 14px 0 6px;
+}
+.ingest-hint b { color: #fff; font-weight: 600; }
+.ingest-tree {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 0;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #cbd5e1;
+  white-space: pre;
+  overflow-x: auto;
+}
+
 .gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));

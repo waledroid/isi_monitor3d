@@ -16,6 +16,12 @@
     <button type="submit">Ingest</button>
     <span id="ingest-msg" class="msg"></span>
   </form>
+  <p class="ingest-hint">
+    With <b>— from subfolder names —</b>, point <b>Server folder</b> at the parent
+    and name one subfolder per class (must match exactly):
+  </p>
+  <pre class="ingest-tree">your_folder/{% for c in classes %}
+├── {{ c.name }}/   → class "{{ c.name }}"{% endfor %}</pre>
   <div class="filters" id="class-filters" data-project="{{ project }}">
     <button class="chip active" data-cls="">all</button>
     {% for c in classes %}<button class="chip" data-cls="{{ c.name }}">{{ c.name }}</button>{% endfor %}
