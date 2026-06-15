@@ -204,14 +204,21 @@ for everything downstream**, so this is the one phase worth your attention.
 
 **What you do:**
 
-1. Click **Run** on the masks card for an automatic first pass.
-2. Open the **Maps viewer** and check each mask. Auto-masks that the model wasn't
-   confident about are flagged **needs review**.
-3. To fix a mask, use the **SAM2 prompt canvas** on that image:
+1. Click **Run** on the masks card for an automatic first pass. With no prompts,
+   SAM2 **auto-guesses the single main object** (the largest, most central thing
+   in the frame) and masks just that — it does *not* mask the whole scene. The
+   guess can still be wrong, so review it.
+2. Open the **Maps viewer** and check each mask. Multi-class auto-guesses are
+   flagged **needs review** (which class is ambiguous).
+3. To fix or set a mask precisely, use the **SAM2 prompt canvas** on that image:
    - **click** = add a *positive* point (this pixel is the object),
    - **shift-click** = add a *negative* point (this pixel is NOT the object),
    - **drag** = draw a box around the object.
-   Then re-run — only the images you re-prompted are recomputed.
+   **Save**, then **Run masks** — a prompted object always overrides the guess,
+   and only the records you changed are recomputed.
+   - **Clear** wipes your points **and** the shown mask (it removes the saved
+     mask too, so nothing stale lingers). A later **Run masks** will auto-guess
+     again unless you've drawn new prompts.
 
 **Done when:** every active image has a mask **and** none are left "needs review."
 (The card stays **amber** while masks still need review.)

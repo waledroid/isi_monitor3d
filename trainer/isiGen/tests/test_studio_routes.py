@@ -54,6 +54,26 @@ def test_records_patch_prompts_caption(tiny_project):
         assert c.get("/media/tiny/thumb/ffffffffffff").status_code == 404
 
 
+def test_clearing_prompts_drops_the_mask(tiny_project):
+    """Studio 'Clear' PUTs empty prompts; that must also drop the saved mask so
+    the stale (auto-everything) mask doesn't linger."""
+    from src.core.manifest import Manifest
+    pdir, _ = tiny_project
+    m = Manifest.load(pdir)
+    rid = next(iter(m.records))
+    rec = m.get(rid)
+    rec.mask = "maps/mask/whatever.png"          # pretend a mask exists
+    m.upsert(rec)
+    m.save()
+    with _client() as c:
+        r = c.put(f"/api/p/tiny/records/{rid}/prompts", json={"prompts": []})
+        assert r.json()["ok"] is True
+        back = next(x for x in c.get("/api/p/tiny/records").json()["records"]
+                    if x["id"] == rid)
+        assert back["mask_prompts"] == []
+        assert back["mask"] is None              # cleared, not lingering
+
+
 def test_status_reports_lora_trained(tiny_project, tmp_path):
     with _client() as c:
         assert c.get("/api/p/tiny/status").json()["lora_trained"] is False

@@ -90,6 +90,32 @@ def _composite_mask(project: ProjectConfig, shape_hw: tuple[int, int],
     return canvas
 
 
+def _pick_main_mask(masks: list[np.ndarray], shape_hw: tuple[int, int]) -> np.ndarray:
+    """From SAM2's automatic masks, pick the single *main subject*: the largest
+    central object. Near-full-frame masks (background/floor/walls) and tiny
+    specks are ignored; among the rest, score = area-times-centrality. Falls back to
+    the largest mask if everything is filtered out. Never unions the scene."""
+    h, w = shape_hw[:2]
+    total = float(h * w) or 1.0
+    cx, cy = w / 2.0, h / 2.0
+    maxd = (cx * cx + cy * cy) ** 0.5 or 1.0
+    best, best_score = None, -1.0
+    for m in masks:
+        frac = float(m.sum()) / total
+        if frac < 0.005 or frac > 0.9:            # speck or whole-frame background
+            continue
+        ys, xs = np.nonzero(m)
+        if xs.size == 0:
+            continue
+        dist = (((xs.mean() - cx) ** 2 + (ys.mean() - cy) ** 2) ** 0.5) / maxd
+        score = frac * (1.0 - dist)               # large AND central (area * centrality)
+        if score > best_score:
+            best, best_score = m, score
+    if best is None:                              # all filtered → largest by area
+        best = max(masks, key=lambda m: int(m.sum()))
+    return best.astype(bool)
+
+
 def run_masks(project_dir: Path, *, force: bool = False) -> dict:
     """Phase 2 (ground-truth side) — SAM2 masks, composited to the color-coded PNG.
 
@@ -124,19 +150,16 @@ def run_masks(project_dir: Path, *, force: bool = False) -> dict:
             elif fallback_auto:
                 auto = masker.segment_auto(img)
                 if auto:
+                    # Auto-guess the MAIN subject (largest central object), not the
+                    # union of every region — that masked the whole scene.
+                    main = _pick_main_mask(auto, img.shape[:2])
                     if single_class:
-                        union = np.zeros(img.shape[:2], dtype=bool)
-                        for m in auto:
-                            union |= m
-                        class_masks = {project.classes[0].name: union}
+                        class_masks = {project.classes[0].name: main}
                         rec.needs_review = False
                     else:
-                        # Multi-class project: assign everything to the record's
-                        # own class but flag for operator review in Studio.
-                        union = np.zeros(img.shape[:2], dtype=bool)
-                        for m in auto:
-                            union |= m
-                        class_masks = {rec.class_name: union}
+                        # Multi-class: assign the guess to the record's own class
+                        # but flag for operator review (which class is ambiguous).
+                        class_masks = {rec.class_name: main}
                         rec.needs_review = True
                 rec.mask_source = "auto"
             else:

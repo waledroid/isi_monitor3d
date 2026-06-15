@@ -95,7 +95,20 @@ canvas.addEventListener("pointerup", (e) => {
   drawPrompts();
 });
 
-document.getElementById("prompt-clear").onclick = () => { prompts = []; drawPrompts(); };
+document.getElementById("prompt-clear").onclick = async () => {
+  prompts = [];
+  drawPrompts();                                   // wipe the canvas dots
+  if (!current) return;
+  // Persist the cleared state: empty prompts also drop rec.mask server-side,
+  // and blank the shown mask so "clear" actually clears (not just the dots).
+  try {
+    await sendJSON(`/api/p/${project}/records/${current.id}/prompts`, "PUT", { prompts: [] });
+    current.mask_prompts = [];
+    current.mask = null;
+    document.getElementById("v-mask").src = "";
+    flash(document.getElementById("maps-msg"), "prompts + mask cleared", true);
+  } catch (e) { flash(document.getElementById("maps-msg"), e.message, false); }
+};
 document.getElementById("prompt-save").onclick = async () => {
   if (!current) return;
   await sendJSON(`/api/p/${project}/records/${current.id}/prompts`, "PUT", { prompts });
