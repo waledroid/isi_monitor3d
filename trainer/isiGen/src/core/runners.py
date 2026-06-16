@@ -459,6 +459,12 @@ def run_captions(project_dir: Path, *, force: bool = False) -> dict:
     done = skipped_edited = 0
     for i, rec in enumerate(active, 1):
         progress.report(i, len(active), "captions")
+        # Self-heal a stale path: caption_path set but the file is gone (e.g. an
+        # edited caption deleted on disk) → forget it so we regenerate fresh,
+        # instead of leaving a permanent set-but-missing reference.
+        if rec.caption_path and not (project_dir / rec.caption_path).exists():
+            rec.caption_path = None
+            rec.caption_edited = False
         if rec.caption_edited:
             skipped_edited += 1
             continue
@@ -567,6 +573,9 @@ def reset_phase(project_dir: Path, phase: str, *, runs_dir: Path | None = None) 
         files = _rm_dir_files(project_dir / "generated")
         syn = [rid for rid, r in m.records.items() if getattr(r, "synthetic", False)]
         for rid in syn:
+            cp = m.records[rid].caption_path     # delete the synthetic's caption too
+            if cp:
+                (project_dir / cp).unlink(missing_ok=True)
             del m.records[rid]
         m.save()
         entries = load_scaffold_index(project_dir)

@@ -172,3 +172,38 @@ def test_captions_skip_synthetic(tmp_path):
     out = run_captions(pdir)
     assert out["captioned"] == 1                        # only the real record
     assert Manifest.load(pdir).get("syn1").caption_path is None
+
+
+def test_captions_self_heal_missing_file(tmp_path):
+    """C1: a set-but-missing caption_path (e.g. edited caption deleted) regenerates."""
+    import cv2
+    import numpy as np
+    from src.core.manifest import Manifest, ManifestRecord
+    from src.core.runners import run_captions
+    pdir = _proj(tmp_path)
+    (pdir / "raw/palette").mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(pdir / "raw/palette/r.jpg"), np.zeros((40, 40, 3), np.uint8))
+    m = Manifest.load(pdir)
+    m.upsert(ManifestRecord(id="r1", sha256="r", image="raw/palette/r.jpg",
+                            class_name="palette", caption_path="captions/r1.txt",
+                            caption_edited=True))          # edited, but file never written
+    m.save()
+    out = run_captions(pdir)
+    assert out["captioned"] == 1                            # self-healed + regenerated
+    rec = Manifest.load(pdir).get("r1")
+    assert rec.caption_path and (pdir / rec.caption_path).exists()
+
+
+def test_reset_generate_deletes_synthetic_captions(tmp_path):
+    """C2: reset('generate') removes synthetic caption files, not just images."""
+    from src.core.manifest import Manifest, ManifestRecord
+    pdir = _proj(tmp_path)
+    (pdir / "captions").mkdir(parents=True, exist_ok=True)
+    (pdir / "captions/syn1.txt").write_text("x")
+    m = Manifest.load(pdir)
+    m.upsert(ManifestRecord(id="syn1", sha256="s", image="generated/syn1.png",
+                            class_name="palette", synthetic=True,
+                            caption_path="captions/syn1.txt"))
+    m.save()
+    reset_phase(pdir, "generate")
+    assert not (pdir / "captions/syn1.txt").exists()        # orphan cleaned
