@@ -37,8 +37,15 @@ phases:
       fallback_auto: true      # promptless records → automatic mask generator
 
   # ── Phase 3: anti-bleed captions ───────────────────────────────────────────
+  # captioner: template (random-background bank, instant, offline) OR
+  #            blip (image-aware: describes the actual photo, prepends the trigger)
   captioning:
     captioner: template
+    blip:                        # used when captioner: blip
+      model_id: Salesforce/blip-image-captioning-base
+      device: cuda
+      max_new_tokens: 40
+      template: "{trigger} {description}"
     template:
       patterns:                # slots: {trigger} {class_phrase} {background}
         - "a photo of {trigger} {class_phrase}, {background}"

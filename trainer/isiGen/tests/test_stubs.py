@@ -15,7 +15,7 @@ from src.stages.scaffolds.base import SCAFFOLD_SOURCES
 def test_all_seams_registered():
     assert CONTROL_MAP_EXTRACTORS.names() == ["canny", "depth_anything_v2"]
     assert MASKERS.names() == ["sam2"]
-    assert CAPTIONERS.names() == ["template"]
+    assert CAPTIONERS.names() == ["blip", "template"]
     assert LORA_TRAINERS.names() == ["diffusers_sdxl"]
     assert SCAFFOLD_SOURCES.names() == ["box3d_procedural", "depth_remix"]
     assert IMAGE_GENERATORS.names() == ["sdxl_controlnet"]
@@ -35,6 +35,8 @@ def test_heavy_plugins_construct_without_loading_models():
     assert qf._model is None
     mk = MASKERS.create("sam2")
     assert mk._predictor is None
+    cap = CAPTIONERS.create("blip", project_dir="/tmp/x")
+    assert cap._model is None and cap.template == "{trigger} {description}"
 
 
 def test_sdxl_control_map_preprocessing():

@@ -48,8 +48,9 @@ async def run_phase(request: Request, name: str, phase: str,
         raise HTTPException(status_code=404,
                             detail=f"unknown/not-yet-runnable phase {phase!r} "
                                    f"(runnable: {sorted(_PHASES)})")
-    if phase == "lora" and body and body.max_steps:
-        fn = partial(run_lora, d, max_steps=body.max_steps)
+    if phase == "lora":
+        fn = partial(run_lora, d, max_steps=(body.max_steps if body else None),
+                     runs_dir=request.app.state.settings.runs_dir)
     else:
         fn = factory(d)
     try:

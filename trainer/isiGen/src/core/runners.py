@@ -391,11 +391,14 @@ def run_export(project_dir: Path) -> dict:
     return out
 
 
-def run_lora(project_dir: Path, *, max_steps: int | None = None) -> dict:
+def run_lora(project_dir: Path, *, max_steps: int | None = None,
+             runs_dir: Path | None = None) -> dict:
     """Phase 4 — train the project LoRA; returns the weights path.
 
     ``max_steps`` overrides the configured step count for this run AND persists
-    it to project.yaml (so it becomes the new default)."""
+    it to project.yaml (so it becomes the new default). ``runs_dir`` is where the
+    run dir is written (default the repo's ``runs/``) — the Studio passes its
+    configured runs dir so the LoRA page / reset stay consistent."""
     from datetime import datetime
 
     from ..stages.lora.base import LORA_TRAINERS
@@ -410,8 +413,8 @@ def run_lora(project_dir: Path, *, max_steps: int | None = None) -> dict:
     cfg.setdefault("base_model", project.phase("generation").get("base_model"))
     cfg["project_dir"] = str(project_dir)
     trainer = LORA_TRAINERS.create(name, **cfg)
-    isigen_root = Path(__file__).resolve().parents[2]
-    run_dir = isigen_root / "runs" / "lora" / (
+    base = Path(runs_dir) if runs_dir is not None else Path(__file__).resolve().parents[2] / "runs"
+    run_dir = base / "lora" / (
         f"{project.name}_r{cfg.get('rank', 16)}_"
         f"{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}")
     weights = trainer.train(project, run_dir)
@@ -429,7 +432,9 @@ def run_captions(project_dir: Path, *, force: bool = False) -> dict:
     project_dir = Path(project_dir)
     cfg = project.phase("captioning")
     name = cfg.get("captioner", "template")
-    captioner = CAPTIONERS.create(name, **(cfg.get(name) or {}))
+    cap_cfg = dict(cfg.get(name) or {})
+    cap_cfg["project_dir"] = str(project_dir)        # BLIP reads each image
+    captioner = CAPTIONERS.create(name, **cap_cfg)
     manifest = Manifest.load(project_dir)
     active = manifest.active()
     done = skipped_edited = 0

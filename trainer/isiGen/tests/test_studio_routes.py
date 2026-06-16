@@ -47,10 +47,13 @@ def test_run_lora_autowires_weights(tiny_project, monkeypatch):
             return Path(run_dir) / "pytorch_lora_weights.safetensors"
 
     monkeypatch.setattr(LORA_TRAINERS, "create", lambda name, **cfg: _FakeTrainer())
-    out = runners.run_lora(pdir)
+    runs = Path(pdir).parent / "isolated_runs"
+    out = runners.run_lora(pdir, runs_dir=runs)
     wired = load_project(pdir).phase("generation")["lora_weights"]
     assert wired == out["lora_weights"]
-    assert "lora" in wired and pdir.name in wired
+    # honors runs_dir (was hardcoded to the repo's runs/ before the fix)
+    assert wired.startswith(str(runs / "lora"))
+    assert (runs / "lora").is_dir()
 
 
 def test_run_lora_max_steps_override_persists(tiny_project):
