@@ -61,3 +61,33 @@ def test_inpaint_generator_requires_base_and_mask():
     gen = IMAGE_GENERATORS.create("sdxl_inpaint")
     with pytest.raises(ValueError):
         gen.generate("a polybag", np.zeros((8, 8), np.uint8), seed=0)   # no base/mask
+
+
+def test_paste_not_tiny_respects_min_frac(tmp_path):
+    """A1: a small-source object is still pasted at >= min_frac of the frame."""
+    pdir = create_project(tmp_path / "data", "cp2", [POLY])
+    for sub in ("raw/polybag", "maps/depth", "maps/mask"):
+        (pdir / sub).mkdir(parents=True, exist_ok=True)
+    m = Manifest.load(pdir)
+    m.upsert(_record(pdir, "a", obj_box=(20, 26, 20, 26)))   # 6x6 object (native ~0.075)
+    m.upsert(_record(pdir, "b", obj_box=(50, 56, 50, 56)))
+    m.save()
+    src = CopyPasteScaffolds(project_dir=str(pdir), seed=2, min_frac=0.25, dilate=1)
+    _depth, _label, meta = next(src.generate(load_project(pdir), 1))
+    ys = np.nonzero(meta["inpaint"].any(axis=1))[0]          # inpaint is HxW
+    height = int(ys.max() - ys.min() + 1)
+    assert height >= int(0.20 * 80)                          # floored, not the 6px native
+
+
+def test_place_avoids_background_object(tmp_path):
+    """A2: placement keeps the paste clear of the background's own object."""
+    import random
+    src = CopyPasteScaffolds(project_dir=".", seed=1, avoid_overlap=True,
+                             placement_tries=80)
+    W = H = 100
+    bg_obj = np.zeros((H, W), bool)
+    bg_obj[:, :50] = True                                    # left half occupied
+    bin_r = np.ones((20, 20), bool)                          # solid object
+    px, py = src._place(random.Random(0), W, H, 20, 20, bin_r, bg_obj)
+    overlap = int(np.logical_and(bg_obj[py:py + 20, px:px + 20], bin_r).sum())
+    assert overlap == 0 and px >= 50                         # placed on the free (right) side

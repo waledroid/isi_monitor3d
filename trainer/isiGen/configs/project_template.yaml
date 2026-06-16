@@ -83,8 +83,12 @@ phases:
     depth_remix: {}
     box3d_procedural: {}
     copy_paste:                # depth-aware paste of a real object onto a real bg
-      scale_range: [0.30, 0.60]
-      depth_scale: true        # nearer (brighter depth) ⇒ larger paste
+      scale_jitter: [0.8, 1.2] # jitter around the object's REAL frame-size (not tiny)
+      min_frac: 0.25           # floor: object height >= this fraction of the frame
+      max_frac: 0.85           # ceiling
+      depth_scale: true        # nearer (brighter depth) ⇒ mildly larger paste
+      avoid_overlap: true      # place clear of the bg's own object (clean doubles)
+      placement_tries: 30
       dilate: 9                # inpaint-mask dilation around the paste (seam)
   generation:
     generator: sdxl_controlnet   # OR sdxl_inpaint (pairs with copy_paste scaffolds)

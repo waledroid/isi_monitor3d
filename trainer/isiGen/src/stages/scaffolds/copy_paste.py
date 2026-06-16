@@ -38,14 +38,22 @@ if TYPE_CHECKING:
 @SCAFFOLD_SOURCES.register("copy_paste")
 class CopyPasteScaffolds(ScaffoldSource):
     def __init__(self, project_dir: str | None = None, seed: int | None = None,
-                 scale_range: tuple = (0.30, 0.60), depth_scale: bool = True,
+                 scale_jitter: tuple = (0.8, 1.2), min_frac: float = 0.25,
+                 max_frac: float = 0.85, depth_scale: bool = True,
+                 avoid_overlap: bool = True, placement_tries: int = 30,
                  dilate: int = 9, **cfg) -> None:
-        super().__init__(project_dir=project_dir, seed=seed, scale_range=scale_range,
-                         depth_scale=depth_scale, dilate=dilate, **cfg)
+        super().__init__(project_dir=project_dir, seed=seed, scale_jitter=scale_jitter,
+                         min_frac=min_frac, max_frac=max_frac, depth_scale=depth_scale,
+                         avoid_overlap=avoid_overlap, placement_tries=placement_tries,
+                         dilate=dilate, **cfg)
         self.project_dir = project_dir            # injected by the runner
         self.seed = seed
-        self.scale_range = tuple(scale_range)
+        self.scale_jitter = tuple(scale_jitter)   # jitter around the object's REAL size
+        self.min_frac = float(min_frac)           # min/max object height as frac of frame
+        self.max_frac = float(max_frac)
         self.depth_scale = bool(depth_scale)
+        self.avoid_overlap = bool(avoid_overlap)  # place clear of the bg's own object
+        self.placement_tries = int(placement_tries)
         self.dilate = int(dilate)
 
     def generate(self, project: ProjectConfig, count: int
@@ -97,13 +105,16 @@ class CopyPasteScaffolds(ScaffoldSource):
         crop_bin = obj_bin[y0:y1, x0:x1]
         bh, bw = crop_bin.shape
 
-        # --- depth-aware target scale + placement ---
-        scale = rng.uniform(*self.scale_range)
-        cx = rng.randint(int(0.2 * W), int(0.8 * W))
-        cy = rng.randint(int(0.4 * H), int(0.9 * H))
-        if self.depth_scale:
-            scale *= 0.5 + float(bg_depth[cy, cx]) / 255.0       # nearer ⇒ bigger
-        th = max(8, int(scale * H))
+        # --- target size: anchor to the object's REAL frame-fraction (not an
+        #     arbitrary fraction → no tiny pastes), jitter + clamp to [min,max] ---
+        native_frac = bh / float(obj_img.shape[0])               # object height ÷ its frame
+        frac = native_frac * rng.uniform(*self.scale_jitter)
+        if self.depth_scale:                                     # mild near⇒bigger nudge
+            cx0 = rng.randint(int(0.2 * W), int(0.8 * W))
+            cy0 = rng.randint(int(0.4 * H), int(0.9 * H))
+            frac *= 0.85 + 0.30 * (float(bg_depth[cy0, cx0]) / 255.0)
+        frac = float(np.clip(frac, self.min_frac, self.max_frac))
+        th = max(8, int(frac * H))
         tw = max(8, int(bw * th / bh))
         if tw >= W or th >= H:                                   # fit to frame
             f = min(W / tw, H / th) * 0.9
@@ -113,8 +124,9 @@ class CopyPasteScaffolds(ScaffoldSource):
         bin_r = cv2.resize(crop_bin.astype(np.uint8), (tw, th),
                            interpolation=cv2.INTER_NEAREST).astype(bool)
 
-        px = int(np.clip(cx - tw // 2, 0, W - tw))
-        py = int(np.clip(cy - th // 2, 0, H - th))
+        # --- placement: pick a spot CLEAR of the bg's own object (clean doubles) ---
+        bg_obj = bg_mask.any(axis=2)
+        px, py = self._place(rng, W, H, tw, th, bin_r, bg_obj)
 
         # --- composite RGB + depth (paste real pixels where the object is) ---
         base = bg_img.copy()
@@ -138,6 +150,29 @@ class CopyPasteScaffolds(ScaffoldSource):
 
         present = sorted({obj.class_name} | self._classes_in(bg_mask, colors))
         return comp_depth, label, base, inpaint, present
+
+    def _place(self, rng, W, H, tw, th, bin_r, bg_obj):
+        """Top-left (px,py) for the paste. When avoid_overlap, try several random
+        spots and keep the one whose object pixels least overlap the background's
+        own object (→ clean, separate doubles); else just random/centered."""
+        def at(cx, cy):
+            return (int(np.clip(cx - tw // 2, 0, W - tw)),
+                    int(np.clip(cy - th // 2, 0, H - th)))
+
+        if not self.avoid_overlap or not bg_obj.any():
+            return at(rng.randint(int(0.2 * W), int(0.8 * W)),
+                      rng.randint(int(0.4 * H), int(0.9 * H)))
+        best, best_ov = None, 1e9
+        for _ in range(max(1, self.placement_tries)):
+            px, py = at(rng.randint(tw // 2, W - tw // 2),
+                        rng.randint(th // 2, H - th // 2))
+            region = bg_obj[py:py + th, px:px + tw]
+            ov = int(np.logical_and(region, bin_r).sum())         # object-on-object px
+            if ov == 0:
+                return px, py
+            if ov < best_ov:
+                best, best_ov = (px, py), ov
+        return best
 
     @staticmethod
     def _classes_in(mask_bgr, colors) -> set[str]:
