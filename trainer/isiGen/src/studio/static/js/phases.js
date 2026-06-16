@@ -22,7 +22,7 @@ const PHASES = [
   { key: "masks",    n: 3, title: "Ground-truth masks",  page: "masks", run: "masks",
     counts: (s) => `${s.masked} masked · ${s.prompted} prompted · ${s.needs_review} review`,
     state: (s) => { const a = real(s); if (!a) return "todo";
-      if (s.masked >= a && !s.needs_review) return "done";
+      if (s.masked >= a) return "done";          // green once all are masked; review is optional
       return s.masked ? "partial" : "todo"; } },
   { key: "captions", n: 4, title: "Anti-bleed captions", page: "captions", run: "captions",
     counts: (s) => `${s.captioned} written · ${s.caption_edited} edited`,
@@ -37,9 +37,7 @@ const PHASES = [
     state: (s) => (s.scaffolds?.total ?? 0) > 0 ? "done" : "todo" },
   { key: "generate", n: 7, title: "Mint synthetics", page: "mint", run: "generate",
     counts: (s) => { const c = s.scaffolds || {}; return `${s.synthetic ?? 0} minted · ${c.pending ?? 0} queued`; },
-    state: (s) => { const minted = s.synthetic ?? 0, pending = s.scaffolds?.pending ?? 0;
-      if (minted > 0 && !pending) return "done";
-      return minted ? "partial" : "todo"; } },
+    state: (s) => (s.synthetic ?? 0) > 0 ? "done" : "todo" },   // green once anything is minted
   { key: "export",   n: 8, title: "Filter + export",     run: "export",
     counts: (s) => `${s.clip_scored ?? 0} scored · yolo_seg ${s.exported ? "OK" : "—"}`,
     state: (s) => s.exported ? "done" : "todo" },
