@@ -152,3 +152,23 @@ def test_reset_lora_clears_weights_and_runs(tmp_path):
 def test_resettable_list():
     assert set(RESETTABLE) == {"maps", "masks", "captions", "lora",
                                "scaffolds", "generate", "export"}
+
+
+def test_captions_skip_synthetic(tmp_path):
+    """Phase 4 captions only real curated images, not minted (synthetic) records."""
+    import cv2
+    import numpy as np
+    from src.core.manifest import Manifest, ManifestRecord
+    from src.core.runners import run_captions
+    pdir = _proj(tmp_path)                              # class: palette
+    m = Manifest.load(pdir)
+    (pdir / "raw/palette").mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(pdir / "raw/palette/r.jpg"), np.zeros((40, 40, 3), np.uint8))
+    m.upsert(ManifestRecord(id="real1", sha256="r", image="raw/palette/r.jpg",
+                            class_name="palette"))
+    m.upsert(ManifestRecord(id="syn1", sha256="s", image="generated/syn1.png",
+                            class_name="palette", synthetic=True))
+    m.save()
+    out = run_captions(pdir)
+    assert out["captioned"] == 1                        # only the real record
+    assert Manifest.load(pdir).get("syn1").caption_path is None

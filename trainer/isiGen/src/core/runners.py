@@ -436,7 +436,9 @@ def run_captions(project_dir: Path, *, force: bool = False) -> dict:
     cap_cfg["project_dir"] = str(project_dir)        # BLIP reads each image
     captioner = CAPTIONERS.create(name, **cap_cfg)
     manifest = Manifest.load(project_dir)
-    active = manifest.active()
+    # Captions are LoRA training inputs → REAL curated images only; minted
+    # (synthetic) records are outputs and must not be captioned.
+    active = [r for r in manifest.active() if not getattr(r, "synthetic", False)]
     done = skipped_edited = 0
     for i, rec in enumerate(active, 1):
         progress.report(i, len(active), "captions")
