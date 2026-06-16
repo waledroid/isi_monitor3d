@@ -80,14 +80,16 @@ async def status(request: Request, name: str) -> dict:
     recs = list(m.records.values())
     active = [r for r in recs if not r.excluded]
     # Phases 1-4 (curate/maps/masks/captions) act on REAL curated images; minted
-    # (synthetic) records must not count toward their completion, or those phases
-    # could never go green once minting has added synthetic records.
-    real = [r for r in active if not getattr(r, "synthetic", False)]
+    # (synthetic) records and background-only images (paste targets, no object) must
+    # not count toward their completion, or those phases could never go green.
+    real = [r for r in active
+            if not getattr(r, "synthetic", False) and not r.background]
     return {
         "lora_trained": _lora_trained(d, name, request.app.state.settings.runs_dir),
         "records": len(recs),
         "excluded": sum(r.excluded for r in recs),
         "real": len(real),
+        "backgrounds": sum(r.background for r in active),
         "by_class": {c: sum(r.class_name == c for r in real)
                      for c in {r.class_name for r in real}},
         "depth": sum(r.depth_map is not None for r in real),

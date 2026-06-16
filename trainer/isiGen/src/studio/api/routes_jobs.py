@@ -37,6 +37,7 @@ _PHASES = {
 
 class RunBody(BaseModel):
     max_steps: int | None = None        # LoRA only — overrides + persists step count
+    paste_count: int | list | None = None   # scaffolds only — objects pasted per scene
 
 
 @router.post("/api/p/{name}/run/{phase}")
@@ -51,6 +52,9 @@ async def run_phase(request: Request, name: str, phase: str,
     if phase == "lora":
         fn = partial(run_lora, d, max_steps=(body.max_steps if body else None),
                      runs_dir=request.app.state.settings.runs_dir)
+    elif phase == "scaffolds":
+        fn = partial(run_scaffolds, d,
+                     paste_count=(body.paste_count if body else None))
     else:
         fn = factory(d)
     try:

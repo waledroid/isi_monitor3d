@@ -187,6 +187,22 @@ def test_status_phase_counts_ignore_synthetic_records(tiny_project):
     assert s["synthetic"] == 1
 
 
+def test_status_excludes_background_images(tiny_project):
+    """Background-only images (paste targets, no object) must not count toward the
+    'real' object phases, and surface as their own 'backgrounds' count."""
+    from src.core.manifest import Manifest, ManifestRecord
+    pdir, _ = tiny_project
+    m = Manifest.load(pdir)
+    m.upsert(ManifestRecord(id="bg00000001", sha256="b" * 12,
+                            image="raw/__bg__/bg00000001.jpg", class_name="",
+                            width=64, height=64, background=True))
+    m.save()
+    with _client() as c:
+        s = c.get("/api/p/tiny/status").json()
+    assert s["real"] == 3                 # 3 real curated, background excluded
+    assert s["backgrounds"] == 1
+
+
 def test_status_reports_lora_trained(tiny_project, tmp_path):
     with _client() as c:
         assert c.get("/api/p/tiny/status").json()["lora_trained"] is False

@@ -60,6 +60,9 @@ class ManifestRecord(BaseModel):
     height: int = 0
     split: Literal["train", "val"] = "train"
     excluded: bool = False                    # Studio reject — all phases skip when true
+    background: bool = False                  # empty-scene image (no object) — a paste
+                                              # target for copy_paste; skips mask/caption/
+                                              # LoRA/export, never a training sample
 
     # Phase 2 — dual-layer maps
     depth_map: str | None = None              # maps/depth/<id>.png

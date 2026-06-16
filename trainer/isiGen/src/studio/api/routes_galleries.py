@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from ...core.project import load_project
 from ...core.runners import load_scaffold_index
 from .deps import project_dir
 
@@ -20,7 +21,11 @@ router = APIRouter()
 @router.get("/api/p/{name}/scaffolds")
 async def scaffolds(request: Request, name: str) -> dict:
     d = project_dir(request, name)
-    return {"scaffolds": load_scaffold_index(d)}
+    cfg = load_project(d).phase("scaffolds")
+    sources = list(cfg.get("sources", []))
+    paste_count = (cfg.get("copy_paste") or {}).get("paste_count", 1)
+    return {"scaffolds": load_scaffold_index(d), "sources": sources,
+            "paste_count": paste_count}
 
 
 @router.get("/media/{name}/scaffold/{sid}/{layer}")

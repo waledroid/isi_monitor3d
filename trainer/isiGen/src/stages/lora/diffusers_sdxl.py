@@ -66,7 +66,7 @@ class DiffusersSdxlLoraTrainer(LoraTrainer):
         manifest = Manifest.load(project_dir)
         items = []
         for rec in manifest.active():
-            if getattr(rec, "synthetic", False) or not rec.caption_path:
+            if getattr(rec, "synthetic", False) or rec.background or not rec.caption_path:
                 continue
             img = project_dir / rec.image
             cap = project_dir / rec.caption_path
@@ -218,18 +218,39 @@ class DiffusersSdxlLoraTrainer(LoraTrainer):
         return weights
 
     @staticmethod
-    def _plot_losses(losses: list[float], out_path: Path) -> None:
-        """Save a training loss-curve PNG (Studio shows it). Never fails training."""
+    def _ema(losses: list[float], alpha: float = 0.1) -> list[float]:
+        """Exponential moving average — reveals the trend under diffusion loss's
+        per-step timestep noise (the raw curve is intrinsically jagged)."""
+        out: list[float] = []
+        s = losses[0] if losses else 0.0
+        for x in losses:
+            s = alpha * x + (1 - alpha) * s
+            out.append(s)
+        return out
+
+    @classmethod
+    def _plot_losses(cls, losses: list[float], out_path: Path) -> None:
+        """Save a training loss-curve PNG (Studio shows it). Never fails training.
+
+        Diffusion LoRA loss is dominated by the random timestep sampled each step,
+        so the raw curve is jagged and barely trends down even when the concept is
+        being learned. We draw the raw loss faintly + a bold EMA so the actual
+        trend is readable."""
         try:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
+            steps = range(1, len(losses) + 1)
             fig, ax = plt.subplots(figsize=(6, 3.2))
-            ax.plot(range(1, len(losses) + 1), losses, lw=1, color="#1c7a3f")
+            ax.plot(steps, losses, lw=0.8, color="#1c7a3f", alpha=0.30, label="raw")
+            if losses:
+                ax.plot(steps, cls._ema(losses), lw=2.0, color="#0d4023",
+                        label="EMA (trend)")
             ax.set_xlabel("step")
             ax.set_ylabel("loss")
             ax.set_title("LoRA training loss")
             ax.grid(alpha=0.3)
+            ax.legend(fontsize=8, loc="upper right")
             fig.tight_layout()
             fig.savefig(out_path, dpi=110)
             plt.close(fig)

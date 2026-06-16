@@ -6,6 +6,17 @@
 <section class="card" id="gal-root" data-project="{{ project }}">
   <h1>Phase 6 — Synthetic scaffolds</h1>
   <p class="msg">Each pair is a procedural <b>control map</b> (depth the generator follows) + its <b>ground-truth mask</b> (the label the minted image inherits).</p>
+  <div class="toolbar" id="paste-toolbar" hidden>
+    <label>Objects per background
+      <select id="paste-count">
+        <option value="1">Exactly 1</option>
+        <option value="1-2">1–2 (random)</option>
+      </select>
+    </label>
+    <button id="scaffold-run">Generate scaffolds</button>
+    <span id="scaffold-msg" class="msg"></span>
+  </div>
+  <p class="msg" id="paste-help" hidden>copy_paste pastes this many real objects onto each background image (clean, non-overlapping). Saved as the project default.</p>
   <div id="scaffold-gallery" class="gallery">loading…</div>
 </section>
 {% endblock %}

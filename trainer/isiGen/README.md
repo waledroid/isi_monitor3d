@@ -14,7 +14,8 @@ into an unlimited, perfectly-labeled synthetic dataset:
    exhaustive background description
 4. **LoRA training** (SDXL UNet, fp16 + grad-checkpointing + 8-bit AdamW)
 5. **Pipeline init** — SDXL + depth ControlNet + fp16-fix VAE, CPU offload
-6. **Synthetic scaffolds** — procedural layouts → paired control map + mask
+6. **Synthetic scaffolds** — procedural layouts → paired control map + mask, OR
+   **copy_paste**: paste real object(s) onto empty `bg/` backgrounds (1–N per scene)
 7. **Mint** — ControlNet forces geometry, prompts randomize backgrounds
 8. **Auto-label + filter** — mask aligns by construction; CLIP-score filter; YOLO-seg export
 

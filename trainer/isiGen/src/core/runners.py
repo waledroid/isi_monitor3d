@@ -132,7 +132,9 @@ def run_masks(project_dir: Path, *, force: bool = False) -> dict:
     single_class = len(project.classes) == 1
 
     manifest = Manifest.load(project_dir)
-    todo = [r for r in manifest.active() if force or r.mask is None]
+    # Background images carry no object — SAM2 must not invent one on an empty scene.
+    todo = [r for r in manifest.active()
+            if (force or r.mask is None) and not r.background]
     if not todo:
         return {"masked": 0}
     logger.info("masks: %d image(s) to process", len(todo))
@@ -212,14 +214,22 @@ def save_scaffold_index(project_dir: Path, entries: list[dict]) -> None:
     os.replace(tmp, path)
 
 
-def run_scaffolds(project_dir: Path, *, count: int | None = None) -> dict:
+def run_scaffolds(project_dir: Path, *, count: int | None = None,
+                  paste_count: int | list | None = None) -> dict:
     """Phase 6 — materialize (control map, ground-truth mask) pairs under
     scaffolds/ + an index the generation phase consumes. Count splits evenly
-    across the configured sources."""
+    across the configured sources.
+
+    ``paste_count`` (the scaffolds-page toggle) overrides + persists how many
+    objects copy_paste lands per scene (an int, or ``[lo, hi]`` for random)."""
     from ..stages.scaffolds.base import SCAFFOLD_SOURCES
+    from .project import save_project
     project = load_project(project_dir)
     project_dir = Path(project_dir)
     cfg = project.phase("scaffolds")
+    if paste_count is not None:
+        cfg.setdefault("copy_paste", {})["paste_count"] = paste_count
+        save_project(project_dir, project)
     gen_cfg = project.phase("generation")
     sources = list(cfg.get("sources", ["box3d_procedural"]))
     total = int(count if count is not None else cfg.get("count", 100))
@@ -397,7 +407,7 @@ def run_export(project_dir: Path) -> dict:
     include_real = bool(cfg.pop("include_real", True))
     exporters = cfg.pop("exporters", ["yolo_seg"])
     manifest = Manifest.load(project_dir)
-    records = [r for r in manifest.active() if r.mask and r.image
+    records = [r for r in manifest.active() if r.mask and r.image and not r.background
                and (include_real or getattr(r, "synthetic", False))]
     out: dict = {"records": len(records)}
     for name in exporters:
@@ -454,8 +464,10 @@ def run_captions(project_dir: Path, *, force: bool = False) -> dict:
     captioner = CAPTIONERS.create(name, **cap_cfg)
     manifest = Manifest.load(project_dir)
     # Captions are LoRA training inputs → REAL curated images only; minted
-    # (synthetic) records are outputs and must not be captioned.
-    active = [r for r in manifest.active() if not getattr(r, "synthetic", False)]
+    # (synthetic) records are outputs and background images (no object) are paste
+    # targets — neither is captioned.
+    active = [r for r in manifest.active()
+              if not getattr(r, "synthetic", False) and not r.background]
     done = skipped_edited = 0
     for i, rec in enumerate(active, 1):
         progress.report(i, len(active), "captions")

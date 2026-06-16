@@ -28,6 +28,13 @@ def ingest(project_dir: Path, project: ProjectConfig, source: Path, *,
     ``class_name``: tag everything with one class. ``auto_class``: each image's
     immediate parent directory name must be a project class. Exactly one of the
     two must be chosen.
+
+    **Folder convention.** A directory named ``bg`` or ``background`` (anywhere in
+    the tree) holds **background-only** images — empty scenes with no object. They
+    are recorded with ``background=True``, no class, and no mask import; copy_paste
+    uses them as clean paste targets. An ``img`` directory is a pass-through to its
+    parent class, so ``<class>/img/*.jpg`` tags ``<class>`` (and ``<class>/bg/*``
+    is background). The ``bg``/``background`` rule wins even in explicit-class mode.
     """
     if bool(class_name) == bool(auto_class):
         raise ValueError("choose exactly one of class_name=... or auto_class=True")
@@ -40,26 +47,37 @@ def ingest(project_dir: Path, project: ProjectConfig, source: Path, *,
 
     manifest = Manifest.load(project_dir)
     known_hashes = {r.sha256 for r in manifest.records.values()}
-    added = skipped = warned = masks_imported = 0
+    added = skipped = warned = masks_imported = backgrounds = 0
 
     ctx = prepare_source(Path(source))      # load any COCO / YOLO-names once
     files = sorted(p for p in Path(source).rglob("*")
                    if p.is_file() and p.suffix.lower() in IMAGE_EXTS)
     for path in files:
-        cls = class_name if class_name is not None else path.parent.name
-        try:
-            project.class_by_name(cls)
-        except KeyError:
-            logger.warning("curate: %s — parent dir %r is not a project class; skipped",
-                           path.name, cls)
-            skipped += 1
-            continue
+        # --- resolve class vs background from the folder convention ---
+        parent = path.parent.name.lower()
+        is_bg = parent in ("bg", "background")
+        if is_bg:
+            cls = ""                                       # background — class-agnostic
+        elif class_name is not None:
+            cls = class_name
+        elif parent == "img":
+            cls = path.parent.parent.name                 # <class>/img/* → <class>
+        else:
+            cls = path.parent.name
+        if not is_bg:
+            try:
+                project.class_by_name(cls)
+            except KeyError:
+                logger.warning("curate: %s — parent dir %r is not a project class; skipped",
+                               path.name, cls)
+                skipped += 1
+                continue
         digest = sha256_file(path)
         if digest in known_hashes:
             skipped += 1
             continue
         rec_id = digest[:12]
-        rel_image = f"raw/{cls}/{rec_id}.jpg"
+        rel_image = f"raw/{'__bg__' if is_bg else cls}/{rec_id}.jpg"
         try:
             w, h = resave_clean(path, project_dir / rel_image, quality=quality)
         except Exception as exc:
@@ -73,30 +91,35 @@ def ingest(project_dir: Path, project: ProjectConfig, source: Path, *,
         rec = ManifestRecord(
             id=rec_id, sha256=digest, source_path=str(path),
             image=rel_image, class_name=cls, width=w, height=h,
+            background=is_bg,
         )
-        # Import an existing mask (LabelMe / YOLO / COCO) if one is present for
-        # this image — skips SAM2 for this record; promptless ones still go to
-        # phase 3.
-        try:
-            mask_bgr = import_mask(path, project, (h, w), ctx)
-        except Exception as exc:
-            logger.warning("curate: mask import failed for %s (%s)", path.name, exc)
-            mask_bgr = None
-        if mask_bgr is not None:
-            rel_mask = f"maps/mask/{rec_id}.png"
-            (project_dir / rel_mask).parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(project_dir / rel_mask), mask_bgr)
-            rec.mask = rel_mask
-            rec.mask_source = "imported"
-            rec.needs_review = False
-            masks_imported += 1
+        # Background images carry no object → never get a mask (SAM2 would invent
+        # one). Object images: import an existing mask (LabelMe / YOLO / COCO) if
+        # present — skips SAM2 for this record; promptless ones still go to phase 3.
+        if not is_bg:
+            try:
+                mask_bgr = import_mask(path, project, (h, w), ctx)
+            except Exception as exc:
+                logger.warning("curate: mask import failed for %s (%s)", path.name, exc)
+                mask_bgr = None
+            if mask_bgr is not None:
+                rel_mask = f"maps/mask/{rec_id}.png"
+                (project_dir / rel_mask).parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(project_dir / rel_mask), mask_bgr)
+                rec.mask = rel_mask
+                rec.mask_source = "imported"
+                rec.needs_review = False
+                masks_imported += 1
         manifest.upsert(rec)
         known_hashes.add(digest)
         added += 1
+        if is_bg:
+            backgrounds += 1
 
     manifest.save()
-    logger.info("curate: %d added, %d skipped, %d size-warnings, %d masks imported "
-                "(%d total records)", added, skipped, warned, masks_imported,
-                len(manifest.records))
+    logger.info("curate: %d added (%d background), %d skipped, %d size-warnings, "
+                "%d masks imported (%d total records)", added, backgrounds, skipped,
+                warned, masks_imported, len(manifest.records))
     return {"added": added, "skipped": skipped, "warned": warned,
-            "masks_imported": masks_imported, "total": len(manifest.records)}
+            "masks_imported": masks_imported, "backgrounds": backgrounds,
+            "total": len(manifest.records)}

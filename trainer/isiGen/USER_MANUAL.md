@@ -163,6 +163,33 @@ the tree is just your own class names:
 > uses each image's *immediate* parent folder as its class, so
 > `palette/aisle3/img.jpg` → class `palette`.
 
+### Background images for paste-then-harmonize (optional but recommended)
+
+If you'll use the **copy_paste** scaffold path (Phase 6), add a folder named
+**`bg`** or **`background`** with **empty-scene photos that contain no objects**
+(e.g. an empty conveyor, a bare aisle). isiGen pastes your real objects onto these
+clean backgrounds, so the pasted object can never overlap an existing one — you
+get exact labels and clean, deliberate "doubles". Two equivalent layouts:
+
+```
+~/photos/                         OR        ~/photos/
+└── polybag/                                ├── polybag/          ← class images
+    ├── img/      ← class images            │   ├── img_0001.jpg
+    │   ├── img_0001.jpg                     │   └── ...
+    │   └── ...                              └── bg/               ← empty backgrounds
+    └── bg/       ← empty backgrounds            ├── empty_01.jpg
+        ├── empty_01.jpg                         └── ...
+        └── ...
+```
+
+A folder named `bg`/`background` is detected automatically (even if you picked a
+specific **Class**); an `img` folder is a pass-through to its parent class. Background
+images carry no class, get no mask/caption, and are never training samples — they
+are paste targets only. **~10–30 backgrounds is plenty for hundreds of minted
+images** (each background is reused evenly, but every reuse differs in object,
+size, placement, count, and harmonization seed). The Curate card shows a
+*"N backgrounds"* count.
+
 **What you do:**
 
 1. Click **open ›** on the Curate card (or the Curate page).
@@ -339,10 +366,23 @@ stays pixel-exact and the object blends in. Set `scaffolds.sources: [copy_paste]
 + `generation.generator: sdxl_inpaint`. Good for "same scene, varied object";
 `generation.strength` tunes blend (low) vs regenerate (high).
 
-**What you do:** click **Run**. To control how many to create, set the scaffold
-**count** in the project config (default 500). Each pair is one future synthetic
-image. **See it:** the card's **open ›** opens a gallery of every scaffold's
-**control map + mask** side by side.
+> **Use background images (avoids overlap).** Pasting onto your **object** photos
+> lands the object on top of an existing one → merged blobs. Instead ingest
+> empty-scene photos in a **`bg`/`background`** folder (Phase 1) — copy_paste then
+> pastes onto those clean backgrounds, so there's nothing to overlap. With no
+> backgrounds it falls back to pasting onto object images (placement still tries to
+> dodge the existing object).
+>
+> **Objects per background** — when `copy_paste` is a source, the Phase 6 page
+> shows an **Objects per background** toggle: **Exactly 1** or **1–2 (random)**.
+> "1–2" gives a mix of clean singles and deliberate doubles, all exactly labeled.
+> The choice is saved as the project default (`scaffolds.copy_paste.paste_count`).
+
+**What you do:** click **Generate scaffolds** (or **Run** on the board). To control
+how many to create, set the scaffold **count** in the project config (default 500);
+for copy_paste set the **Objects per background** toggle first. Each pair is one
+future synthetic image. **See it:** the card's **open ›** opens a gallery of every
+scaffold's **control map + mask** side by side.
 
 **Done when:** at least one scaffold pair exists.
 
