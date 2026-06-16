@@ -17,6 +17,7 @@ def _isolated_dirs(tmp_path, monkeypatch):
     """Every test gets a throwaway data/runs dir via the ISIGEN_ env prefix."""
     monkeypatch.setenv("ISIGEN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ISIGEN_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("ISIGEN_DISABLE_REAP", "1")     # never kill real procs in tests
     yield
 
 

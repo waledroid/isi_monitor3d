@@ -19,7 +19,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from ..core import progress
+from ..core import cleanup, progress
 
 
 class Job:
@@ -133,6 +133,7 @@ class JobRunner:
                 _job.progress = {"done": done, "total": total, "label": label}
 
             progress.set_sink(_set_progress)
+            cleanup.prepare_for_gpu(job.phase)        # reap orphans + free VRAM/gc
             try:
                 job.result = job.fn()
                 job.state = "done"
@@ -143,6 +144,7 @@ class JobRunner:
             finally:
                 progress.set_sink(None)
                 job.progress = None
+                cleanup.free_memory(f"after:{job.phase}")   # release VRAM/gc when done
                 job.finished = datetime.now().isoformat(timespec="seconds")
                 root.removeHandler(handler)
                 handler.close()
