@@ -94,6 +94,28 @@ def test_reset_scaffolds_deletes_dir(tmp_path):
     assert not (pdir / "scaffolds").exists()
 
 
+def test_run_scaffolds_writes_files_after_reset(tmp_path):
+    """Regression: reset deletes scaffolds/, so the re-run MUST recreate the dir
+    or cv2.imwrite fails silently → an index full of entries with no images."""
+    import shutil
+
+    from src.core.project import load_project, save_project
+    from src.core.runners import run_scaffolds
+    pdir = _proj(tmp_path)
+    # box3d_procedural needs no real data; force single source for a hermetic run
+    proj = load_project(pdir)
+    proj.phases["scaffolds"]["sources"] = ["box3d_procedural"]
+    save_project(pdir, proj)
+    shutil.rmtree(pdir / "scaffolds")                 # simulate a prior reset
+    out = run_scaffolds(pdir, count=3)
+    assert out["scaffolds"] == 3
+    pngs = list((pdir / "scaffolds").glob("*.png"))
+    assert len(pngs) == 6                             # 3 pairs, control + mask each
+    # every index entry has its files on disk (no phantom "pending without image")
+    for e in load_scaffold_index(pdir):
+        assert (pdir / e["control"]).exists() and (pdir / e["mask"]).exists()
+
+
 def test_reset_generate_removes_synthetic_and_repends(tmp_path):
     pdir = _proj(tmp_path)
     from src.core.manifest import ManifestRecord

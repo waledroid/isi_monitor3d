@@ -224,6 +224,9 @@ def run_scaffolds(project_dir: Path, *, count: int | None = None) -> dict:
     sources = list(cfg.get("sources", ["box3d_procedural"]))
     total = int(count if count is not None else cfg.get("count", 100))
     per = max(1, total // max(1, len(sources)))
+    # Ensure the output dir exists — a prior Reset deletes it, and cv2.imwrite
+    # fails SILENTLY into a missing dir (index entries but no image files).
+    (project_dir / "scaffolds").mkdir(parents=True, exist_ok=True)
     entries = load_scaffold_index(project_dir)
     seq = len(entries)
     made = 0

@@ -33,7 +33,7 @@ const PHASES = [
     counts: () => "hours-long GPU job",
     state: (s) => s.lora_trained ? "done" : "todo" },
   { key: "scaffolds",n: 6, title: "Synthetic scaffolds", page: "scaffolds", run: "scaffolds",
-    counts: (s) => { const c = s.scaffolds || {}; return `${c.total ?? 0} pairs · ${c.pending ?? 0} pending`; },
+    counts: (s) => { const c = s.scaffolds || {}; return `${c.total ?? 0} pairs · ${c.generated ?? 0} minted`; },
     state: (s) => (s.scaffolds?.total ?? 0) > 0 ? "done" : "todo" },
   { key: "generate", n: 7, title: "Mint synthetics", page: "mint", run: "generate",
     counts: (s) => { const c = s.scaffolds || {}; return `${s.synthetic ?? 0} minted · ${c.pending ?? 0} queued`; },
