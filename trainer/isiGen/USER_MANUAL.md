@@ -331,6 +331,14 @@ Two **sources** (set `scaffolds.sources` in the project config):
 Each scaffold's `status` is **`pending`** until it's minted in phase 7 — that's a
 queue marker, **not** a quality flag.
 
+**Third source — `copy_paste` (paste-then-harmonize):** instead of a new scene,
+it cuts a real object (via its mask) and pastes it onto a **real background** at a
+depth-aware position/scale, then phase 7's **`sdxl_inpaint`** generator
+regenerates *only* the pasted region (depth-ControlNet inpaint) so the background
+stays pixel-exact and the object blends in. Set `scaffolds.sources: [copy_paste]`
++ `generation.generator: sdxl_inpaint`. Good for "same scene, varied object";
+`generation.strength` tunes blend (low) vs regenerate (high).
+
 **What you do:** click **Run**. To control how many to create, set the scaffold
 **count** in the project config (default 500). Each pair is one future synthetic
 image. **See it:** the card's **open ›** opens a gallery of every scaffold's

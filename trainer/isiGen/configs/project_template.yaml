@@ -73,13 +73,21 @@ phases:
     lr: 1.0e-4
     batch_size: 1
     grad_accum: 4
+  # Two scaffold paths:
+  #  - depth_remix / box3d_procedural → NEW scenes (use generator: sdxl_controlnet)
+  #  - copy_paste → real backgrounds + a pasted object (use generator: sdxl_inpaint)
+  #    "paste-then-harmonize": keeps the real background, inpaints only the object.
   scaffolds:
     sources: [depth_remix, box3d_procedural]
     count: 500
     depth_remix: {}
     box3d_procedural: {}
+    copy_paste:                # depth-aware paste of a real object onto a real bg
+      scale_range: [0.30, 0.60]
+      depth_scale: true        # nearer (brighter depth) ⇒ larger paste
+      dilate: 9                # inpaint-mask dilation around the paste (seam)
   generation:
-    generator: sdxl_controlnet
+    generator: sdxl_controlnet   # OR sdxl_inpaint (pairs with copy_paste scaffolds)
     base_model: stabilityai/stable-diffusion-xl-base-1.0
     controlnet: diffusers/controlnet-depth-sdxl-1.0
     vae: madebyollin/sdxl-vae-fp16-fix   # stock SDXL VAE NaNs in fp16
@@ -87,6 +95,7 @@ phases:
     steps: 30
     guidance: 7.5
     controlnet_scale: 0.85
+    strength: 0.75             # sdxl_inpaint only: low = keep pasted pixels, high = regenerate
     lora_weights: null         # set after phase 4
     width: 1024
     height: 1024

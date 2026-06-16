@@ -17,8 +17,8 @@ def test_all_seams_registered():
     assert MASKERS.names() == ["sam2"]
     assert CAPTIONERS.names() == ["blip", "template"]
     assert LORA_TRAINERS.names() == ["diffusers_sdxl"]
-    assert SCAFFOLD_SOURCES.names() == ["box3d_procedural", "depth_remix"]
-    assert IMAGE_GENERATORS.names() == ["sdxl_controlnet"]
+    assert SCAFFOLD_SOURCES.names() == ["box3d_procedural", "copy_paste", "depth_remix"]
+    assert IMAGE_GENERATORS.names() == ["sdxl_controlnet", "sdxl_inpaint"]
     assert QUALITY_FILTERS.names() == ["clip_score"]
     assert DATASET_EXPORTERS.names() == ["labelme", "yolo_seg"]
 
@@ -37,6 +37,8 @@ def test_heavy_plugins_construct_without_loading_models():
     assert mk._predictor is None
     cap = CAPTIONERS.create("blip", project_dir="/tmp/x")
     assert cap._model is None and cap.template == "{trigger} {description}"
+    ip = IMAGE_GENERATORS.create("sdxl_inpaint", strength=0.6, steps=20)
+    assert ip._pipe is None and ip.strength == 0.6
 
 
 def test_sdxl_control_map_preprocessing():

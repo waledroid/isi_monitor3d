@@ -244,9 +244,19 @@ def run_scaffolds(project_dir: Path, *, count: int | None = None) -> dict:
             mask_rel = f"scaffolds/{sid}_mask.png"
             cv2.imwrite(str(project_dir / ctrl_rel), control)
             cv2.imwrite(str(project_dir / mask_rel), mask)
-            entries.append({"id": sid, "control": ctrl_rel, "mask": mask_rel,
-                            "classes": meta.get("classes", []),
-                            "source": name, "status": "pending"})
+            entry = {"id": sid, "control": ctrl_rel, "mask": mask_rel,
+                     "classes": meta.get("classes", []),
+                     "source": name, "status": "pending"}
+            # paste-then-harmonize extras: composite RGB to edit + region to inpaint
+            if meta.get("base") is not None:
+                base_rel = f"scaffolds/{sid}_base.png"
+                cv2.imwrite(str(project_dir / base_rel), meta["base"])
+                entry["base"] = base_rel
+            if meta.get("inpaint") is not None:
+                inp_rel = f"scaffolds/{sid}_inpaint.png"
+                cv2.imwrite(str(project_dir / inp_rel), meta["inpaint"])
+                entry["inpaint"] = inp_rel
+            entries.append(entry)
             made += 1
         logger.info("scaffolds[%s]: %d pair(s)", name, per)
     save_scaffold_index(project_dir, entries)
@@ -304,7 +314,14 @@ def run_generation(project_dir: Path, *, limit: int | None = None) -> dict:
                 continue
             prompt = _build_prompt(project, e.get("classes", []), rng)
             seed = seed_cfg if seed_cfg >= 0 else rng.randint(0, 2**31 - 1)
-            image = generator.generate(prompt, control, seed=seed)
+            # paste-then-harmonize: pass the composite base + inpaint region so the
+            # inpaint generator edits only the pasted object (depth generators ignore these)
+            extra: dict = {}
+            if e.get("base") and e.get("inpaint"):
+                extra["base_image"] = cv2.imread(str(project_dir / e["base"]))
+                extra["mask_image"] = cv2.imread(str(project_dir / e["inpaint"]),
+                                                  cv2.IMREAD_GRAYSCALE)
+            image = generator.generate(prompt, control, seed=seed, **extra)
             rid = f"syn{e['id'][2:]}"
             img_rel = f"generated/{rid}.png"
             cap_rel = f"captions/{rid}.txt"
