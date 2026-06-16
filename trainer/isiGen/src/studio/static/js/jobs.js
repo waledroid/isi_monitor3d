@@ -7,10 +7,11 @@ async function tick() {
   try {
     const { jobs } = await getJSON("/api/jobs");
     const j = jobs[0];
-    if (!j) { bar.textContent = ""; bar.className = "jobbar"; return; }
+    if (!j) { bar.textContent = ""; bar.className = "jobbar"; renderProgress(null); return; }
     bar.textContent = `${j.project} · ${j.phase} · ${j.state}${fmtPct(j.progress)}`;
     bar.className = "jobbar " + (j.state === "running" ? "running"
                                 : j.state === "failed" ? "failed" : "");
+    renderProgress(j);            // global bar (persists across page navigation)
   } catch { /* studio restarting */ }
 }
 setInterval(tick, 2000);
@@ -24,6 +25,7 @@ function fmtPct(p) {
 function renderProgress(job) {
   const host = document.getElementById("job-progress");
   if (!host) return;
+  if (!job) { host.style.display = "none"; return; }
   const p = job.progress;
   if (job.state === "running" && p && p.total) {
     host.innerHTML = `<progress value="${p.done}" max="${p.total}"></progress>` +

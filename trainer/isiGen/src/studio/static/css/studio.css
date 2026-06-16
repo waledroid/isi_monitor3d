@@ -604,6 +604,8 @@ label.chip input, .toolbar label input {
 .phase-card.stub { opacity: 0.4; }
 
 .job-progress { align-items: center; gap: 12px; margin-bottom: 12px; }
+.job-progress-bar { display: flex; padding: 8px 40px; margin: 0;
+  background: rgba(79,195,247,0.06); border-bottom: 1px solid rgba(255,255,255,0.06); }
 .job-progress progress { flex: 1; height: 10px; border-radius: 6px; }
 .job-progress progress::-webkit-progress-bar { background: rgba(255,255,255,0.08); border-radius: 6px; }
 .job-progress progress::-webkit-progress-value { background: var(--accent); border-radius: 6px; }
