@@ -56,15 +56,15 @@ def test_run_lora_autowires_weights(tiny_project, monkeypatch):
     assert (runs / "lora").is_dir()
 
 
-def test_run_lora_max_steps_override_persists(tiny_project):
+def test_run_lora_max_steps_override_persists(tiny_project, tmp_path):
     """The LoRA page's steps box overrides + saves max_steps before training."""
     from src.core.project import load_project
     from src.core.runners import run_lora
     pdir, _ = tiny_project
-    # call the runner override directly (no GPU): it should persist max_steps then
-    # fail at the heavy train step — we only assert the config was updated.
+    # call the runner override directly (no GPU): it persists max_steps then fails
+    # at the heavy train step. runs_dir → tmp so it never pollutes the repo's runs/.
     try:
-        run_lora(pdir, max_steps=250)
+        run_lora(pdir, max_steps=250, runs_dir=tmp_path / "runs")
     except Exception:
         pass
     assert load_project(pdir).phase("lora")["max_steps"] == 250
