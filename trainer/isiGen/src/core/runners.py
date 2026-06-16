@@ -412,7 +412,12 @@ def run_lora(project_dir: Path, *, max_steps: int | None = None) -> dict:
         f"{project.name}_r{cfg.get('rank', 16)}_"
         f"{datetime.now().strftime('%d-%m-%Y_%H-%M-%S')}")
     weights = trainer.train(project, run_dir)
-    return {"weights": str(weights)}
+    # Auto-wire the freshest LoRA so phase 7 (mint) actually uses it — otherwise
+    # minting silently runs with no LoRA and produces generic objects.
+    project = load_project(project_dir)            # reload (trainer may have saved)
+    project.phase("generation")["lora_weights"] = str(run_dir)
+    save_project(project_dir, project)
+    return {"weights": str(weights), "lora_weights": str(run_dir)}
 
 
 def run_captions(project_dir: Path, *, force: bool = False) -> dict:

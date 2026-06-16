@@ -31,6 +31,28 @@ def test_pages_and_project_crud(tmp_path):
         assert c.get("/p/nope").status_code == 404
 
 
+def test_run_lora_autowires_weights(tiny_project, monkeypatch):
+    """After training, generation.lora_weights points at the new run dir so mint
+    actually uses the LoRA (instead of silently running with none)."""
+    from pathlib import Path
+
+    from src.core import runners
+    from src.core.project import load_project
+    from src.stages.lora.base import LORA_TRAINERS
+    pdir, _ = tiny_project
+
+    class _FakeTrainer:
+        def train(self, project, run_dir):
+            Path(run_dir).mkdir(parents=True, exist_ok=True)
+            return Path(run_dir) / "pytorch_lora_weights.safetensors"
+
+    monkeypatch.setattr(LORA_TRAINERS, "create", lambda name, **cfg: _FakeTrainer())
+    out = runners.run_lora(pdir)
+    wired = load_project(pdir).phase("generation")["lora_weights"]
+    assert wired == out["lora_weights"]
+    assert "lora" in wired and pdir.name in wired
+
+
 def test_run_lora_max_steps_override_persists(tiny_project):
     """The LoRA page's steps box overrides + saves max_steps before training."""
     from src.core.project import load_project
