@@ -12,11 +12,27 @@ flow is:
         ↓  derive H, P from K, R, t  (backbone.shared.geometry)
         ↓  CalibrationFile.write
 
+For 2-camera rigs there is also a **two-stage** path (:func:`calibrate_two_stage`,
+CLI ``calibrate-2cam``): per-camera intrinsics from a ChArUco board
+(``multical intrinsic``) followed by joint extrinsics from a multi-AprilGrid
+target with those intrinsics fixed (``multical calibrate --fix_intrinsic``). It
+uses each board where it is strong — ChArUco's dense corners for intrinsics, a
+wide AprilGrid target both cameras see at once for extrinsics — and still writes
+the same ``calibration.json``. Generate printable A4 boards with ``gen-boards``
+(:func:`generate_board_images`).
+
+Operators can inspect any result in Multical's built-in 3D viewer (camera + board
+poses, per-view reprojection): pass ``--vis`` to ``calibrate-all`` / ``calibrate-2cam``
+to auto-open it after the solve, or re-open a saved run with ``vis --workspace
+<work_dir>`` (:func:`run_multical_vis`). The viewer needs the Qt/PyVista deps
+(``setup_multical.sh`` installs them) and a display; it never affects the written
+``calibration.json``.
+
 The ``intrinsics-single-cam`` subcommand exists only as a debug helper for
 single-camera sanity checks; it does NOT feed the production flow. The
-architecture requires joint BA — running per-camera OpenCV intrinsics and
-plugging them into the BA is strictly worse than letting Multical handle both
-at once. Never call ``calibrate_intrinsics`` in production.
+single-stage ``calibrate-all`` requires joint BA — running per-camera OpenCV
+intrinsics and plugging them into the BA is strictly worse than letting Multical
+handle both at once. Never call ``calibrate_intrinsics`` in production.
 
 Multical 0.4.0 pins ``opencv-contrib-python <=4.7.0``, which conflicts with
 the Backbone runtime's OpenCV (4.13+). The isolated venv is the only sane
@@ -31,7 +47,7 @@ import json
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import cv2
@@ -63,7 +79,7 @@ DEFAULT_VENV_MULTICAL = Path(__file__).resolve().parent / ".venv-multical"
 
 
 # ---------------------------------------------------------------------------
-# ChArUco board specification
+# Board specs (ChArUco + AprilGrid) → Multical boards.yaml
 # ---------------------------------------------------------------------------
 
 
@@ -86,6 +102,85 @@ class CharucoBoardSpec:
             markerLength=self.marker_length_m,
             dictionary=self.aruco_dict(),
         )
+
+    def multical_yaml_block(self, name: str) -> str:
+        """Render this board as a Multical boards.yaml entry (2-space indented)."""
+        # Multical builds the name as ``getattr(cv2.aruco, f"DICT_{aruco_dict}")``,
+        # so strip our cv2-style ``DICT_`` prefix (else it asks for DICT_DICT_…).
+        multical_dict = self.dict_name.removeprefix("DICT_")
+        return (
+            f"  {name}:\n"
+            f"    _type_: charuco\n"
+            f"    size: [{self.squares_x}, {self.squares_y}]\n"
+            f"    square_length: {self.square_length_m}\n"
+            f"    marker_length: {self.marker_length_m}\n"
+            f'    aruco_dict: "{multical_dict}"\n'
+        )
+
+
+@dataclass(slots=True)
+class AprilGridBoardSpec:
+    """One AprilGrid board (Kalibr-compatible) for Multical extrinsic calibration.
+
+    A grid of ``tags_x`` by ``tags_y`` AprilTags. ``tag_spacing`` is the gap-to-tag
+    *ratio* (Kalibr convention: physical gap = ``tag_spacing * tag_length``).
+    ``start_id`` is the family id of the first tag — **must be unique per board**
+    so the 6 boards in a target don't share tag ids (use
+    :func:`make_aprilgrid_target`, which offsets them automatically).
+    """
+
+    tags_x: int = 6
+    tags_y: int = 6
+    tag_length_m: float = 0.06
+    tag_spacing: float = 0.3
+    tag_family: str = "t36h11"
+    start_id: int = 0
+
+    def tag_count(self) -> int:
+        return self.tags_x * self.tags_y
+
+    def multical_yaml_block(self, name: str) -> str:
+        # Keys must match Multical's AprilConfig schema (size, start_id,
+        # tag_family, tag_length, tag_spacing) — extra keys are rejected.
+        return (
+            f"  {name}:\n"
+            f"    _type_: aprilgrid\n"
+            f"    size: [{self.tags_x}, {self.tags_y}]\n"
+            f"    tag_length: {self.tag_length_m}\n"
+            f"    tag_spacing: {self.tag_spacing}\n"
+            f"    tag_family: {self.tag_family}\n"
+            f"    start_id: {self.start_id}\n"
+        )
+
+
+def make_aprilgrid_target(
+    n_boards: int = 6,
+    template: AprilGridBoardSpec | None = None,
+) -> dict[str, AprilGridBoardSpec]:
+    """Build a multi-board AprilGrid target: ``n_boards`` copies of ``template``
+    with **disjoint** ``start_id`` ranges so no tag id repeats across boards.
+
+    Returns ``{board_name: spec}`` ordered ``april_0 .. april_{n-1}``.
+    """
+    base = template or AprilGridBoardSpec()
+    target: dict[str, AprilGridBoardSpec] = {}
+    next_id = base.start_id
+    for i in range(n_boards):
+        target[f"april_{i}"] = replace(base, start_id=next_id)
+        next_id += base.tag_count()
+    return target
+
+
+def write_boards_yaml(
+    boards: dict[str, CharucoBoardSpec | AprilGridBoardSpec],
+    path: Path,
+) -> Path:
+    """Write a Multical ``boards.yaml`` from one or more named board specs."""
+    body = "boards:\n" + "".join(
+        spec.multical_yaml_block(name) for name, spec in boards.items()
+    )
+    path.write_text(body)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -120,19 +215,8 @@ def find_multical_binary(
 
 
 def _write_multical_boards_yaml(board: CharucoBoardSpec, out_dir: Path) -> Path:
-    """Write the boards.yaml Multical expects."""
-    path = out_dir / "boards.yaml"
-    path.write_text(
-        f"""boards:
-  charuco_main:
-    type: charuco
-    size: [{board.squares_x}, {board.squares_y}]
-    square_length: {board.square_length_m}
-    marker_length: {board.marker_length_m}
-    aruco_dict: "{board.dict_name}"
-"""
-    )
-    return path
+    """Write the single-charuco boards.yaml Multical expects (the 1-board path)."""
+    return write_boards_yaml({"charuco_main": board}, out_dir / "boards.yaml")
 
 
 def _stage_image_dirs(image_dirs_by_camera: dict[str, Path], out_dir: Path) -> Path:
@@ -147,18 +231,64 @@ def _stage_image_dirs(image_dirs_by_camera: dict[str, Path], out_dir: Path) -> P
     return image_root
 
 
+def generate_board_images(
+    boards: dict[str, CharucoBoardSpec | AprilGridBoardSpec],
+    out_dir: Path,
+    *,
+    paper_size: str = "A4",
+    pixels_mm: int = 10,
+    margin_mm: int = 20,
+    multical_binary: Path | None = None,
+) -> Path:
+    """Generate printable board images (one PNG per board) via ``multical boards``.
+
+    Writes a ``boards.yaml`` from ``boards`` then invokes Multical's generator at
+    the given paper size. Print the PNGs at **100% scale, zero margins** so the
+    metric ``square_length`` / ``tag_length`` on paper matches the spec — the
+    calibration is only as accurate as the printed board's true dimensions.
+
+    ``margin_mm`` is Multical's border (default 20). Multical requires
+    ``board + 2*margin <= paper``, so a board that nearly fills the sheet needs a
+    smaller margin (e.g. a tall 1x2 AprilGrid on A4 → ``margin_mm=0``).
+
+    Returns the directory containing the generated images.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    boards_yaml = write_boards_yaml(boards, out_dir / "boards.yaml")
+    binary = multical_binary or find_multical_binary()
+    cmd = [
+        str(binary), "boards",
+        "--boards", str(boards_yaml),
+        "--paper_size", paper_size,
+        "--pixels_mm", str(pixels_mm),
+        "--margin_mm", str(margin_mm),
+        "--write", str(out_dir),
+    ]
+    print(f"[gen-boards] invoking: {' '.join(cmd)}", flush=True)
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    print((result.stdout or "") + "\n" + (result.stderr or ""), flush=True)
+    print(f"[gen-boards] wrote board images to {out_dir} "
+          f"(print at 100% scale, 0 margins, {paper_size})", flush=True)
+    return out_dir
+
+
 def run_multical_calibration(
     image_dirs_by_camera: dict[str, Path],
     board: CharucoBoardSpec,
     work_dir: Path,
     multical_binary: Path | None = None,
     name: str = "calibration",
+    vis: bool = False,
 ) -> MultiCalSolution:
     """Run Multical end-to-end and return the parsed solution with RMS attached.
 
     Returns:
         :class:`MultiCalSolution` with per-camera intrinsics, rig-frame poses,
         and best-effort RMS extracted from Multical's log output.
+
+    ``vis=True`` adds ``--vis True`` so Multical's 3D viewer opens after the BA
+    (interactive + blocking until the window is closed); JSON + log are written
+    first, so RMS parsing is unaffected. Never enable in a headless run.
 
     Raises:
         subprocess.CalledProcessError: if Multical exits non-zero.
@@ -177,6 +307,8 @@ def run_multical_calibration(
         "--output_path", str(work_dir),
         "--name", name,
     ]
+    if vis:
+        cmd += ["--vis", "True"]
     print(f"[calibrate] invoking: {' '.join(cmd)}", flush=True)
     result = subprocess.run(cmd, check=True, capture_output=True, text=True)
     log_text = (result.stdout or "") + "\n" + (result.stderr or "")
@@ -191,6 +323,120 @@ def run_multical_calibration(
     sol = parse_multical_output(output_json)
     rms = parse_rms_from_log(log_text, sol.camera_ids)
     return sol.with_rms(rms)
+
+
+# ---------------------------------------------------------------------------
+# Phase: Two-stage (intrinsics ChArUco → extrinsics AprilGrid, fixed K)
+# ---------------------------------------------------------------------------
+#
+# Workflow the 2-camera rig uses (per the operator's plan):
+#   1. INTRINSICS  — each camera shoots an A4 ChArUco board from many angles;
+#      `multical intrinsic` solves per-camera K, D → intrinsic.json.
+#   2. EXTRINSICS  — both cameras view a 6-AprilGrid target spread across the
+#      shared volume; `multical calibrate --calibration intrinsic.json
+#      --fix_intrinsic` solves the rig poses with K held fixed.
+# Stage 1 wants dense corners (ChArUco); stage 2 wants a wide, multi-board target
+# both cameras can see at once (AprilGrid) — using each board where it's strong.
+
+
+def run_multical_intrinsics(
+    image_dirs_by_camera: dict[str, Path],
+    board: CharucoBoardSpec,
+    work_dir: Path,
+    multical_binary: Path | None = None,
+) -> Path:
+    """Stage 1 — per-camera intrinsics from a ChArUco board (``multical intrinsic``).
+
+    Returns the path to the produced ``intrinsic.json`` (consumed by stage 2).
+    """
+    work_dir.mkdir(parents=True, exist_ok=True)
+    boards_yaml = write_boards_yaml({"charuco_main": board},
+                                    work_dir / "intrinsic_boards.yaml")
+    image_root = _stage_image_dirs(image_dirs_by_camera, work_dir / "intrinsic_images")
+
+    binary = multical_binary or find_multical_binary()
+    cmd = [
+        str(binary), "intrinsic",
+        "--image_path", str(image_root),
+        "--boards", str(boards_yaml),
+        "--output_path", str(work_dir),
+        "--name", "intrinsic",            # → intrinsic.json (also Multical's default)
+    ]
+    print(f"[calibrate:intrinsics] invoking: {' '.join(cmd)}", flush=True)
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    print((result.stdout or "") + "\n" + (result.stderr or ""), flush=True)
+
+    # Multical writes intrinsic.json to --output_path; older builds drop it next
+    # to the images. Accept either.
+    for candidate in (work_dir / "intrinsic.json", image_root / "intrinsic.json"):
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        f"multical intrinsic did not produce intrinsic.json under {work_dir} "
+        f"or {image_root}; check the log above."
+    )
+
+
+def run_multical_extrinsics(
+    image_dirs_by_camera: dict[str, Path],
+    boards: dict[str, AprilGridBoardSpec],
+    work_dir: Path,
+    intrinsic_json: Path,
+    multical_binary: Path | None = None,
+    name: str = "calibration",
+    vis: bool = False,
+) -> MultiCalSolution:
+    """Stage 2 — joint extrinsics from a multi-AprilGrid target with K fixed.
+
+    ``intrinsic_json`` is stage 1's output; ``--fix_intrinsic`` keeps it frozen so
+    the BA only solves the rig poses. ``vis=True`` opens Multical's 3D viewer after
+    the solve (interactive/blocking). Returns the parsed solution (with RMS).
+    """
+    work_dir.mkdir(parents=True, exist_ok=True)
+    boards_yaml = write_boards_yaml(boards, work_dir / "extrinsic_boards.yaml")
+    image_root = _stage_image_dirs(image_dirs_by_camera, work_dir / "extrinsic_images")
+
+    binary = multical_binary or find_multical_binary()
+    cmd = [
+        str(binary), "calibrate",
+        "--image_path", str(image_root),
+        "--boards", str(boards_yaml),
+        "--calibration", str(intrinsic_json),
+        "--fix_intrinsic", "True",        # Multical bool flag: hold stage-1 K fixed
+        "--output_path", str(work_dir),
+        "--name", name,
+    ]
+    if vis:
+        cmd += ["--vis", "True"]
+    print(f"[calibrate:extrinsics] invoking: {' '.join(cmd)}", flush=True)
+    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    log_text = (result.stdout or "") + "\n" + (result.stderr or "")
+    print(log_text, flush=True)
+
+    output_json = work_dir / f"{name}.json"
+    if not output_json.exists():
+        raise FileNotFoundError(
+            f"Multical did not produce {output_json}; check the log above."
+        )
+    sol = parse_multical_output(output_json)
+    rms = parse_rms_from_log(log_text, sol.camera_ids)
+    return sol.with_rms(rms)
+
+
+def run_multical_vis(workspace: Path, multical_binary: Path | None = None) -> None:
+    """Open Multical's built-in 3D viewer on a saved workspace (``multical vis``).
+
+    ``workspace`` is either the ``work_dir`` of a prior calibrate run (Multical
+    resolves ``<dir>/calibration.pkl``) or an explicit ``*.pkl``. The viewer is
+    **interactive and blocking** — it returns when the operator closes the window
+    — so we inherit the terminal instead of capturing output. Needs the viewer
+    deps (qtpy/pyvista/pyvistaqt/PyQt5) + a display (WSLg/X); the workspace's
+    images must still be present on disk.
+    """
+    binary = multical_binary or find_multical_binary()
+    cmd = [str(binary), "vis", "--workspace_file", str(workspace)]
+    print(f"[calibrate:vis] invoking: {' '.join(cmd)}", flush=True)
+    subprocess.run(cmd, check=True)
 
 
 # ---------------------------------------------------------------------------
@@ -466,15 +712,60 @@ def calibrate_all(
     *,
     multical_binary: Path | None = None,
     allow_unknown_rms: bool = False,
+    vis: bool = False,
 ) -> CalibrationFile:
-    """End-to-end calibration: Multical → floor anchor → calibration.json."""
+    """End-to-end calibration: Multical → floor anchor → calibration.json.
+
+    ``vis=True`` opens Multical's 3D viewer right after the bundle adjustment.
+    """
     solution = run_multical_calibration(
         image_dirs_by_camera=image_dirs_by_camera,
         board=board,
         work_dir=work_dir,
         multical_binary=multical_binary,
+        vis=vis,
     )
     anchor = estimate_floor_anchor_charuco(floor_shot_by_camera, solution, board)
+    calibration = assemble_calibration(solution, anchor, allow_unknown_rms=allow_unknown_rms)
+    calibration.write(output_path)
+    print(f"[calibrate] wrote {output_path}", flush=True)
+    for cam_id, cam in calibration.cameras.items():
+        print(f"[calibrate]   {cam_id}: RMS={cam.reprojection_rms_px:.3f} px", flush=True)
+    return calibration
+
+
+def calibrate_two_stage(
+    intrinsic_dirs_by_camera: dict[str, Path],
+    extrinsic_dirs_by_camera: dict[str, Path],
+    floor_shot_by_camera: dict[str, Path],
+    charuco_board: CharucoBoardSpec,
+    aprilgrid_target: dict[str, AprilGridBoardSpec],
+    work_dir: Path,
+    output_path: Path,
+    *,
+    multical_binary: Path | None = None,
+    allow_unknown_rms: bool = False,
+    vis: bool = False,
+) -> CalibrationFile:
+    """Two-stage 2-camera calibration → calibration.json.
+
+    Stage 1 solves per-camera intrinsics from ChArUco shots; stage 2 solves the
+    rig extrinsics from a multi-AprilGrid target with those intrinsics fixed; then
+    the ChArUco floor shot anchors the rig to the world frame and we assemble the
+    same ``calibration.json`` the single-stage path writes (K, D, R, t, H, P).
+
+    ``vis=True`` opens Multical's 3D viewer after the extrinsic solve (the run that
+    holds all cameras + boards in one frame).
+    """
+    intrinsic_json = run_multical_intrinsics(
+        intrinsic_dirs_by_camera, charuco_board, work_dir,
+        multical_binary=multical_binary,
+    )
+    solution = run_multical_extrinsics(
+        extrinsic_dirs_by_camera, aprilgrid_target, work_dir, intrinsic_json,
+        multical_binary=multical_binary, vis=vis,
+    )
+    anchor = estimate_floor_anchor_charuco(floor_shot_by_camera, solution, charuco_board)
     calibration = assemble_calibration(solution, anchor, allow_unknown_rms=allow_unknown_rms)
     calibration.write(output_path)
     print(f"[calibrate] wrote {output_path}", flush=True)
@@ -506,6 +797,31 @@ def _board_from_args(args: argparse.Namespace) -> CharucoBoardSpec:
     )
 
 
+def _add_aprilgrid_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--n-boards", type=int, default=6,
+                   help="number of AprilGrid boards in the extrinsic target")
+    p.add_argument("--april-tags-x", type=int, default=6)
+    p.add_argument("--april-tags-y", type=int, default=6)
+    p.add_argument("--tag-length", type=float, default=0.06,
+                   help="AprilTag side length in metres (printed size)")
+    p.add_argument("--tag-spacing", type=float, default=0.3,
+                   help="gap/tag ratio (Kalibr: gap = tag_spacing * tag_length)")
+    p.add_argument("--tag-family", default="t36h11")
+
+
+def _aprilgrid_target_from_args(args: argparse.Namespace) -> dict[str, AprilGridBoardSpec]:
+    return make_aprilgrid_target(
+        n_boards=args.n_boards,
+        template=AprilGridBoardSpec(
+            tags_x=args.april_tags_x,
+            tags_y=args.april_tags_y,
+            tag_length_m=args.tag_length,
+            tag_spacing=args.tag_spacing,
+            tag_family=args.tag_family,
+        ),
+    )
+
+
 def _parse_camera_dir_map(spec: list[str]) -> dict[str, Path]:
     """Parse repeated --camera-dir cam_id=path arguments into a dict."""
     out: dict[str, Path] = {}
@@ -517,11 +833,38 @@ def _parse_camera_dir_map(spec: list[str]) -> dict[str, Path]:
     return out
 
 
+def _add_multical_binary_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--multical-binary", default=None,
+        help=f"override Multical binary (default: {DEFAULT_VENV_MULTICAL}/bin/multical)",
+    )
+
+
+def _add_solve_common_args(p: argparse.ArgumentParser) -> None:
+    """Args shared by the calibrate-all / calibrate-2cam solvers."""
+    p.add_argument("--work-dir", required=True, help="scratch dir for Multical output")
+    p.add_argument("--output", required=True, help="output calibration.json path")
+    _add_multical_binary_arg(p)
+    p.add_argument(
+        "--allow-unknown-rms", action="store_true",
+        help="proceed even if RMS could not be parsed from Multical's log (DANGER)",
+    )
+    p.add_argument(
+        "--vis", action="store_true",
+        help="open Multical's 3D viewer after the solve (interactive; needs a display)",
+    )
+
+
+def _binary_from_args(args: argparse.Namespace) -> Path | None:
+    """The Multical binary override (or None → the isolated venv default)."""
+    return Path(args.multical_binary) if args.multical_binary else None
+
+
 def _cmd_calibrate_all(args: argparse.Namespace) -> int:
     board = _board_from_args(args)
     image_dirs = _parse_camera_dir_map(args.camera_dir)
     floor_shots = _parse_camera_dir_map(args.floor_shot)
-    binary = Path(args.multical_binary) if args.multical_binary else None
+    binary = _binary_from_args(args)
     calibrate_all(
         image_dirs_by_camera=image_dirs,
         floor_shot_by_camera=floor_shots,
@@ -530,7 +873,46 @@ def _cmd_calibrate_all(args: argparse.Namespace) -> int:
         output_path=Path(args.output),
         multical_binary=binary,
         allow_unknown_rms=args.allow_unknown_rms,
+        vis=args.vis,
     )
+    return 0
+
+
+def _cmd_gen_boards(args: argparse.Namespace) -> int:
+    charuco = _board_from_args(args)
+    target: dict[str, CharucoBoardSpec | AprilGridBoardSpec] = {"charuco_main": charuco}
+    target.update(_aprilgrid_target_from_args(args))
+    binary = _binary_from_args(args)
+    generate_board_images(
+        target, Path(args.output_dir),
+        paper_size=args.paper_size, pixels_mm=args.pixels_mm, margin_mm=args.margin_mm,
+        multical_binary=binary,
+    )
+    return 0
+
+
+def _cmd_calibrate_2cam(args: argparse.Namespace) -> int:
+    charuco = _board_from_args(args)
+    target = _aprilgrid_target_from_args(args)
+    binary = _binary_from_args(args)
+    calibrate_two_stage(
+        intrinsic_dirs_by_camera=_parse_camera_dir_map(args.intrinsic_dir),
+        extrinsic_dirs_by_camera=_parse_camera_dir_map(args.extrinsic_dir),
+        floor_shot_by_camera=_parse_camera_dir_map(args.floor_shot),
+        charuco_board=charuco,
+        aprilgrid_target=target,
+        work_dir=Path(args.work_dir),
+        output_path=Path(args.output),
+        multical_binary=binary,
+        allow_unknown_rms=args.allow_unknown_rms,
+        vis=args.vis,
+    )
+    return 0
+
+
+def _cmd_vis(args: argparse.Namespace) -> int:
+    binary = _binary_from_args(args)
+    run_multical_vis(Path(args.workspace), multical_binary=binary)
     return 0
 
 
@@ -574,20 +956,50 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="cam_id=path/to/floor_anchor.jpg. Repeat per camera.",
     )
-    pa.add_argument("--work-dir", required=True, help="scratch dir for Multical output")
-    pa.add_argument("--output", required=True, help="output calibration.json path")
-    pa.add_argument(
-        "--multical-binary",
-        default=None,
-        help=f"override Multical binary path (default: {DEFAULT_VENV_MULTICAL}/bin/multical)",
-    )
-    pa.add_argument(
-        "--allow-unknown-rms",
-        action="store_true",
-        help="proceed even if RMS could not be parsed from Multical's log (DANGER)",
-    )
+    _add_solve_common_args(pa)
     _add_board_args(pa)
     pa.set_defaults(func=_cmd_calibrate_all)
+
+    # gen-boards — generate printable A4 boards (ChArUco intrinsics + N AprilGrids).
+    pg = sub.add_parser(
+        "gen-boards",
+        help="generate printable A4 board PNGs (ChArUco intrinsics + AprilGrid target) via Multical",
+    )
+    pg.add_argument("--output-dir", required=True, help="where to write board PNGs + boards.yaml")
+    pg.add_argument("--paper-size", default="A4")
+    pg.add_argument("--pixels-mm", type=int, default=10, help="render resolution (px per mm)")
+    pg.add_argument("--margin-mm", type=int, default=20,
+                    help="border in mm; lower it for boards that nearly fill the sheet (0 = none)")
+    _add_multical_binary_arg(pg)
+    _add_board_args(pg)
+    _add_aprilgrid_args(pg)
+    pg.set_defaults(func=_cmd_gen_boards)
+
+    # calibrate-2cam — two-stage: ChArUco intrinsics → AprilGrid extrinsics (fixed K).
+    p2 = sub.add_parser(
+        "calibrate-2cam",
+        help="2-camera two-stage: ChArUco intrinsics + multi-AprilGrid extrinsics → calibration.json",
+    )
+    p2.add_argument("--intrinsic-dir", action="append", required=True,
+                    help="cam_id=path/to/charuco/intrinsic/shots. Repeat per camera.")
+    p2.add_argument("--extrinsic-dir", action="append", required=True,
+                    help="cam_id=path/to/aprilgrid/extrinsic/shots. Repeat per camera.")
+    p2.add_argument("--floor-shot", action="append", required=True,
+                    help="cam_id=path/to/floor_anchor.jpg (ChArUco on the floor). Repeat per camera.")
+    _add_solve_common_args(p2)
+    _add_board_args(p2)
+    _add_aprilgrid_args(p2)
+    p2.set_defaults(func=_cmd_calibrate_2cam)
+
+    # vis — re-open Multical's 3D viewer on a saved workspace (no recalibration).
+    pv = sub.add_parser(
+        "vis",
+        help="open Multical's 3D viewer on a saved workspace (work-dir or calibration.pkl)",
+    )
+    pv.add_argument("--workspace", required=True,
+                    help="a prior --work-dir (resolves calibration.pkl) or an explicit *.pkl")
+    _add_multical_binary_arg(pv)
+    pv.set_defaults(func=_cmd_vis)
 
     pi = sub.add_parser(
         "intrinsics-single-cam",

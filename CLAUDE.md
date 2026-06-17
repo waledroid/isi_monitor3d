@@ -34,9 +34,33 @@ conda env create -f environment.yml -n monitor3d
 conda activate monitor3d                          # always do this before anything below
 conda env update -f environment.yml -n monitor3d --prune   # refresh after env edits
 
-# calibration — TWO paths, depending on operational mode
+# calibration — paths depend on operational mode
+# (AprilGrid extrinsics need system build deps first — apt, one-time, need root:
+#    sudo apt install -y cmake libopencv-dev libeigen3-dev
+#  ChArUco-only calibration needs none of these.)
 bash calibration/setup_multical.sh           # one-time: bootstrap Multical's isolated venv (Mode 2)
-python -m calibration.calibrate calibrate-all ...                   # Mode 2: 2-cam Multical joint BA
+python -m calibration.calibrate calibrate-all ...                   # Mode 2: 2-cam Multical joint BA (single ChArUco)
+
+# Mode 2, two-stage (recommended for 2 cams): ChArUco intrinsics → multi-AprilGrid extrinsics (K fixed).
+#   1) print the boards (one PNG per board; print at 100% scale, 0 margins):
+python -m calibration.calibrate gen-boards --output-dir boards/ --n-boards 6   # A4 ChArUco + 6 AprilGrids
+#   2) shoot: per-camera ChArUco from many angles (intrinsics) + both cams viewing the 6-AprilGrid
+#      target spread over the shared volume (extrinsics) + one ChArUco floor shot per cam (world anchor):
+python -m calibration.calibrate calibrate-2cam \
+    --intrinsic-dir cam_a=shots/intr_a --intrinsic-dir cam_b=shots/intr_b \
+    --extrinsic-dir cam_a=shots/extr_a --extrinsic-dir cam_b=shots/extr_b \
+    --floor-shot cam_a=shots/floor_a.jpg --floor-shot cam_b=shots/floor_b.jpg \
+    --work-dir /tmp/cal --output calibration.json
+# (calibrate-2cam runs `multical intrinsic` then `multical calibrate --calibration intrinsic.json
+#  --fix_intrinsic`; AprilGrid board sizes via --tag-length/--tag-spacing/--n-boards; ChArUco via
+#  --squares-x/-y/--square-length/--marker-length. Same calibration.json schema as calibrate-all.)
+
+# Visualize the result in Multical's built-in 3D viewer (camera + board poses, reprojection).
+# Needs a display (WSLg/$DISPLAY) + viewer deps (setup_multical.sh installs them best-effort).
+python -m calibration.calibrate calibrate-all  ... --vis            # auto-open after the BA solve
+python -m calibration.calibrate calibrate-2cam ... --vis            # (interactive: blocks until closed)
+python -m calibration.calibrate vis --workspace /tmp/cal           # re-open a saved run (keep --work-dir!)
+
 python -m calibration.calibrate single-cam \                        # Mode 1: 1-cam 4-point floor fit
     --camera-id cam_a --image-size 1920 1080 \
     --pair u1,v1,X1,Y1 --pair u2,v2,X2,Y2 \

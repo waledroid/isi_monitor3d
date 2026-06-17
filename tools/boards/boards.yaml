@@ -1,0 +1,43 @@
+boards:
+  board_A:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 0
+  board_B:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 2
+  board_C:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 4
+  board_D:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 6
+  board_E:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 8
+  board_F:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 10
