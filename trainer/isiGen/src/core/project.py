@@ -9,6 +9,7 @@ commented schema copied on project creation.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -43,6 +44,9 @@ class ProjectConfig(BaseModel):
 
     name: str
     classes: list[ClassSpec] = Field(min_length=1)
+    # "generate" = full synthetic pipeline; "label" = Studio used as an annotation
+    # tool (curate → SAM2 masks → LabelMe export, no captions/LoRA/scaffolds/mint).
+    mode: Literal["generate", "label"] = "generate"
     phases: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -85,16 +89,23 @@ def save_project(project_dir: Path, cfg: ProjectConfig) -> None:
     )
 
 
-def create_project(data_dir: Path, name: str, classes: list[ClassSpec]) -> Path:
+def create_project(data_dir: Path, name: str, classes: list[ClassSpec], *,
+                   mode: Literal["generate", "label"] = "generate") -> Path:
     """New project dir from the template: template phases + the given classes.
-    Refuses to overwrite an existing project."""
+
+    ``mode="label"`` makes the project a LabelMe annotation dataset (no synthetic
+    generation) — the export defaults to the labelme exporter. Refuses to
+    overwrite an existing project."""
     project_dir = Path(data_dir) / name
     if (project_dir / PROJECT_YAML).exists():
         raise FileExistsError(f"project {name!r} already exists at {project_dir}")
     template = yaml.safe_load(TEMPLATE_PATH.read_text()) or {}
     cfg = ProjectConfig.model_validate(
-        {**template, "name": name, "classes": [c.model_dump() for c in classes]}
+        {**template, "name": name, "mode": mode,
+         "classes": [c.model_dump() for c in classes]}
     )
+    if mode == "label":
+        cfg.phases.setdefault("export", {})["exporters"] = ["labelme"]
     save_project(project_dir, cfg)
     for sub in ("raw", "maps/depth", "maps/canny", "maps/mask",
                 "captions", "thumbs", "scaffolds", "generated", "export"):

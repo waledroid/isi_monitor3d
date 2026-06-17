@@ -10,9 +10,16 @@
     <label>Name <input name="name" required pattern="[A-Za-z0-9_\-]+" placeholder="pallets_v1"></label>
     <label>Classes <input name="classes" required
       placeholder="palette:ISI_PLT, carton:ISI_CRTN, polybag:ISI_PLYBG"></label>
+    <label>Type
+      <select name="mode">
+        <option value="generate">Synthetic generation</option>
+        <option value="label">Labeling dataset (LabelMe)</option>
+      </select>
+    </label>
     <button type="submit">Create</button>
     <span id="create-msg" class="msg"></span>
   </form>
+  <p class="msg">Labeling: use the Studio to annotate real images (curate → SAM2 masks → LabelMe export); no synthetic generation.</p>
 </section>
 {% endblock %}
 {% block scripts %}<script type="module" src="/static/js/projects.js"></script>{% endblock %}

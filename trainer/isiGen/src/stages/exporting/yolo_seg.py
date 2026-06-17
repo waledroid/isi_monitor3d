@@ -75,24 +75,28 @@ class YoloSegExporter(DatasetExporter):
         # convention (export/ lives inside the project); resolve against it.
         project_dir = Path(out_dir).parent
         for rec in records:
-            if not rec.mask or not rec.image:
+            if not rec.image:
                 continue
-            mask_path = project_dir / rec.mask
             img_path = project_dir / rec.image
-            if not mask_path.exists() or not img_path.exists():
+            if not img_path.exists():
                 continue
-            mask = cv2.imread(str(mask_path))
-            if mask is None:
-                continue
-            h, w = mask.shape[:2]
             lines: list[str] = []
-            for idx, spec in enumerate(project.classes):
-                for poly in mask_to_polygons(mask, spec.color, min_area=self.min_area):
-                    norm = poly / np.array([w, h], dtype=np.float64)
-                    coords = " ".join(f"{v:.6f}" for v in norm.clip(0, 1).flatten())
-                    lines.append(f"{idx} {coords}")
-            if not lines:
-                continue
+            if rec.mask:
+                mask_path = project_dir / rec.mask
+                if not mask_path.exists():
+                    continue
+                mask = cv2.imread(str(mask_path))
+                if mask is None:
+                    continue
+                h, w = mask.shape[:2]
+                for idx, spec in enumerate(project.classes):
+                    for poly in mask_to_polygons(mask, spec.color, min_area=self.min_area):
+                        norm = poly / np.array([w, h], dtype=np.float64)
+                        coords = " ".join(f"{v:.6f}" for v in norm.clip(0, 1).flatten())
+                        lines.append(f"{idx} {coords}")
+                if not lines:
+                    continue                      # masked but no polygons → skip (quality)
+            # else: background negative → empty .txt (YOLO treats it as a negative)
             split = _split_for(rec.id, self.val_fraction)
             dst_img = root / "images" / split / f"{rec.id}{img_path.suffix}"
             shutil.copy2(img_path, dst_img)

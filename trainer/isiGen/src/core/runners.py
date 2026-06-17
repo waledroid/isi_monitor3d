@@ -398,8 +398,12 @@ def run_filter(project_dir: Path, *, force: bool = False) -> dict:
 
 
 def run_export(project_dir: Path) -> dict:
-    """Phase 8b — package every active record that has BOTH an image and a mask
-    (synthetic + optionally the real curated ones) into the configured formats."""
+    """Phase 8b — package records into the configured formats.
+
+    Generate mode: records with image + mask (synthetic + optionally real curated).
+    Label mode: the curated images + their masks PLUS background-only records as
+    empty-label negatives (image, no mask) — the exporters write empty shapes for
+    those. Backgrounds in generate mode stay excluded (they're paste targets)."""
     from ..stages.exporting.base import DATASET_EXPORTERS
     project = load_project(project_dir)
     project_dir = Path(project_dir)
@@ -407,8 +411,12 @@ def run_export(project_dir: Path) -> dict:
     include_real = bool(cfg.pop("include_real", True))
     exporters = cfg.pop("exporters", ["yolo_seg"])
     manifest = Manifest.load(project_dir)
-    records = [r for r in manifest.active() if r.mask and r.image and not r.background
-               and (include_real or getattr(r, "synthetic", False))]
+    if getattr(project, "mode", "generate") == "label":
+        # objects (with mask) + background negatives (image, no mask → empty label)
+        records = [r for r in manifest.active() if r.image and (r.mask or r.background)]
+    else:
+        records = [r for r in manifest.active() if r.mask and r.image and not r.background
+                   and (include_real or getattr(r, "synthetic", False))]
     out: dict = {"records": len(records)}
     for name in exporters:
         exporter = DATASET_EXPORTERS.create(name, **cfg)

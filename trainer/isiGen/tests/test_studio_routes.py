@@ -187,6 +187,23 @@ def test_status_phase_counts_ignore_synthetic_records(tiny_project):
     assert s["synthetic"] == 1
 
 
+def test_create_label_project_mode_and_export_status(tmp_path):
+    """A label-mode project: /status reports mode=label, and `exported` flips True
+    once a LabelMe export lands (not just yolo_seg)."""
+    with _client() as c:
+        body = {"name": "lbl", "mode": "label", "classes": [
+            {"name": "polybag", "trigger": "ISI_PLYBG", "color": [40, 90, 230]}]}
+        assert c.post("/api/projects", json=body).json()["ok"] is True
+        s = c.get("/api/p/lbl/status").json()
+        assert s["mode"] == "label"
+        assert s["exported"] is False
+        # a labelme export landing makes 'exported' true (yolo_seg/data.yaml absent)
+        lroot = tmp_path / "data" / "lbl" / "export" / "labelme"
+        lroot.mkdir(parents=True, exist_ok=True)
+        (lroot / "x.json").write_text("{}")
+        assert c.get("/api/p/lbl/status").json()["exported"] is True
+
+
 def test_status_excludes_background_images(tiny_project):
     """Background-only images (paste targets, no object) must not count toward the
     'real' object phases, and surface as their own 'backgrounds' count."""

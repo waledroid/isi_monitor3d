@@ -97,6 +97,22 @@ On the **Projects** page, use the **New project** form:
 - **Name** — letters, numbers, `_`, `-` (e.g. `pallets_v1`).
 - **Classes** — comma-separated, as `name:TRIGGER`, e.g.
   `palette:ISI_PLT, carton:ISI_CRTN, polybag:ISI_PLYBG`.
+- **Type** — **Synthetic generation** (the full pipeline, default) or
+  **Labeling dataset (LabelMe)** — see below.
+
+### Labeling-only datasets (annotate real images, no generation)
+
+Set **Type → Labeling dataset** to use isiGen as a pure **annotation tool**: the
+board collapses to **Curate → Ground-truth masks → Export**, and Export produces a
+**LabelMe** dataset (each image + a `<id>.json` of polygon shapes). No captions,
+LoRA, scaffolds, or minting.
+
+Ingest with the **same folder layout** as generation (Phase 1): `<class>/img/*`
+are the images you mask with SAM2; an optional `<class>/bg/*` holds **background
+images** (no objects) — these are *not* masked, but they ARE exported as
+**empty-label negatives** (`"shapes": []`) to reduce false positives in training.
+Output lands in `data/<project>/export/labelme/` and round-trips with the curate
+LabelMe import. (Export unlocks right after Masks — no need to touch generation.)
 
 > **Your classes are entirely up to you.** `palette / carton / polybag` is just
 > the example. Nothing is hardcoded — create a project with whatever classes you

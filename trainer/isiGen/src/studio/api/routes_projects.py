@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -21,6 +23,7 @@ router = APIRouter()
 class CreateProjectBody(BaseModel):
     name: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_\-]+$")
     classes: list[ClassSpec] = Field(min_length=1)
+    mode: Literal["generate", "label"] = "generate"
 
 
 @router.get("/api/projects")
@@ -41,7 +44,7 @@ async def projects(request: Request) -> dict:
 async def create(request: Request, body: CreateProjectBody) -> dict:
     try:
         path = create_project(request.app.state.settings.data_dir,
-                              body.name, body.classes)
+                              body.name, body.classes, mode=body.mode)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -84,7 +87,12 @@ async def status(request: Request, name: str) -> dict:
     # not count toward their completion, or those phases could never go green.
     real = [r for r in active
             if not getattr(r, "synthetic", False) and not r.background]
+    mode = getattr(load_project(d), "mode", "generate")
+    # export is "done" once either dataset format has landed (label mode = labelme)
+    exported = ((d / "export" / "yolo_seg" / "data.yaml").exists()
+                or any((d / "export" / "labelme").glob("*.json")))
     return {
+        "mode": mode,
         "lora_trained": _lora_trained(d, name, request.app.state.settings.runs_dir),
         "records": len(recs),
         "excluded": sum(r.excluded for r in recs),
@@ -102,7 +110,7 @@ async def status(request: Request, name: str) -> dict:
         "scaffolds": _scaffold_counts(d),
         "synthetic": sum(bool(getattr(r, "synthetic", False)) for r in recs),
         "clip_scored": sum(getattr(r, "clip_score", None) is not None for r in recs),
-        "exported": (d / "export" / "yolo_seg" / "data.yaml").exists(),
+        "exported": exported,
     }
 
 

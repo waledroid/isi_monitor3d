@@ -33,28 +33,37 @@ class LabelmeExporter(DatasetExporter):
         root.mkdir(parents=True, exist_ok=True)
         project_dir = Path(out_dir).parent
         for rec in records:
-            if not rec.mask or not rec.image:
+            if not rec.image:
                 continue
-            mask_path = project_dir / rec.mask
             img_path = project_dir / rec.image
-            if not mask_path.exists() or not img_path.exists():
+            if not img_path.exists():
                 continue
-            mask = cv2.imread(str(mask_path))
-            if mask is None:
-                continue
-            h, w = mask.shape[:2]
             shapes = []
-            for spec in project.classes:
-                for poly in mask_to_polygons(mask, spec.color, min_area=self.min_area):
-                    shapes.append({
-                        "label": spec.name,
-                        "points": [[float(x), float(y)] for x, y in poly],
-                        "group_id": None,
-                        "shape_type": "polygon",
-                        "flags": {},
-                    })
-            if not shapes:
-                continue
+            if rec.mask:
+                mask_path = project_dir / rec.mask
+                if not mask_path.exists():
+                    continue
+                mask = cv2.imread(str(mask_path))
+                if mask is None:
+                    continue
+                h, w = mask.shape[:2]
+                for spec in project.classes:
+                    for poly in mask_to_polygons(mask, spec.color, min_area=self.min_area):
+                        shapes.append({
+                            "label": spec.name,
+                            "points": [[float(x), float(y)] for x, y in poly],
+                            "group_id": None,
+                            "shape_type": "polygon",
+                            "flags": {},
+                        })
+                if not shapes:
+                    continue                      # masked but no polygons → skip (quality)
+            else:
+                # background negative (no mask) → keep with empty shapes
+                img = cv2.imread(str(img_path))
+                if img is None:
+                    continue
+                h, w = img.shape[:2]
             img_name = f"{rec.id}{img_path.suffix}"
             shutil.copy2(img_path, root / img_name)
             (root / f"{rec.id}.json").write_text(json.dumps({

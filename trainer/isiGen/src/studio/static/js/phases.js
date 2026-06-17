@@ -43,16 +43,28 @@ const PHASES = [
     state: (s) => s.exported ? "done" : "todo" },
 ];
 
+// Labeling-mode projects skip the synthetic half — the board is just
+// curate → SAM2 masks → LabelMe export (export unlocks right after masks).
+const LABEL_PHASES = [
+  { ...PHASES.find((p) => p.key === "curate"), n: 1 },
+  { ...PHASES.find((p) => p.key === "masks"),  n: 2 },
+  { key: "export", n: 3, title: "Export (LabelMe)", run: "export",
+    counts: (s) => `${s.masked ?? 0} masked${s.backgrounds ? ` · ${s.backgrounds} bg` : ""} · labelme ${s.exported ? "OK" : "—"}`,
+    state: (s) => s.exported ? "done" : "todo" },
+];
+
 async function render() {
   let s = {};
   try { s = await getJSON(`/api/p/${project}/status`); } catch { /* keep zeros */ }
   board.innerHTML = "";
+  // Labeling projects show only curate → masks → export; generation is hidden.
+  const phases = s.mode === "label" ? LABEL_PHASES : PHASES;
   // Sequential chain: a not-yet-done phase is locked until its predecessor is
   // done. Already-done phases stay re-runnable. `prev` carries the previous
   // phase's state (and number, for the hint); the first phase is never locked.
   let prevState = "done";
   let prevPhase = null;
-  for (const ph of PHASES) {
+  for (const ph of phases) {
     const st = ph.stub ? "todo" : (ph.state?.(s) ?? "todo");
     const locked = prevState !== "done" && st !== "done";
     const glyph = locked ? "🔒" : st === "done" ? "✓" : st === "partial" ? "◐" : "";

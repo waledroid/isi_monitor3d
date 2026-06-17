@@ -67,3 +67,42 @@ def test_run_export_yolo_and_labelme(tiny_project):
     assert doc["shapes"] and doc["shapes"][0]["shape_type"] == "polygon"
     assert doc["shapes"][0]["label"] in project.class_names()
     assert (lroot / doc["imagePath"]).exists()
+
+
+def test_label_mode_export_includes_background_negatives(tmp_path):
+    """A label-mode project exports object images (polygon shapes) AND background
+    images (no mask) as empty-label LabelMe negatives — both with their images."""
+    from src.core.manifest import Manifest, ManifestRecord
+    from src.core.project import ClassSpec, create_project, load_project
+    pdir = create_project(tmp_path / "data", "lbl",
+                          [ClassSpec(name="polybag", trigger="ISI_PLYBG", color=[40, 90, 230])],
+                          mode="label")
+    project = load_project(pdir)
+    assert project.mode == "label"
+    assert project.phase("export")["exporters"] == ["labelme"]   # default for label mode
+
+    for sub in ("raw/polybag", "raw/__bg__", "maps/mask"):
+        (pdir / sub).mkdir(parents=True, exist_ok=True)
+    m = Manifest.load(pdir)
+    # object record (with a polybag-colored mask)
+    cv2.imwrite(str(pdir / "raw/polybag/obj.jpg"), np.full((200, 300, 3), 50, np.uint8))
+    mask = np.zeros((200, 300, 3), np.uint8)
+    mask[50:150, 100:200] = (230, 90, 40)                         # BGR for RGB(40,90,230)
+    cv2.imwrite(str(pdir / "maps/mask/obj.png"), mask)
+    m.upsert(ManifestRecord(id="obj", sha256="o" * 12, image="raw/polybag/obj.jpg",
+                            class_name="polybag", width=300, height=200,
+                            mask="maps/mask/obj.png"))
+    # background negative (no mask)
+    cv2.imwrite(str(pdir / "raw/__bg__/bg.jpg"), np.full((200, 300, 3), 70, np.uint8))
+    m.upsert(ManifestRecord(id="bg", sha256="b" * 12, image="raw/__bg__/bg.jpg",
+                            class_name="", width=300, height=200, background=True))
+    m.save()
+
+    out = run_export(pdir)
+    assert out["records"] == 2                                    # object + background both selected
+    lroot = pdir / "export" / "labelme"
+    obj_doc = json.loads((lroot / "obj.json").read_text())
+    bg_doc = json.loads((lroot / "bg.json").read_text())
+    assert obj_doc["shapes"] and obj_doc["shapes"][0]["label"] == "polybag"
+    assert bg_doc["shapes"] == []                                 # background = empty negative
+    assert (lroot / "obj.jpg").exists() and (lroot / "bg.jpg").exists()

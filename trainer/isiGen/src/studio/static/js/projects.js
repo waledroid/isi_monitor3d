@@ -34,7 +34,8 @@ document.getElementById("create-form").addEventListener("submit", async (ev) => 
                color: PALETTE[i % PALETTE.length] };
     });
   try {
-    await sendJSON("/api/projects", "POST", { name: f.get("name"), classes });
+    await sendJSON("/api/projects", "POST",
+      { name: f.get("name"), classes, mode: f.get("mode") || "generate" });
     flash(document.getElementById("create-msg"), "created", true);
     render();
   } catch (e) { flash(document.getElementById("create-msg"), e.message, false); }
