@@ -33,6 +33,12 @@ from pathlib import Path
 
 import cv2
 
+try:
+    from tqdm import tqdm
+except ImportError:                       # tqdm optional — fall back to a no-op
+    def tqdm(it, **_kw):
+        return it
+
 IMG_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 DEFAULT_ROI = (736, 2221, 0, 1620)   # site inference ROI: x[736:2221] y[0:1620]
 _DRAW_MAX_W = 1280                    # scale the preview so big frames fit the screen
@@ -48,27 +54,61 @@ def list_images(in_dir: Path) -> list[Path]:
 
 def draw_roi(sample: Path) -> tuple[int, int, int, int]:
     """Let the user drag-draw an ROI on `sample`; returns (x0, x1, y0, y1) in
-    full-resolution coords. The preview is scaled to fit the screen."""
+    full-resolution coords. The preview is scaled to fit the screen.
+
+    A manual mouse-drag loop (not cv2.selectROI, which returns instantly on some
+    Qt builds) — it blocks until you accept (Enter/Space) or cancel (Esc/c/close).
+    """
     img = cv2.imread(str(sample))
     if img is None:
         sys.exit(f"❌ could not read sample image {sample}")
     h, w = img.shape[:2]
     scale = min(1.0, _DRAW_MAX_W / w)
     disp = cv2.resize(img, None, fx=scale, fy=scale) if scale < 1.0 else img
-    title = "Drag the ROI  —  Enter/Space = accept,  Esc/c = cancel"
+    win = "Drag ROI - Enter/Space=accept  Esc/c=cancel"
+    st = {"p0": None, "p1": None, "drag": False}
+
+    def on_mouse(event, mx, my, *_):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            st["p0"], st["p1"], st["drag"] = (mx, my), (mx, my), True
+        elif event == cv2.EVENT_MOUSEMOVE and st["drag"]:
+            st["p1"] = (mx, my)
+        elif event == cv2.EVENT_LBUTTONUP:
+            st["p1"], st["drag"] = (mx, my), False
+
     try:
-        x, y, bw, bh = cv2.selectROI(title, disp, showCrosshair=False, fromCenter=False)
+        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(win, disp.shape[1], disp.shape[0])
+        cv2.setMouseCallback(win, on_mouse)
+        accepted = False
+        while True:
+            canvas = disp.copy()
+            if st["p0"] and st["p1"]:
+                cv2.rectangle(canvas, st["p0"], st["p1"], (0, 255, 0), 2)
+            cv2.imshow(win, canvas)
+            k = cv2.waitKey(20) & 0xFF
+            if k in (13, 32) and st["p0"] and st["p1"]:        # Enter/Space
+                accepted = True
+                break
+            if k in (27, ord("c")):                            # Esc / c
+                break
+            if cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:  # window closed
+                break
         cv2.destroyAllWindows()
+        cv2.waitKey(1)                                          # flush the close
     except cv2.error as exc:
-        sys.exit("❌ --draw needs a GUI-capable OpenCV + a display ($DISPLAY/WSLg). "
+        sys.exit("❌ --draw needs a GUI-capable OpenCV + a display ($DISPLAY). "
                  f"Use --roi instead. ({exc})")
-    if bw == 0 or bh == 0:
+    if not accepted or not st["p0"] or not st["p1"]:
         sys.exit("ROI selection cancelled — nothing cropped.")
+    (ax, ay), (bx, by) = st["p0"], st["p1"]
+    dx0, dx1 = sorted((ax, bx))
+    dy0, dy1 = sorted((ay, by))
+    if dx1 - dx0 < 2 or dy1 - dy0 < 2:
+        sys.exit("ROI too small — nothing cropped.")
     # map the box back to full-res pixels and clamp to the image
-    x0 = max(0, round(x / scale))
-    y0 = max(0, round(y / scale))
-    x1 = min(w, round((x + bw) / scale))
-    y1 = min(h, round((y + bh) / scale))
+    x0, x1 = max(0, round(dx0 / scale)), min(w, round(dx1 / scale))
+    y0, y1 = max(0, round(dy0 / scale)), min(h, round(dy1 / scale))
     return x0, x1, y0, y1
 
 
@@ -79,7 +119,7 @@ def crop_dir(images: list[Path], roi: tuple[int, int, int, int], out_dir: Path) 
     out_dir.mkdir(parents=True, exist_ok=True)
     cropped = skipped = 0
     out_wh: tuple[int, int] | None = None
-    for p in images:
+    for p in tqdm(images, desc="cropping", unit="img"):
         img = cv2.imread(str(p))
         if img is None:
             print(f"   ⚠️  unreadable, skipped: {p.name}")
