@@ -64,7 +64,9 @@ class VideoFrameExtractor:
             "-progress", "pipe:1",
             "-nostats",
             "-loglevel", "error",
-            str(video_output / "frame_%06d.jpg")
+            # source-prefixed so frames from different videos never collide when
+            # collated into one folder (e.g. cam_20260617_091915_000123.jpg)
+            str(video_output / f"{video_name}_%06d.jpg")
         ]
         
         # Get estimated frame count
