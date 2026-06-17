@@ -1,14 +1,16 @@
+import argparse
+import json
+import multiprocessing
+import shutil
 import subprocess
-import os
 import sys
 import time
-import json
-from pathlib import Path
-from tqdm import tqdm
-from datetime import datetime
-import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import shutil
+from datetime import datetime
+from pathlib import Path
+
+from tqdm import tqdm
+
 
 class VideoFrameExtractor:
     def __init__(self, output_dir, fps=2, quality=2, width=1280, max_workers=None):
@@ -57,7 +59,9 @@ class VideoFrameExtractor:
             "-y",
             "-hwaccel", "auto",
             "-i", str(video_path),
-            "-vf", f"fps={self.fps},scale={self.width}:-2",
+            # width<=0 → keep native resolution (no scaling)
+            "-vf", (f"fps={self.fps},scale={self.width}:-2" if self.width and self.width > 0
+                    else f"fps={self.fps}"),
             "-q:v", str(self.quality),
             "-preset", "fast",
             "-threads", "0",
@@ -100,7 +104,7 @@ class VideoFrameExtractor:
                         current = int(line.split('=')[1].strip())
                         pbar.update(current - frames_extracted)
                         frames_extracted = current
-                    except:
+                    except Exception:
                         pass
             
             process.wait()
@@ -168,7 +172,7 @@ class VideoFrameExtractor:
                     fps_val = float(fps_str)
                 
                 return int(total_frames * self.fps / fps_val)
-        except:
+        except Exception:
             pass
         return None
     
@@ -203,7 +207,7 @@ class VideoFrameExtractor:
             json.dump(config, f, indent=2)
         
         print(f"\n{'='*60}")
-        print(f"🎬 Video Frame Extractor")
+        print("🎬 Video Frame Extractor")
         print(f"{'='*60}")
         print(f"📁 Output: {self.output_dir.absolute()}")
         print(f"⚙️  Settings: {self.fps} fps, quality={self.quality}, width={self.width}px")
@@ -242,7 +246,7 @@ class VideoFrameExtractor:
         total_frames = sum(r['frames'] for r in self.results if r['success'])
         
         print(f"\n{'='*60}")
-        print(f"📊 SUMMARY")
+        print("📊 SUMMARY")
         print(f"{'='*60}")
         print(f"✅ Successful: {successful}/{len(valid_videos)}")
         print(f"📸 Total frames: {total_frames}")
@@ -264,79 +268,47 @@ class VideoFrameExtractor:
         
         print(f"\n📄 Results saved to: {self.output_dir}/extraction_results.json")
 
-def main():
-    # ============================================================
-    # YOUR VIDEO PATHS
-    # ============================================================
-    
-    video_files = [
-        "/home/aatanda/IMG_0594.MOV",
-        "/home/aatanda/IMG_0595.MOV", 
-        "/home/aatanda/IMG_0626.MOV",
-        "/home/aatanda/IMG_0627.MOV",
-        "/home/aatanda/IMG_0679.MOV",
-    ]
-    
-    output_directory = "/home/aatanda/logistic/frames"
-    
-    # ============================================================
-    # CONFIGURATION
-    # ============================================================
-    
-    config = {
-        'fps': 2,
-        'quality': 2,
-        'width': 1280,
-        'max_workers': 3,
-    }
-    
-    # ============================================================
-    # VALIDATE AND RUN
-    # ============================================================
-    
-    # Check if videos exist
-    valid_videos = []
-    for video in video_files:
-        if Path(video).exists():
-            valid_videos.append(video)
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description="Extract frames from a video (or every video in a folder). "
+                    "Frames are written as <video_stem>_NNNNNN.jpg under "
+                    "<output>/<video_stem>/.")
+    ap.add_argument("video", help="a video file, or a directory of videos")
+    ap.add_argument("--fps", type=float, default=1.0,
+                    help="frames per second to extract (default: 1)")
+    ap.add_argument("--width", type=int, default=0,
+                    help="scale to this width in px; 0 = keep native resolution (default)")
+    ap.add_argument("--quality", type=int, default=2, help="JPEG quality, 2=best (default: 2)")
+    ap.add_argument("-o", "--output", default=None,
+                    help="output directory (default: alongside the video / inside the folder)")
+    ap.add_argument("--workers", type=int, default=3, help="parallel workers for a folder")
+    args = ap.parse_args(argv)
+
+    src = Path(args.video).expanduser()
+    if not src.exists():
+        sys.exit(f"❌ not found: {src}")
+
+    if src.is_dir():
+        videos = sorted(p for p in src.iterdir() if p.suffix.lower() in VIDEO_EXTS)
+        if not videos:
+            sys.exit(f"❌ no videos ({'/'.join(sorted(VIDEO_EXTS))}) in {src}")
+        out = args.output or str(src)
+        VideoFrameExtractor(output_dir=out, fps=args.fps, quality=args.quality,
+                            width=args.width, max_workers=args.workers).process_many(videos)
+    else:
+        out = args.output or str(src.parent)
+        ex = VideoFrameExtractor(output_dir=out, fps=args.fps, quality=args.quality,
+                                 width=args.width)
+        res = ex.extract_single(src)
+        if res.get("success"):
+            print(f"✅ {res['frames']} frames in {res['time']}s → {res['output']}")
         else:
-            print(f"⚠️  Warning: Video not found: {video}")
-    
-    if not valid_videos:
-        print("❌ No valid videos found!")
-        return
-    
-    print("\n" + "="*60)
-    print("🎬 VIDEO FRAME EXTRACTOR CONFIGURATION")
-    print("="*60)
-    print(f"\n📹 Videos to process ({len(valid_videos)}):")
-    for i, video in enumerate(valid_videos, 1):
-        print(f"   {i}. {Path(video).name}")
-        print(f"      ({video})")
-    
-    print(f"\n📁 Output directory: {output_directory}")
-    print(f"\n⚙️  Settings:")
-    print(f"   • FPS: {config['fps']}")
-    print(f"   • Quality: {config['quality']}")
-    print(f"   • Width: {config['width']}px")
-    print(f"   • Parallel workers: {config['max_workers']}")
-    print("\n" + "="*60)
-    
-    response = input("\nProceed with extraction? (y/n): ").strip().lower()
-    if response != 'y':
-        print("❌ Extraction cancelled.")
-        return
-    
-    # Create extractor and process
-    extractor = VideoFrameExtractor(
-        output_dir=output_directory,
-        fps=config['fps'],
-        quality=config['quality'],
-        width=config['width'],
-        max_workers=config['max_workers']
-    )
-    
-    extractor.process_many(valid_videos)
+            sys.exit(f"❌ extraction failed: {res.get('error', 'unknown')}")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
