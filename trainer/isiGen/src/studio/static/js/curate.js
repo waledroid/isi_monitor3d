@@ -16,18 +16,24 @@ async function load() {
 
 function render() {
   const showEx = document.getElementById("show-excluded").checked;
+  const showBg = document.getElementById("show-backgrounds").checked;
   const subset = records.filter((r) =>
-    (showEx || !r.excluded) && (!clsFilter || r.class_name === clsFilter));
+    (showEx || !r.excluded) && (showBg || !r.background)
+    && (!clsFilter || r.class_name === clsFilter));
   gallery.innerHTML = subset.length ? "" : "<p class='msg'>no images — ingest a folder above</p>";
   for (const r of subset) {
     const tile = document.createElement("div");
-    tile.className = "tile" + (r.excluded ? " excluded" : "");
-    const opts = classes.map((c) =>
-      `<option value="${c.name}" ${c.name === r.class_name ? "selected" : ""}>${c.name}</option>`).join("");
+    tile.className = "tile" + (r.excluded ? " excluded" : "") + (r.background ? " background" : "");
+    // Backgrounds carry no object → no class to assign; show a "bg" tag instead
+    // of the class dropdown (paste targets for copy_paste, not maskable records).
+    const meta = r.background
+      ? `<span class="bg-tag" title="empty-scene background — paste target, not masked/captioned/trained">bg</span>`
+      : `<select>${classes.map((c) =>
+          `<option value="${c.name}" ${c.name === r.class_name ? "selected" : ""}>${c.name}</option>`).join("")}</select>`;
     tile.innerHTML = `<img src="/media/${project}/thumb/${r.id}" loading="lazy" alt="${r.id}">
-      <div class="meta"><select>${opts}</select>
+      <div class="meta">${meta}
         <label class="ex"><input type="checkbox" ${r.excluded ? "checked" : ""}> excl</label></div>`;
-    tile.querySelector("select").addEventListener("change", async (e) => {
+    tile.querySelector("select")?.addEventListener("change", async (e) => {
       await sendJSON(`/api/p/${project}/records/${r.id}`, "PATCH", { class_name: e.target.value });
       r.class_name = e.target.value;
     });
@@ -49,6 +55,7 @@ document.getElementById("class-filters").addEventListener("click", (e) => {
   render();
 });
 document.getElementById("show-excluded").addEventListener("change", render);
+document.getElementById("show-backgrounds").addEventListener("change", render);
 
 document.getElementById("ingest-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();

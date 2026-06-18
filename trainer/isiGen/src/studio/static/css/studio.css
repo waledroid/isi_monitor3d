@@ -369,6 +369,22 @@ label.chip input, .toolbar label input {
   cursor: pointer;
 }
 
+/* The 14px rule above is for checkboxes — number + range controls need real width
+   to be usable (Images count on scaffolds, Inpaint strength slider on mint). */
+.toolbar input[type="number"] {
+  width: 104px;
+  height: auto;
+  padding: 6px 10px;
+  cursor: text;
+}
+
+.toolbar input[type="range"] {
+  width: 260px;
+  height: auto;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
 
 .create-form {
   display: flex;
@@ -806,6 +822,22 @@ button:disabled:hover {
   cursor: pointer;
 }
 
+/* empty-scene background record — paste target, not masked/captioned/trained */
+.tile.background {
+  outline: 2px dashed #9a6cff;
+  outline-offset: -2px;
+}
+
+.tile .bg-tag {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #9a6cff;
+  padding: 6px 10px;
+}
+
 /* ---------------- Maps Canvas & Prompting ---------------- */
 
 .record-strip {
@@ -902,6 +934,14 @@ button:disabled:hover {
   border-radius: 0;
   border: none;
   display: block;
+  /* Show the WHOLE image at its natural aspect (cancel the 4/3 box from
+     .fourup img) so nothing is letterboxed/clipped and the canvas overlay
+     aligns 1:1 with the pixels. */
+  width: 100%;
+  height: auto;
+  aspect-ratio: auto;
+  object-fit: contain;
+  min-height: 0;
 }
 
 .canvas-wrap canvas {

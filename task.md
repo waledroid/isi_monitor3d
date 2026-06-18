@@ -383,6 +383,53 @@ per-record (precedence COCO → LabelMe → YOLO), and flow straight to export. 
 
 ---
 
+## 📓 Session log — 2026-06-17 → 19 (isiGen realistic-synthesis pipeline + first dataset `black_polybag`)
+
+Drove a full real-world build (black polybags on a conveyor) and hardened the isiGen pipeline for
+hard-for-depth objects. Suite **124 green**, ruff clean.
+
+**Auto-prompt masker (Phase 3)** ✅ — optional detector that feeds boxes to SAM2 (detect → box → SAM2),
+fixing promptless SAM2 grabbing the belt/rails. New `src/stages/detection/{base,rfdetr_onnx,yolo_onnx}.py`:
+`build_prompt_detector(onnx)` auto-selects RF-DETR vs YOLO by **ONNX output names** (decoders **ported** from
+the Backbone, boxes-only, no import); class-mapped to project classes. `run_masks(prompt_detector=...)` →
+`mask_source="auto_detect"` (hand prompts still win; no detection → existing auto-guess). `src/core/models.py`
+`list_detector_onnx()` scans isidet `models/` + `runs/`. Studio masks page: **dropdown** + per-image
+**"Detect on this image"** button. Config `masking.prompt_detector`. (`test_prompt_detector.py`.)
+
+**Background show/hide toggles** ✅ — curate / masks / captions pages get a **"show backgrounds"** checkbox
+(default hidden — backgrounds are never masked/captioned/trained); curate shows a `bg` tag instead of a class
+dropdown. Control-maps keeps them visible (bg needs depth for copy_paste).
+
+**`synthesis_mode` auto-routing** ✅ — `ProjectConfig.synthesis_mode = auto|copy_paste|depth` (default auto) +
+`resolve_synthesis()`: **auto picks copy_paste+sdxl_inpaint when the project has backgrounds**, else
+depth_remix+sdxl_controlnet (the scaffold-source ⇄ generator pair is fixed). Template default `sources`
+**dropped `box3d_procedural`** (rigid-box primitive — opt-in for carton/pallet classes only). New-project
+**Synthesis selector** + scaffolds-page **resolved-path badge**. (`test_synthesis_mode.py`.) Existing projects
+unchanged under auto.
+
+**copy_paste `placement` (original/random)** ✅ — `original` pastes each object at its **real source
+location + native size** (bg + object share the fixed camera → lands on the belt, full, never cut), fixing
+random placement clipping wide objects at the frame edge. UI **Placement selector** (default random;
+`black_polybag` = original). (`test_copy_paste.py`.)
+
+**Inpaint strength control + sweep** ✅ — Mint-page **strength slider** (persists `generation.strength`;
+inpaint keeps real black pixels at low strength). **"Test strengths"** button → mints 3 samples × strengths
+0.1–0.7 with a **fixed seed**, **memory-only** intermediates, writes ONE **full-res** montage
+`_strength_compare/<project>_montage.png` (3072×7168), shown on the **project board above the Job log**
+(640px, click → full-res). Scaffolds-page **Images count box** + widened number/range inputs.
+
+**`black_polybag` (first real dataset, in progress)** — 53 polybag photos + 20 empty-conveyor backgrounds →
+curate → depth/canny → SAM2 (RF-DETR auto-prompt) → caption (`black plastic polybag`) → SDXL LoRA r16 (2000
+steps). **Depth path produces washed-out/translucent bags** (monocular depth can't see black plastic) →
+switched to **copy_paste + sdxl_inpaint + placement:original + strength≈0.25** → real black bags on the real
+belt, full + correctly labeled. Scaling to the full count is the next step.
+
+**Calibration boards printed** ✅ (via `3d` agent) — `tools/boards_print/` = the **complete** Mode-2 two-stage
+set (A4 ChArUco intrinsics + 6 AprilGrid extrinsics, 110 mm tags); the prior `tools/boards/` was missing the
+ChArUco. Walked the capture → `calibrate-2cam` → `calibration.json` flow + what the dashboard unlocks in Mode 2.
+
+---
+
 ## ▶ What's actually left, prioritized
 
 1. **✅ yolo26l-seg trained + exported + wired** (2026-06-10): finalize pass → dynamic ONNX + OpenVINO; `backbone.yaml` detection now points at `yolo26l-seg .../best.onnx`. Remaining is the on-rig KPI check (item 2). *(Part B/D)*

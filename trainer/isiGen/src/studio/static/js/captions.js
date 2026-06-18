@@ -7,7 +7,10 @@ const list = document.getElementById("caption-list");
 
 async function load() {
   const { records } = await getJSON(`/api/p/${project}/records`);
-  const active = records.filter((r) => !r.excluded);
+  // Backgrounds carry no object → never captioned (run_captions skips them).
+  // Hidden by default; toggle to review them.
+  const showBg = document.getElementById("show-backgrounds")?.checked;
+  const active = records.filter((r) => !r.excluded && (showBg || !r.background));
   list.innerHTML = active.length ? "" : "<p class='msg'>no images yet</p>";
   for (const r of active) {
     const row = document.createElement("div");
@@ -26,6 +29,8 @@ async function load() {
     list.appendChild(row);
   }
 }
+
+document.getElementById("show-backgrounds")?.addEventListener("change", load);
 
 document.getElementById("run-captions").onclick = async () => {
   try {

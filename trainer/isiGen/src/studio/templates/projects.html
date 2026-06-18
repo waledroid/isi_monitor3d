@@ -16,10 +16,17 @@
         <option value="label">Labeling dataset (LabelMe)</option>
       </select>
     </label>
+    <label>Synthesis
+      <select name="synthesis_mode" title="How Phase 6/7 synthesize. Auto picks copy-paste when you ingest backgrounds, else the depth path.">
+        <option value="auto">Auto (copy-paste if backgrounds)</option>
+        <option value="copy_paste">Copy-paste + inpaint</option>
+        <option value="depth">Depth (depth_remix + controlnet)</option>
+      </select>
+    </label>
     <button type="submit">Create</button>
     <span id="create-msg" class="msg"></span>
   </form>
-  <p class="msg">Labeling: use the Studio to annotate real images (curate → SAM2 masks → LabelMe export); no synthetic generation.</p>
+  <p class="msg">Labeling: use the Studio to annotate real images (curate → SAM2 masks → LabelMe export); no synthetic generation. <b>Synthesis = Auto</b> uses real-cutout copy-paste once you ingest background images (best for dark/featureless objects), otherwise depth-based generation.</p>
 </section>
 {% endblock %}
 {% block scripts %}<script type="module" src="/static/js/projects.js"></script>{% endblock %}

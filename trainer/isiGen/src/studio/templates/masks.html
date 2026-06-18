@@ -8,7 +8,13 @@
   <p class="msg">Box/click to mask just the class object, then Save + Run masks. Records with imported masks already have one.</p>
   <div class="toolbar">
     <button id="run-masks">Run masks (SAM2)</button>
+    <label class="chip">auto-prompt
+      <select id="prompt-detector" title="A detector auto-feeds boxes to SAM2 (detect → box → SAM2). None = SAM2 only.">
+        <option value="">— none (SAM2 only) —</option>
+      </select>
+    </label>
     <label class="chip"><input type="checkbox" id="only-review"> needs review only</label>
+    <label class="chip"><input type="checkbox" id="show-backgrounds"> show backgrounds</label>
     <span id="maps-msg" class="msg"></span>
   </div>
   <div id="record-strip" class="record-strip">loading…</div>
@@ -17,6 +23,7 @@
       <div class="canvas-wrap"><img id="v-image"><canvas id="prompt-canvas"></canvas></div>
       <div class="prompt-tools">
         <select id="prompt-class"></select>
+        <button id="prompt-detect" title="Run the selected auto-prompt detector on THIS image and draw its boxes">Detect on this image</button>
         <button id="prompt-clear">Clear prompts</button>
         <button id="prompt-save">Save prompts</button>
       </div>

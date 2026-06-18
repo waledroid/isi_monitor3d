@@ -35,7 +35,8 @@ document.getElementById("create-form").addEventListener("submit", async (ev) => 
     });
   try {
     await sendJSON("/api/projects", "POST",
-      { name: f.get("name"), classes, mode: f.get("mode") || "generate" });
+      { name: f.get("name"), classes, mode: f.get("mode") || "generate",
+        synthesis_mode: f.get("synthesis_mode") || "auto" });
     flash(document.getElementById("create-msg"), "created", true);
     render();
   } catch (e) { flash(document.getElementById("create-msg"), e.message, false); }

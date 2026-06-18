@@ -3,7 +3,7 @@ cameras:
   cam_a:
     source:
       name: rtsp
-      url: rtsp://admin:admin@192.168.1.88:554/2
+      url: rtsp://admin:admin@192.168.1.88:554/1
       latency_ms: 100
       capture_fps: 12
 ingestion:

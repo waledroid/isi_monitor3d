@@ -26,6 +26,7 @@
     <button class="chip active" data-cls="">all</button>
     {% for c in classes %}<button class="chip" data-cls="{{ c.name }}">{{ c.name }}</button>{% endfor %}
     <label class="chip"><input type="checkbox" id="show-excluded"> show excluded</label>
+    <label class="chip"><input type="checkbox" id="show-backgrounds"> show backgrounds</label>
   </div>
   <div id="gallery" class="gallery" data-project="{{ project }}"
        data-classes='{{ classes | tojson }}'>loading…</div>

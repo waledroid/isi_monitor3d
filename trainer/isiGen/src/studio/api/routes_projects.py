@@ -24,6 +24,7 @@ class CreateProjectBody(BaseModel):
     name: str = Field(min_length=1, pattern=r"^[A-Za-z0-9_\-]+$")
     classes: list[ClassSpec] = Field(min_length=1)
     mode: Literal["generate", "label"] = "generate"
+    synthesis_mode: Literal["auto", "copy_paste", "depth"] = "auto"
 
 
 @router.get("/api/projects")
@@ -44,7 +45,8 @@ async def projects(request: Request) -> dict:
 async def create(request: Request, body: CreateProjectBody) -> dict:
     try:
         path = create_project(request.app.state.settings.data_dir,
-                              body.name, body.classes, mode=body.mode)
+                              body.name, body.classes, mode=body.mode,
+                              synthesis_mode=body.synthesis_mode)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:

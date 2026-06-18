@@ -6,17 +6,28 @@
 <section class="card" id="gal-root" data-project="{{ project }}">
   <h1>Phase 6 — Synthetic scaffolds</h1>
   <p class="msg">Each pair is a procedural <b>control map</b> (depth the generator follows) + its <b>ground-truth mask</b> (the label the minted image inherits).</p>
-  <div class="toolbar" id="paste-toolbar" hidden>
-    <label>Objects per background
+  <div class="toolbar" id="scaffold-toolbar">
+    <label>Images
+      <input id="scaffold-count" type="number" min="1" step="50" value="500">
+    </label>
+    <label id="placement-label" hidden>Placement
+      <select id="placement" title="Original = paste at the object's real source location/size (same-camera: on the belt, full, never cut). Random = jittered location + scale.">
+        <option value="random">Random (jittered)</option>
+        <option value="original">Original (real location)</option>
+      </select>
+    </label>
+    <label id="paste-label" hidden>Objects per background
       <select id="paste-count">
         <option value="1">Exactly 1</option>
         <option value="1-2">1–2 (random)</option>
       </select>
     </label>
     <button id="scaffold-run">Generate scaffolds</button>
+    <span id="synthesis-badge" class="chip" title="Resolved from the project's synthesis_mode + background count"></span>
     <span id="scaffold-msg" class="msg"></span>
   </div>
-  <p class="msg" id="paste-help" hidden>copy_paste pastes this many real objects onto each background image (clean, non-overlapping). Saved as the project default.</p>
+  <p class="msg" id="count-help">One synthetic image is minted per scaffold, split evenly across the configured sources. Default <b>500</b>. Saved as the project default.</p>
+  <p class="msg" id="paste-help" hidden>copy_paste pastes real objects onto each background. <b>Placement</b>: Original keeps each object at its true on-belt location/size (full, uncut — best for same-camera footage); Random jitters location + scale. Saved as the project default.</p>
   <div id="scaffold-gallery" class="gallery">loading…</div>
 </section>
 {% endblock %}

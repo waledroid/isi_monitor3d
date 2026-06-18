@@ -48,11 +48,12 @@ class CopyPasteScaffolds(ScaffoldSource):
                  scale_jitter: tuple = (0.8, 1.2), min_frac: float = 0.25,
                  max_frac: float = 0.85, depth_scale: bool = True,
                  avoid_overlap: bool = True, placement_tries: int = 30,
-                 dilate: int = 9, paste_count: int | list | tuple = 1, **cfg) -> None:
+                 dilate: int = 9, paste_count: int | list | tuple = 1,
+                 placement: str = "random", **cfg) -> None:
         super().__init__(project_dir=project_dir, seed=seed, scale_jitter=scale_jitter,
                          min_frac=min_frac, max_frac=max_frac, depth_scale=depth_scale,
                          avoid_overlap=avoid_overlap, placement_tries=placement_tries,
-                         dilate=dilate, paste_count=paste_count, **cfg)
+                         dilate=dilate, paste_count=paste_count, placement=placement, **cfg)
         self.project_dir = project_dir            # injected by the runner
         self.seed = seed
         self.scale_jitter = tuple(scale_jitter)   # jitter around the object's REAL size
@@ -62,6 +63,10 @@ class CopyPasteScaffolds(ScaffoldSource):
         self.avoid_overlap = bool(avoid_overlap)  # place clear of existing objects
         self.placement_tries = int(placement_tries)
         self.dilate = int(dilate)
+        # "original": paste each object at its SOURCE location + native scale (bg and
+        # object frames share the fixed camera, so the real position transfers exactly
+        # → on the belt, full, never cut). "random": random location + scale jitter.
+        self.placement = str(placement)
         # objects pasted per scene: an int (exactly N) or [lo, hi] (random per scene)
         self.paste_count = (list(paste_count) if isinstance(paste_count, (list, tuple))
                             else int(paste_count))
@@ -142,13 +147,20 @@ class CopyPasteScaffolds(ScaffoldSource):
         paste_all = np.zeros((H, W), dtype=bool)
         pasted_classes: set[str] = set()
         for obj in objs:
-            prep = self._prep_object(pdir, obj, H, W, bg_depth, rng)
-            if prep is None:
-                continue
-            rgb_r, dep_r, bin_r, tw, th = prep
-            px, py = self._place(rng, W, H, tw, th, bin_r, occupied)
-            if px is None:
-                continue
+            if self.placement == "original":
+                # Paste at the object's real position + native size (same camera).
+                prep = self._prep_object_original(pdir, obj, H, W)
+                if prep is None:
+                    continue
+                rgb_r, dep_r, bin_r, px, py, tw, th = prep
+            else:
+                prep = self._prep_object(pdir, obj, H, W, bg_depth, rng)
+                if prep is None:
+                    continue
+                rgb_r, dep_r, bin_r, tw, th = prep
+                px, py = self._place(rng, W, H, tw, th, bin_r, occupied)
+                if px is None:
+                    continue
             region = (py, py + th, px, px + tw)
             y0, y1, x0, x1 = region
             base[y0:y1, x0:x1][bin_r] = rgb_r[bin_r]
@@ -210,6 +222,42 @@ class CopyPasteScaffolds(ScaffoldSource):
         bin_r = cv2.resize(crop_bin.astype(np.uint8), (tw, th),
                            interpolation=cv2.INTER_NEAREST).astype(bool)
         return rgb_r, dep_r, bin_r, tw, th
+
+    def _prep_object_original(self, pdir, obj, H, W):
+        """Cut obj to its mask bbox at NATIVE scale and return it with the SOURCE
+        top-left, so the object lands exactly where it was photographed.
+
+        Returns (rgb, dep, binc, px, py, w, h) or None. Object and background come
+        from the same fixed camera, so the position transfers directly; if their
+        resolutions differ the bbox is scaled by the size ratio. The paste is
+        clipped into the frame defensively (a source bbox is already in-frame)."""
+        obj_img = cv2.imread(str(pdir / obj.image))
+        obj_depth = cv2.imread(str(pdir / obj.depth_map), cv2.IMREAD_GRAYSCALE)
+        obj_mask = cv2.imread(str(pdir / obj.mask))
+        if any(x is None for x in (obj_img, obj_depth, obj_mask)):
+            return None
+        oh, ow = obj_img.shape[:2]
+        obj_bin = obj_mask.any(axis=2)
+        ys, xs = np.nonzero(obj_bin)
+        if xs.size == 0:
+            return None
+        y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+        rgb = obj_img[y0:y1, x0:x1]
+        dep = obj_depth[y0:y1, x0:x1]
+        binc = obj_bin[y0:y1, x0:x1]
+        bh, bw = binc.shape
+        px, py = int(x0), int(y0)
+        if (ow, oh) != (W, H):                       # different resolution → scale pos+size
+            sx, sy = W / ow, H / oh
+            bw, bh = max(1, round(bw * sx)), max(1, round(bh * sy))
+            rgb = cv2.resize(rgb, (bw, bh), interpolation=cv2.INTER_AREA)
+            dep = cv2.resize(dep, (bw, bh), interpolation=cv2.INTER_AREA)
+            binc = cv2.resize(binc.astype(np.uint8), (bw, bh),
+                              interpolation=cv2.INTER_NEAREST).astype(bool)
+            px, py = round(x0 * sx), round(y0 * sy)
+        px = max(0, min(int(px), W - bw))
+        py = max(0, min(int(py), H - bh))
+        return rgb, dep, binc, px, py, bw, bh
 
     def _place(self, rng, W, H, tw, th, bin_r, occupied):
         """Top-left (px,py) for the paste. When avoid_overlap, try several random

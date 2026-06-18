@@ -118,11 +118,21 @@ def _pick_main_mask(masks: list[np.ndarray], shape_hw: tuple[int, int]) -> np.nd
     return best.astype(bool)
 
 
-def run_masks(project_dir: Path, *, force: bool = False) -> dict:
+def run_masks(project_dir: Path, *, force: bool = False,
+              prompt_detector: str | None = None) -> dict:
     """Phase 2 (ground-truth side) — SAM2 masks, composited to the color-coded PNG.
 
     Prompted records use their Studio prompts; promptless ones fall back to the
-    automatic generator (single-class → assigned; multi-class → needs_review)."""
+    automatic generator (single-class → assigned; multi-class → needs_review).
+
+    ``prompt_detector`` (the masks-page dropdown) overrides + persists an optional
+    **auto-prompt detector** ONNX: pass a model path to enable, ``""``/``"none"``
+    to clear, ``None`` to leave the configured value. When a detector is active,
+    records with **no hand-drawn prompts** are detected (RF-DETR/YOLO) → the boxes
+    feed SAM2 as box prompts (``mask_source="auto_detect"``); hand-drawn prompts
+    still win, and images the detector finds nothing in fall back to ``segment_auto``."""
+    from ..stages.detection import build_prompt_detector
+    from .project import save_project
     project = load_project(project_dir)
     project_dir = Path(project_dir)
     cfg = project.phase("masking")
@@ -131,14 +141,34 @@ def run_masks(project_dir: Path, *, force: bool = False) -> dict:
     fallback_auto = bool((cfg.get(masker_name) or {}).get("fallback_auto", True))
     single_class = len(project.classes) == 1
 
+    # Resolve + persist the optional auto-prompt detector selection.
+    det_cfg = cfg.setdefault("prompt_detector", {}) or {}
+    cfg["prompt_detector"] = det_cfg
+    if prompt_detector is not None:
+        det_cfg["onnx_path"] = (prompt_detector
+                                if prompt_detector and prompt_detector.lower() != "none"
+                                else None)
+        save_project(project_dir, project)
+    detector_path = det_cfg.get("onnx_path")
+    project_class_names = [c.name for c in project.classes]
+
     manifest = Manifest.load(project_dir)
     # Background images carry no object — SAM2 must not invent one on an empty scene.
     todo = [r for r in manifest.active()
             if (force or r.mask is None) and not r.background]
     if not todo:
         return {"masked": 0}
-    logger.info("masks: %d image(s) to process", len(todo))
+    logger.info("masks: %d image(s) to process%s", len(todo),
+                f" | auto-prompt detector: {Path(detector_path).name}" if detector_path else "")
     masker.load()
+    detector = None
+    if detector_path:
+        detector = build_prompt_detector(
+            detector_path,
+            confidence_threshold=float(det_cfg.get("confidence_threshold", 0.35)),
+            class_map=det_cfg.get("class_map") or None,
+        )
+        detector.load()
     done = 0
     try:
         for i, rec in enumerate(todo, 1):
@@ -151,6 +181,11 @@ def run_masks(project_dir: Path, *, force: bool = False) -> dict:
             if rec.mask_prompts:
                 class_masks = masker.segment_prompted(img, rec.mask_prompts)
                 rec.mask_source = "prompted"
+                rec.needs_review = False
+            elif detector is not None and (auto_prompts := detector.detect(img, project_class_names)):
+                # Auto-prompt: detector boxes → SAM2 box prompts → tight masks.
+                class_masks = masker.segment_prompted(img, auto_prompts)
+                rec.mask_source = "auto_detect"
                 rec.needs_review = False
             elif fallback_auto:
                 auto = masker.segment_auto(img)
@@ -181,6 +216,8 @@ def run_masks(project_dir: Path, *, force: bool = False) -> dict:
             done += 1
     finally:
         masker.close()
+        if detector is not None:
+            detector.close()
     manifest.save()
     logger.info("masks: %d done", done)
     return {"masked": done}
@@ -215,24 +252,41 @@ def save_scaffold_index(project_dir: Path, entries: list[dict]) -> None:
 
 
 def run_scaffolds(project_dir: Path, *, count: int | None = None,
-                  paste_count: int | list | None = None) -> dict:
+                  paste_count: int | list | None = None,
+                  placement: str | None = None) -> dict:
     """Phase 6 — materialize (control map, ground-truth mask) pairs under
     scaffolds/ + an index the generation phase consumes. Count splits evenly
     across the configured sources.
 
+    ``count`` (the scaffolds-page box) overrides + persists how many synthetic
+    images to make (one per scaffold); ``None`` keeps the project default (500).
     ``paste_count`` (the scaffolds-page toggle) overrides + persists how many
-    objects copy_paste lands per scene (an int, or ``[lo, hi]`` for random)."""
+    objects copy_paste lands per scene (an int, or ``[lo, hi]`` for random).
+    ``placement`` (the scaffolds-page selector) overrides + persists the copy_paste
+    placement mode (``"original"`` = real source location/size, ``"random"`` =
+    jittered); ``None`` keeps the configured value."""
     from ..stages.scaffolds.base import SCAFFOLD_SOURCES
     from .project import save_project
     project = load_project(project_dir)
     project_dir = Path(project_dir)
     cfg = project.phase("scaffolds")
+    if count is not None:
+        cfg["count"] = int(count)
     if paste_count is not None:
         cfg.setdefault("copy_paste", {})["paste_count"] = paste_count
+    if placement is not None:
+        cfg.setdefault("copy_paste", {})["placement"] = placement
+    if count is not None or paste_count is not None or placement is not None:
         save_project(project_dir, project)
     gen_cfg = project.phase("generation")
-    sources = list(cfg.get("sources", ["box3d_procedural"]))
-    total = int(count if count is not None else cfg.get("count", 100))
+    # Resolve sources from synthesis_mode + background presence (copy_paste when the
+    # project has backgrounds in auto mode), not the raw config — keeps the
+    # scaffold↔generator pair matched with run_generation. See resolve_synthesis().
+    from .project import resolve_synthesis
+    sources, _gen, syn_info = resolve_synthesis(project, project_dir)
+    logger.info("scaffolds: synthesis path = %s (mode=%s, %d backgrounds) → sources=%s",
+                syn_info["path"], syn_info["mode"], syn_info["bg_count"], sources)
+    total = int(cfg.get("count", 500))
     per = max(1, total // max(1, len(sources)))
     # Ensure the output dir exists — a prior Reset deletes it, and cv2.imwrite
     # fails SILENTLY into a missing dir (index entries but no image files).
@@ -291,18 +345,31 @@ def _build_prompt(project: ProjectConfig, classes: list[str], rng) -> str:
     return f"a photo of {subject}, {rng.choice(backgrounds)}"
 
 
-def run_generation(project_dir: Path, *, limit: int | None = None) -> dict:
+def run_generation(project_dir: Path, *, limit: int | None = None,
+                   strength: float | None = None) -> dict:
     """Phases 5+7 — init the SDXL ControlNet pipeline once (load()), then mint
     one synthetic image per pending scaffold. Each output lands in generated/
     with its prompt, and joins the manifest as a synthetic record whose MASK is
-    the scaffold's ground truth (aligned by construction)."""
+    the scaffold's ground truth (aligned by construction).
+
+    ``strength`` (the mint-page slider) overrides + persists the inpaint strength
+    for the copy_paste path (lower = keep more of the real pasted pixels → darker/
+    truer object; higher = regenerate more). Ignored by the depth controlnet path.
+    ``None`` keeps the configured value."""
     import random
 
     from ..stages.generation.base import IMAGE_GENERATORS
+    from .project import resolve_synthesis, save_project
     project = load_project(project_dir)
     project_dir = Path(project_dir)
+    if strength is not None:
+        project.phase("generation")["strength"] = float(strength)
+        save_project(project_dir, project)
     cfg = dict(project.phase("generation"))
-    name = cfg.pop("generator", "sdxl_controlnet")
+    # Generator is derived from synthesis_mode (paired with the scaffolds we built),
+    # not read from config — copy_paste⇄sdxl_inpaint, depth⇄sdxl_controlnet.
+    cfg.pop("generator", None)
+    _sources, name, _syn = resolve_synthesis(project, project_dir)
     seed_cfg = int(cfg.pop("seed", -1))
     generator = IMAGE_GENERATORS.create(name, **cfg)
     entries = load_scaffold_index(project_dir)
@@ -355,6 +422,93 @@ def run_generation(project_dir: Path, *, limit: int | None = None) -> dict:
     finally:
         generator.close()
     return {"generated": done}
+
+
+def run_strength_test(project_dir: Path, *,
+                      strengths: tuple = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7),
+                      n: int = 3, seed: int = 12345, tile: int | None = None) -> dict:
+    """Mint ``n`` sample scaffolds at each inpaint ``strength`` and write a labeled
+    montage (rows = strength, cols = sample) to ``<project>/_strength_compare/`` — a
+    quick visual sweep to pick the best strength. FIXED seed + fixed per-sample prompt
+    ⇒ strength is the only variable. The pipeline loads ONCE and varies strength per
+    call. Side test only: it does NOT touch the manifest or scaffold statuses, and the
+    real ``generated/`` images are untouched. Inpaint (copy_paste) path only.
+
+    The montage is FULL-RESOLUTION: each cell is the native generated size
+    (``generation.width`` x ``generation.height``), so a 7x3 sweep at 1024 px is a
+    3072x7168 image. Pass ``tile`` to downscale each cell to ``tile`` px square (used
+    by tests to stay small)."""
+    import random
+
+    from ..stages.generation.base import IMAGE_GENERATORS
+    from .project import resolve_synthesis
+    project = load_project(project_dir)
+    project_dir = Path(project_dir)
+    _sources, name, _syn = resolve_synthesis(project, project_dir)
+    if name != "sdxl_inpaint":
+        raise ValueError("strength test applies only to the copy_paste + sdxl_inpaint "
+                         "path (strength has no effect on the depth controlnet path)")
+    entries = [e for e in load_scaffold_index(project_dir)
+               if e.get("base") and e.get("inpaint")
+               and (project_dir / e["control"]).exists()
+               and (project_dir / e["base"]).exists()
+               and (project_dir / e["inpaint"]).exists()]
+    if not entries:
+        raise ValueError("strength test: no copy_paste scaffolds found — run Phase 6 first")
+    samples = entries[: max(1, int(n))]
+    strengths = [round(float(s), 3) for s in strengths]
+
+    gcfg = project.phase("generation")
+    # cell size = native generated size (full-res montage), unless `tile` downscales it.
+    tw = th = int(tile) if tile else 0
+    if not tile:
+        tw, th = int(gcfg.get("width", 1024)), int(gcfg.get("height", 1024))
+    # label scales with cell size so it stays readable at full res.
+    bar = max(22, th // 16)
+    fscale = tw / 640.0
+    fthick = max(1, round(tw / 380))
+
+    cfg = dict(gcfg)
+    for k in ("generator", "seed", "strength"):
+        cfg.pop(k, None)
+    generator = IMAGE_GENERATORS.create(name, **cfg)
+    out = project_dir / "_strength_compare"
+    out.mkdir(exist_ok=True)
+    rng = random.Random(seed)
+    prompts = {e["id"]: _build_prompt(project, e.get("classes", []), rng) for e in samples}
+
+    grid_rows = []
+    total = len(strengths) * len(samples)
+    step = 0
+    generator.load()
+    try:
+        for s in strengths:
+            row = []
+            for e in samples:
+                step += 1
+                progress.report(step, total, "strength-test")
+                control = cv2.imread(str(project_dir / e["control"]), cv2.IMREAD_GRAYSCALE)
+                base = cv2.imread(str(project_dir / e["base"]))
+                mask = cv2.imread(str(project_dir / e["inpaint"]), cv2.IMREAD_GRAYSCALE)
+                img = generator.generate(prompts[e["id"]], control, seed=seed,
+                                         base_image=base, mask_image=mask, strength=s)
+                t = img if (img.shape[1], img.shape[0]) == (tw, th) else cv2.resize(img, (tw, th))
+                t = t.copy()
+                cv2.rectangle(t, (0, 0), (tw, bar), (0, 0, 0), -1)
+                cv2.putText(t, f"strength {s:.2f}", (8, int(bar * 0.72)),
+                            cv2.FONT_HERSHEY_SIMPLEX, fscale, (255, 255, 255),
+                            fthick, cv2.LINE_AA)
+                row.append(t)
+            grid_rows.append(np.hstack(row))
+    finally:
+        generator.close()
+    # Save ONLY the montage (no per-strength folders), named <project>_montage.png.
+    montage_rel = f"_strength_compare/{project_dir.name}_montage.png"
+    cv2.imwrite(str(project_dir / montage_rel), np.vstack(grid_rows))
+    logger.info("strength test: %d strengths x %d samples -> %s",
+                len(strengths), len(samples), montage_rel)
+    return {"strengths": strengths, "samples": [e["id"] for e in samples],
+            "montage": montage_rel}
 
 
 def run_filter(project_dir: Path, *, force: bool = False) -> dict:

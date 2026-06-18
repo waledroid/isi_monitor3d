@@ -29,15 +29,25 @@ function colorOf(name) {
 async function load() {
   records = (await getJSON(`/api/p/${project}/records`)).records.filter((r) => !r.excluded);
   renderStrip();
-  if (records.length && !current) select(records[0]);
+  // Land on the first VISIBLE record (skips backgrounds on the masks page, which
+  // hides them by default — they're never masked anyway).
+  if (records.length && !current) select(records.find(passesFilters) || records[0]);
+}
+
+// Backgrounds are hidden by default on the masks page (toggle present); the
+// control-maps page has no toggle, so it shows everything (it needs bg depth).
+function passesFilters(r) {
+  if (el("only-review")?.checked && !r.needs_review) return false;
+  const bgToggle = el("show-backgrounds");
+  if (bgToggle && !bgToggle.checked && r.background) return false;
+  return true;
 }
 
 function renderStrip() {
-  const onlyReview = el("only-review")?.checked;
   const strip = el("record-strip");
   strip.innerHTML = "";
   for (const r of records) {
-    if (onlyReview && !r.needs_review) continue;
+    if (!passesFilters(r)) continue;
     const t = document.createElement("img");
     t.src = `/media/${project}/thumb/${r.id}`;
     t.className = (current && r.id === current.id ? "active " : "") + (r.needs_review ? "review" : "");
@@ -70,7 +80,8 @@ function canvasPos(e) {
   return [(e.clientX - rect.left) * sx, (e.clientY - rect.top) * sy];
 }
 
-function drawPrompts() {
+// `live` (optional [x1,y1,x2,y2] in SOURCE px) draws the in-progress drag box.
+function drawPrompts(live) {
   if (!canvas || !img) return;
   const rect = img.getBoundingClientRect();
   canvas.width = rect.width; canvas.height = rect.height;
@@ -89,10 +100,25 @@ function drawPrompts() {
       ctx.strokeRect(a * kx, b * ky, (c - a) * kx, (d - b) * ky);
     }
   }
+  if (live) {                                    // dashed preview while dragging
+    ctx.strokeStyle = colorOf(clsSel.value);
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(live[0] * kx, live[1] * ky,
+                   (live[2] - live[0]) * kx, (live[3] - live[1]) * ky);
+    ctx.setLineDash([]);
+  }
 }
 
 if (canvas) {
-  canvas.addEventListener("pointerdown", (e) => { dragStart = canvasPos(e); });
+  canvas.addEventListener("pointerdown", (e) => {
+    dragStart = canvasPos(e);
+    canvas.setPointerCapture(e.pointerId);       // keep move events if cursor leaves
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!current || !dragStart) return;
+    const cur = canvasPos(e);
+    drawPrompts([dragStart[0], dragStart[1], cur[0], cur[1]]);
+  });
   canvas.addEventListener("pointerup", (e) => {
     if (!current || !dragStart) return;
     const end = canvasPos(e);
@@ -135,10 +161,43 @@ if (saveBtn) saveBtn.onclick = async () => {
   flash(el("maps-msg"), "prompts saved — run masks to apply", true);
 };
 
+// ── Auto-prompt detector (masks page only) ──────────────────────────────────
+const detSel = el("prompt-detector");
+async function loadDetectors() {
+  if (!detSel) return;
+  try {
+    const { models, current: cur } = await getJSON(`/api/p/${project}/detector-models`);
+    for (const m of models) {
+      const o = document.createElement("option");
+      o.value = m.path; o.textContent = m.label;
+      detSel.appendChild(o);
+    }
+    if (cur) detSel.value = cur;          // reflect the persisted selection
+  } catch { /* dropdown stays "none" if isidet models can't be listed */ }
+}
+
+const detectBtn = el("prompt-detect");
+if (detectBtn) detectBtn.onclick = async () => {
+  if (!current) return;
+  if (!detSel?.value) { flash(el("maps-msg"), "pick an auto-prompt detector first", false); return; }
+  detectBtn.disabled = true;
+  flash(el("maps-msg"), "detecting…", true);
+  try {
+    const { prompts: found } = await sendJSON(
+      `/api/p/${project}/records/${current.id}/detect-prompts`, "POST", { onnx_path: detSel.value });
+    // Replace existing box prompts with the detector's; keep hand-drawn points.
+    prompts = prompts.filter((p) => p.kind !== "box").concat(found || []);
+    drawPrompts();
+    flash(el("maps-msg"), `${(found || []).length} box(es) — edit then Save prompts`, true);
+  } catch (e) { flash(el("maps-msg"), e.message, false); }
+  finally { detectBtn.disabled = false; }
+};
+
 function runner(phase) {
   return async () => {
     try {
-      const { job } = await sendJSON(`/api/p/${project}/run/${phase}`, "POST", {});
+      const body = phase === "masks" && detSel ? { prompt_detector: detSel.value || "none" } : {};
+      const { job } = await sendJSON(`/api/p/${project}/run/${phase}`, "POST", body);
       flash(el("maps-msg"), `${phase} running…`, true);
       watchJob(job.id, null, async (j) => {
         flash(el("maps-msg"), j.state === "done" ? `${phase} done` : j.error, j.state === "done");
@@ -153,5 +212,7 @@ function runner(phase) {
 if (el("run-maps")) el("run-maps").onclick = runner("maps");
 if (el("run-masks")) el("run-masks").onclick = runner("masks");
 el("only-review")?.addEventListener("change", renderStrip);
+el("show-backgrounds")?.addEventListener("change", renderStrip);
 
 load();
+loadDetectors();

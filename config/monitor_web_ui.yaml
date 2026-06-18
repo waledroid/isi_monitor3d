@@ -4,7 +4,7 @@ model_xml_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/detect/models/yo
 pose_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/tests/.cache/yolo11n-pose.onnx
 show_nodes: true
 show_masks: true
-show_boxes: false
+show_boxes: true
 display_fps: 25
 warehouse_map:
   elements: []

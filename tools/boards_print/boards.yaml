@@ -1,0 +1,49 @@
+boards:
+  charuco_main:
+    _type_: charuco
+    size: [5, 7]
+    square_length: 0.035
+    marker_length: 0.026
+    aruco_dict: "5X5_50"
+  april_0:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 0
+  april_1:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 2
+  april_2:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 4
+  april_3:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 6
+  april_4:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 8
+  april_5:
+    _type_: aprilgrid
+    size: [1, 2]
+    tag_length: 0.11
+    tag_spacing: 0.2
+    tag_family: t36h11
+    start_id: 10

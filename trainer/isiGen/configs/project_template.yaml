@@ -10,6 +10,13 @@ classes:                       # unique names, unique triggers, unique colors
   - {name: carton,  trigger: ISI_CRTN,  color: [40, 200, 40]}
   - {name: polybag, trigger: ISI_PLYBG, color: [40, 90, 230]}
 
+# How Phase 6/7 synthesize. "auto" (default): if the project has BACKGROUND images
+# (curate a `bg`/`background` folder), use copy_paste + sdxl_inpaint (paste real
+# cutouts onto real scenes, harmonize the seam — best when monocular depth can't see
+# the object, e.g. black/featureless or irregular items); otherwise the depth path
+# (depth_remix + sdxl_controlnet). Force with "copy_paste" / "depth".
+synthesis_mode: auto
+
 phases:
   # ── Phase 1: curate real images ────────────────────────────────────────────
   curate:
@@ -35,6 +42,10 @@ phases:
       device: cuda
       multimask_output: false
       fallback_auto: true      # promptless records → automatic mask generator
+    prompt_detector:           # optional auto-prompt detector (detect → box → SAM2)
+      onnx_path: null          # null → none (SAM2 only). A detector .onnx auto-prompts SAM2.
+      confidence_threshold: 0.35
+      # class_map: {}          # optional detector-class → project-class override
 
   # ── Phase 3: anti-bleed captions ───────────────────────────────────────────
   # captioner: template (random-background bank, instant, offline) OR
@@ -73,32 +84,47 @@ phases:
     lr: 1.0e-4
     batch_size: 1
     grad_accum: 4
-  # Two scaffold paths:
-  #  - depth_remix / box3d_procedural → NEW scenes (use generator: sdxl_controlnet)
-  #  - copy_paste → real backgrounds + a pasted object (use generator: sdxl_inpaint)
-  #    "paste-then-harmonize": keeps the real background, inpaints only the object.
+  # Scaffold sources for the DEPTH path (the generator is auto-paired by
+  # synthesis_mode — you don't set it here):
+  #  - depth_remix      → recombines your REAL (depth, mask) pairs into new layouts.
+  #                       Good general default for any object with usable depth.
+  #  - box3d_procedural → synthetic rigid-box stacks (pallet + cartons). OPT-IN, and
+  #                       only for BOX-SHAPED classes (cartons/pallets) — it renders
+  #                       cuboids, so it's wrong for polybags/irregular objects. Add
+  #                       it to `sources` only for box classes.
+  # When synthesis_mode resolves to copy_paste (backgrounds present), `sources` is
+  # ignored and copy_paste + sdxl_inpaint is used instead.
   scaffolds:
-    sources: [depth_remix, box3d_procedural]
+    sources: [depth_remix]
     count: 500
     depth_remix: {}
-    box3d_procedural: {}
+    box3d_procedural: {}       # configured but opt-in; add to `sources` for box classes
     copy_paste:                # depth-aware paste of real object(s) onto a real bg
       # Best with BACKGROUND-ONLY images (empty scenes, no object): put them in a
       # folder named `bg` or `background` at curate (e.g. <class>/img/ + <class>/bg/).
       # Pasting onto an empty background can't overlap an existing object → exact
       # labels. With no backgrounds it falls back to pasting onto object images.
+      placement: random        # "random" (default) = random location + scale jitter
+                               # (the *_frac / scale_jitter / depth_scale / avoid_overlap
+                               # / placement_tries knobs below apply only here).
+                               # "original" = paste each object at its REAL source
+                               # location + native size — RECOMMENDED when bg + object
+                               # come from the SAME fixed camera (lands exactly on the
+                               # belt, full, never cut). Pick it on the scaffolds page.
       paste_count: 1           # objects pasted per scene: an int, or [lo, hi] random
                                # ([1, 2] = clean singles + doubles); set via the
                                # scaffolds-page toggle (Exactly 1 / 1–2 random).
-      scale_jitter: [0.8, 1.2] # jitter around the object's REAL frame-size (not tiny)
-      min_frac: 0.25           # floor: object height >= this fraction of the frame
-      max_frac: 0.85           # ceiling
-      depth_scale: true        # nearer (brighter depth) ⇒ mildly larger paste
-      avoid_overlap: true      # place clear of existing objects (clean doubles)
-      placement_tries: 30
+      scale_jitter: [0.8, 1.2] # (random only) jitter around the object's REAL frame-size
+      min_frac: 0.25           # (random only) floor: object height >= this frac of frame
+      max_frac: 0.85           # (random only) ceiling
+      depth_scale: true        # (random only) nearer (brighter depth) ⇒ mildly larger
+      avoid_overlap: true      # (random only) place clear of existing objects
+      placement_tries: 30      # (random only)
       dilate: 9                # inpaint-mask dilation around the paste (seam)
   generation:
-    generator: sdxl_controlnet   # OR sdxl_inpaint (pairs with copy_paste scaffolds)
+    # NOTE: `generator` is AUTO-PAIRED from synthesis_mode (copy_paste→sdxl_inpaint,
+    # depth→sdxl_controlnet) — this value is ignored, kept only for reference.
+    generator: sdxl_controlnet
     base_model: stabilityai/stable-diffusion-xl-base-1.0
     controlnet: diffusers/controlnet-depth-sdxl-1.0
     vae: madebyollin/sdxl-vae-fp16-fix   # stock SDXL VAE NaNs in fp16

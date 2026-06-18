@@ -313,6 +313,29 @@ for everything downstream**, so this is the one phase worth your attention.
 > Spend your time here. A wrong mask now becomes a wrong label in thousands of
 > synthetic images later.
 
+### Auto-prompt detector (optional, fully automatic)
+
+On busy scenes (a package on a moving belt with rails), promptless SAM2 often
+grabs the **belt or rails** instead of the object. The fix is **detect → box →
+SAM2**: pick a trained detector and it feeds its boxes to SAM2 as prompts, so
+SAM2 returns a tight mask on the right object — no clicking.
+
+- The masks toolbar has an **auto-prompt** dropdown. Default **"— none (SAM2
+  only) —"** keeps the behavior above (hand prompts / auto-guess). Pick a model
+  and **Run masks**: every image with **no hand-drawn prompts** is detected, the
+  boxes prompt SAM2, and the mask is tagged `auto_detect`. Hand-drawn prompts
+  still win; images the detector finds nothing in fall back to the auto-guess.
+- The dropdown lists detectors trained in the sibling **isidet** trainer (its
+  `models/` + `runs/` `*.onnx`). Both **RF-DETR** and **YOLO** exports work — the
+  task is auto-detected from the ONNX outputs.
+- Detector classes map to your project classes **by name** (case-insensitive);
+  in a **single-class** project every detection becomes that one class. Unknown
+  classes are ignored.
+- **Detect on this image** (next to the prompt canvas) runs the detector on just
+  the current image and draws its boxes so you can edit them before **Save**.
+- The selection persists to `masking.prompt_detector.onnx_path`
+  (`confidence_threshold` defaults to 0.35); choosing **none** clears it.
+
 ---
 
 ## Phase 4 — Anti-bleed captions

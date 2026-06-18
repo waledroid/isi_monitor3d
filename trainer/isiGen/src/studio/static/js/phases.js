@@ -124,5 +124,20 @@ async function render() {
 
 document.getElementById("refresh-board")?.addEventListener("click", render);
 
+// Show the latest strength-sweep montage (from the Mint page's "Test strengths")
+// just above the Job log — hidden until one exists.
+function loadStrengthMontage() {
+  const card = document.getElementById("strength-montage-card");
+  const img = document.getElementById("strength-montage");
+  const link = document.getElementById("strength-montage-link");
+  if (!card || !img) return;
+  const url = `/api/p/${project}/strength-montage?n=${Date.now()}`;   // cache-bust
+  img.onload = () => { card.hidden = false; };
+  img.onerror = () => { card.hidden = true; };
+  if (link) link.href = url;                          // click → full-res in new tab
+  img.src = url;
+}
+
 render();
 setInterval(render, 5000);
+loadStrengthMontage();

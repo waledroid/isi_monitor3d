@@ -18,6 +18,7 @@ from ...core.runners import (
     run_lora,
     run_masks,
     run_scaffolds,
+    run_strength_test,
 )
 from .deps import project_dir
 
@@ -30,6 +31,7 @@ _PHASES = {
     "lora": lambda d: partial(run_lora, d),
     "scaffolds": lambda d: partial(run_scaffolds, d),
     "generate": lambda d: partial(run_generation, d),
+    "strength_test": lambda d: partial(run_strength_test, d),   # mint-page sweep
     "filter": lambda d: partial(run_filter, d),
     "export": lambda d: partial(run_export, d),
 }
@@ -37,7 +39,12 @@ _PHASES = {
 
 class RunBody(BaseModel):
     max_steps: int | None = None        # LoRA only — overrides + persists step count
+    count: int | None = None            # scaffolds only — # synthetic images (1 per scaffold)
     paste_count: int | list | None = None   # scaffolds only — objects pasted per scene
+    placement: str | None = None        # scaffolds only — copy_paste placement (original/random)
+    strength: float | None = None       # generate only — inpaint strength (copy_paste path)
+    prompt_detector: str | None = None  # masks only — auto-prompt detector ONNX path
+                                        # ("" / "none" clears, None leaves configured)
 
 
 @router.post("/api/p/{name}/run/{phase}")
@@ -54,7 +61,14 @@ async def run_phase(request: Request, name: str, phase: str,
                      runs_dir=request.app.state.settings.runs_dir)
     elif phase == "scaffolds":
         fn = partial(run_scaffolds, d,
-                     paste_count=(body.paste_count if body else None))
+                     count=(body.count if body else None),
+                     paste_count=(body.paste_count if body else None),
+                     placement=(body.placement if body else None))
+    elif phase == "masks":
+        fn = partial(run_masks, d,
+                     prompt_detector=(body.prompt_detector if body else None))
+    elif phase == "generate":
+        fn = partial(run_generation, d, strength=(body.strength if body else None))
     else:
         fn = factory(d)
     try:

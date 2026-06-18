@@ -70,10 +70,63 @@ def test_copy_paste_emits_base_inpaint_and_label(tmp_path):
     assert int(np.all(label == (230, 90, 40), axis=2).sum()) >= 15 * 15
 
 
+def test_original_placement_pastes_at_source_location_uncut(tmp_path):
+    """placement='original': the object lands at its SOURCE bbox, native size, full
+    (not rescaled, not clipped) — fixes random placement cutting wide objects."""
+    pdir = create_project(tmp_path / "data", "cporig", [POLY])
+    for sub in ("raw/polybag", "raw/__bg__", "maps/depth", "maps/mask"):
+        (pdir / sub).mkdir(parents=True, exist_ok=True)
+    m = Manifest.load(pdir)
+    m.upsert(_bg_record(pdir, "bg1"))                 # empty bg, same 80x80 frame
+    box = (30, 60, 35, 65)                            # source location (y0,y1,x0,x1)
+    m.upsert(_record(pdir, "obj1", obj_box=box))
+    m.save()
+
+    src = CopyPasteScaffolds(project_dir=str(pdir), seed=1, placement="original")
+    _depth, label, _meta = next(src.generate(load_project(pdir), 1))
+    ys, xs = np.nonzero(np.all(label == (230, 90, 40), axis=2))
+    # pasted exactly at the source bbox — same position AND full size (uncut)
+    assert (int(xs.min()), int(ys.min())) == (35, 30)
+    assert (int(xs.max()) + 1, int(ys.max()) + 1) == (65, 60)
+
+
 def test_inpaint_generator_requires_base_and_mask():
     gen = IMAGE_GENERATORS.create("sdxl_inpaint")
     with pytest.raises(ValueError):
         gen.generate("a polybag", np.zeros((8, 8), np.uint8), seed=0)   # no base/mask
+
+
+def test_strength_test_builds_labeled_montage(tmp_path, monkeypatch):
+    """The mint-page strength sweep mints n samples per strength and writes a
+    montage + per-strength folders, without touching the manifest/scaffold state."""
+    from src.core import runners
+    from src.stages.generation.base import IMAGE_GENERATORS
+    pdir = _cp_project_with_bg(tmp_path, "cpsweep")
+    runners.run_scaffolds(pdir, count=2)              # bg present → copy_paste scaffolds
+
+    class _StubGen:
+        def load(self):
+            pass
+
+        def generate(self, prompt, control, *, base_image=None, mask_image=None, **k):
+            return np.zeros((80, 80, 3), np.uint8)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(IMAGE_GENERATORS, "create", lambda name, **k: _StubGen())
+    res = runners.run_strength_test(pdir, strengths=(0.1, 0.3), n=2, tile=64)
+    assert res["strengths"] == [0.1, 0.3]
+    cmp = pdir / "_strength_compare"
+    montage = cmp / "cpsweep_montage.png"                   # <project>_montage.png
+    assert montage.exists() and res["montage"].endswith("cpsweep_montage.png")
+    # ONLY the montage is saved — no per-strength folders/images
+    assert not (cmp / "s010").exists()
+    assert list(cmp.glob("*.png")) == [montage]
+    # side test: real generated/ + manifest untouched (no synthetic records minted)
+    from src.core.manifest import Manifest
+    assert not any(getattr(r, "synthetic", False)
+                   for r in Manifest.load(pdir).records.values())
 
 
 def test_paste_not_tiny_respects_min_frac(tmp_path):
