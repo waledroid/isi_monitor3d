@@ -106,3 +106,57 @@ def test_label_mode_export_includes_background_negatives(tmp_path):
     assert obj_doc["shapes"] and obj_doc["shapes"][0]["label"] == "polybag"
     assert bg_doc["shapes"] == []                                 # background = empty negative
     assert (lroot / "obj.jpg").exists() and (lroot / "bg.jpg").exists()
+
+
+def test_export_clip_two_versions(tiny_project, monkeypatch):
+    """clip_filter=True drops low-score mints → export/ ; =False keeps all → export_noclip/."""
+    from src.core.manifest import Manifest, ManifestRecord
+    from src.stages.filtering.base import QUALITY_FILTERS
+    pdir, project = tiny_project
+    _paint_masks(pdir, project)                       # 3 real records get masks
+    # add one synthetic mint (image + mask + caption)
+    h, w = 480, 640
+    (pdir / "generated").mkdir(exist_ok=True)
+    cv2.imwrite(str(pdir / "generated/synZ.png"), np.full((h, w, 3), 60, np.uint8))
+    c = project.classes[0].color
+    msk = np.zeros((h, w, 3), np.uint8)
+    msk[50:200, 50:200] = (c[2], c[1], c[0])
+    cv2.imwrite(str(pdir / "maps/mask/synZ.png"), msk)
+    (pdir / "captions").mkdir(exist_ok=True)
+    (pdir / "captions/synZ.txt").write_text("a photo of ISI_PLT")
+    m = Manifest.load(pdir)
+    m.upsert(ManifestRecord(id="synZ", sha256="z" * 12, image="generated/synZ.png",
+                            class_name=project.classes[0].name, width=w, height=h,
+                            mask="maps/mask/synZ.png", caption_path="captions/synZ.txt",
+                            synthetic=True))
+    m.save()
+
+    class _Scorer:                                    # stub CLIP: synthetic scores 0 → dropped
+        def load(self): pass
+        def score(self, img, prompt): return 0.0
+        def close(self): pass
+    monkeypatch.setattr(QUALITY_FILTERS, "create", lambda name, **k: _Scorer())
+
+    w_clip = run_export(pdir, clip_filter=True)
+    assert w_clip["clip_filtered"] is True and w_clip["dropped"] == 1
+    assert (pdir / "export").exists() and not (pdir / "export_noclip").exists()
+
+    wo_clip = run_export(pdir, clip_filter=False)
+    assert wo_clip["clip_filtered"] is False and wo_clip["dropped"] == 0
+    assert (pdir / "export_noclip").exists()
+    assert wo_clip["records"] == w_clip["records"] + 1   # the dropped synthetic is back
+
+
+def test_no_clip_in_label_mode(tmp_path, monkeypatch):
+    """Dataset-only (label) mode never runs CLIP, even if clip_filter=True is passed."""
+    from src.core.project import ClassSpec, create_project
+    from src.stages.filtering.base import QUALITY_FILTERS
+
+    def _boom(*a, **k):
+        raise AssertionError("CLIP must not run in label mode")
+    monkeypatch.setattr(QUALITY_FILTERS, "create", _boom)
+    pdir = create_project(tmp_path / "data", "lbl",
+                          [ClassSpec(name="polybag", trigger="ISI_PLYBG", color=[40, 90, 230])],
+                          mode="label")
+    out = run_export(pdir, clip_filter=True)          # requested, but label → ignored
+    assert out["clip_filtered"] is False and out["dropped"] == 0

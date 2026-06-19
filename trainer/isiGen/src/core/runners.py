@@ -551,13 +551,56 @@ def run_filter(project_dir: Path, *, force: bool = False) -> dict:
     return {"scored": scored, "excluded": excluded}
 
 
-def run_export(project_dir: Path) -> dict:
+def _clip_gate(project, project_dir, manifest, records):
+    """Drop synthetic records whose CLIP score is below ``filtering.min_score``
+    (a hallucination guard). Scores inline (reusing a stored ``clip_score`` when
+    present), persists the score for the board, but does NOT set ``excluded`` — so
+    the without-CLIP export still sees every mint. Real records always pass.
+    Returns ``(kept, dropped)``."""
+    from ..stages.filtering.base import QUALITY_FILTERS
+    fcfg = dict(project.phase("filtering"))
+    name = fcfg.pop("filter", "clip_score")
+    min_score = float(fcfg.pop("min_score", 0.25))
+    qf = QUALITY_FILTERS.create(name, **fcfg)
+    kept, dropped = [], 0
+    qf.load()
+    try:
+        for r in records:
+            if not getattr(r, "synthetic", False):
+                kept.append(r)                       # real curated records always kept
+                continue
+            s = getattr(r, "clip_score", None)
+            if s is None:
+                img = cv2.imread(str(project_dir / r.image))
+                prompt = ""
+                if r.caption_path and (project_dir / r.caption_path).exists():
+                    prompt = (project_dir / r.caption_path).read_text().strip()
+                s = qf.score(img, prompt) if (img is not None and prompt) else 1.0
+                r.clip_score = round(float(s), 4)
+                manifest.upsert(r)
+            if float(s) >= min_score:
+                kept.append(r)
+            else:
+                dropped += 1
+    finally:
+        qf.close()
+    manifest.save()
+    return kept, dropped
+
+
+def run_export(project_dir: Path, *, clip_filter: bool = True) -> dict:
     """Phase 8b — package records into the configured formats.
 
     Generate mode: records with image + mask (synthetic + optionally real curated).
     Label mode: the curated images + their masks PLUS background-only records as
     empty-label negatives (image, no mask) — the exporters write empty shapes for
-    those. Backgrounds in generate mode stay excluded (they're paste targets)."""
+    those. Backgrounds in generate mode stay excluded (they're paste targets).
+
+    ``clip_filter`` (default True, generate mode only): drop synthetic mints whose
+    CLIP score is below ``filtering.min_score`` before exporting → written to
+    ``export/``. With ``clip_filter=False`` the UNFILTERED set is written to
+    ``export_noclip/``, so both versions coexist. **Label mode has no synthetic
+    records, so CLIP never applies** (always ``export/``)."""
     from ..stages.exporting.base import DATASET_EXPORTERS
     project = load_project(project_dir)
     project_dir = Path(project_dir)
@@ -565,18 +608,28 @@ def run_export(project_dir: Path) -> dict:
     include_real = bool(cfg.pop("include_real", True))
     exporters = cfg.pop("exporters", ["yolo_seg"])
     manifest = Manifest.load(project_dir)
-    if getattr(project, "mode", "generate") == "label":
+    is_label = getattr(project, "mode", "generate") == "label"
+    if is_label:
         # objects (with mask) + background negatives (image, no mask → empty label)
         records = [r for r in manifest.active() if r.image and (r.mask or r.background)]
     else:
         records = [r for r in manifest.active() if r.mask and r.image and not r.background
                    and (include_real or getattr(r, "synthetic", False))]
-    out: dict = {"records": len(records)}
+
+    apply_clip = bool(clip_filter) and not is_label   # CLIP is meaningless in label mode
+    dropped = 0
+    if apply_clip:
+        records, dropped = _clip_gate(project, project_dir, manifest, records)
+    # with-CLIP (and label) → export/ ; without-CLIP → export_noclip/ (so both coexist)
+    subdir = "export" if (apply_clip or is_label) else "export_noclip"
+
+    out: dict = {"records": len(records), "clip_filtered": apply_clip, "dropped": dropped}
     for name in exporters:
         exporter = DATASET_EXPORTERS.create(name, **cfg)
-        root = exporter.export(project, records, project_dir / "export")
+        root = exporter.export(project, records, project_dir / subdir)
         out[name] = str(root)
-        logger.info("export[%s]: %d record(s) → %s", name, len(records), root)
+        logger.info("export[%s]: %d record(s)%s → %s", name, len(records),
+                    f" (CLIP-filtered, dropped {dropped})" if apply_clip else "", root)
     return out
 
 
@@ -764,9 +817,12 @@ def reset_phase(project_dir: Path, phase: str, *, runs_dir: Path | None = None) 
                 "synthetic_removed": len(syn), "scaffolds_repending": reset}
 
     if phase == "export":
-        d = project_dir / "export"
-        if d.exists():
-            shutil.rmtree(d)
-        return {"phase": phase, "export_deleted": True}
+        removed = []
+        for sub in ("export", "export_noclip"):       # both CLIP / no-CLIP versions
+            d = project_dir / sub
+            if d.exists():
+                shutil.rmtree(d)
+                removed.append(sub)
+        return {"phase": phase, "export_deleted": removed}
 
     return {"phase": phase}                   # unreachable (guarded above)

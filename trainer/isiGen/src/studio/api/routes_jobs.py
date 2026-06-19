@@ -43,6 +43,7 @@ class RunBody(BaseModel):
     paste_count: int | list | None = None   # scaffolds only — objects pasted per scene
     placement: str | None = None        # scaffolds only — copy_paste placement (original/random)
     strength: float | None = None       # generate only — inpaint strength (copy_paste path)
+    clip_filter: bool | None = None     # export only — CLIP-filter mints (False → export_noclip/)
     prompt_detector: str | None = None  # masks only — auto-prompt detector ONNX path
                                         # ("" / "none" clears, None leaves configured)
 
@@ -69,6 +70,10 @@ async def run_phase(request: Request, name: str, phase: str,
                      prompt_detector=(body.prompt_detector if body else None))
     elif phase == "generate":
         fn = partial(run_generation, d, strength=(body.strength if body else None))
+    elif phase == "export":
+        fn = partial(run_export, d,
+                     clip_filter=(body.clip_filter if body and body.clip_filter is not None
+                                  else True))           # default: export WITH clip
     else:
         fn = factory(d)
     try:

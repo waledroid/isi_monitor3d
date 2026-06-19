@@ -31,9 +31,23 @@ def vram_used_total_mb() -> tuple[int, int] | None:
     return None
 
 
+def _trim_host_heap() -> None:
+    """Return freed HOST RAM to the OS (glibc only). ``gc.collect`` frees the Python
+    objects (e.g. the SDXL weights, which live in CPU RAM under ``cpu_offload``), but
+    glibc keeps the pages in its malloc arena, so the process RSS doesn't drop. A
+    ``malloc_trim(0)`` hands the freed arenas back to the kernel — the difference
+    between an idle Studio sitting at ~9 GB vs ~2-3 GB after a heavy mint phase.
+    Best-effort: no-op on non-glibc libc."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
 def free_memory(label: str = "") -> tuple[int, int] | None:
-    """Run the garbage collector and release cached CUDA VRAM back to the driver.
-    Logs VRAM after. Safe to call when there's no GPU (no-op for CUDA parts)."""
+    """Run the garbage collector, release cached CUDA VRAM back to the driver, AND
+    return freed host RAM to the OS. Logs VRAM after. Safe with no GPU."""
     gc.collect()
     try:
         import torch
@@ -42,6 +56,7 @@ def free_memory(label: str = "") -> tuple[int, int] | None:
             torch.cuda.ipc_collect()
     except Exception:
         pass
+    _trim_host_heap()                          # hand freed host heap back to the kernel
     v = vram_used_total_mb()
     if v is not None:
         logger.info("memory[%s]: VRAM %d/%d MB used after cleanup", label or "-", v[0], v[1])

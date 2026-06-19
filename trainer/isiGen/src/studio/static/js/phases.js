@@ -85,6 +85,17 @@ async function render() {
       a.href = `/p/${project}/${ph.page}`; a.textContent = "open ›";
       actions.appendChild(a);
     }
+    // Export-only CLIP toggle (generate mode). Default ON = export WITH clip → export/;
+    // unchecked = export WITHOUT clip → export_noclip/. Label mode has no synthetic
+    // mints to score, so no toggle (the spec: no CLIP option in dataset-only mode).
+    if (ph.key === "export" && s.mode !== "label") {
+      const lbl = document.createElement("label");
+      lbl.className = "chip";
+      lbl.style.marginRight = "8px";
+      lbl.title = "Drop low-CLIP-score (likely-hallucinated) mints. Off → a 2nd version in export_noclip/.";
+      lbl.innerHTML = `<input type="checkbox" class="clip-toggle" checked> CLIP filter`;
+      actions.appendChild(lbl);
+    }
     if (ph.run) {
       const b = document.createElement("button");
       b.textContent = st === "done" ? "Re-run" : "Run";
@@ -93,8 +104,13 @@ async function render() {
         b.title = `Complete phase ${prevPhase?.n ?? ""} first`;
       }
       b.onclick = async () => {
+        const body = {};
+        if (ph.key === "export") {                       // CLIP toggle → clip_filter
+          const cb = card.querySelector(".clip-toggle");
+          body.clip_filter = cb ? cb.checked : true;     // label mode (no toggle) → default true (ignored server-side)
+        }
         try {
-          const { job } = await sendJSON(`/api/p/${project}/run/${ph.run}`, "POST", {});
+          const { job } = await sendJSON(`/api/p/${project}/run/${ph.run}`, "POST", body);
           watchJob(job.id, logEl, render);
         } catch (e) { logEl.textContent = `error: ${e.message}`; }
       };
