@@ -95,6 +95,20 @@ async function render() {
       lbl.title = "Drop low-CLIP-score (likely-hallucinated) mints. Off → a 2nd version in export_noclip/.";
       lbl.innerHTML = `<input type="checkbox" class="clip-toggle" checked> CLIP filter`;
       actions.appendChild(lbl);
+      // Background NEGATIVES, auto-capped to the 10-30%-of-positives rule (opt-in).
+      // (Label mode includes all backgrounds by default + fixed → no control there.)
+      const bg = document.createElement("label");
+      bg.className = "chip";
+      bg.style.marginRight = "8px";
+      bg.title = "Add empty-background negatives as a fraction of positives (10-30% rule), capped by how many backgrounds exist.";
+      bg.innerHTML = `bg neg
+        <select class="bg-frac">
+          <option value="0">none</option>
+          <option value="0.1">10%</option>
+          <option value="0.2">20%</option>
+          <option value="0.3">30%</option>
+        </select>`;
+      actions.appendChild(bg);
     }
     if (ph.run) {
       const b = document.createElement("button");
@@ -108,6 +122,8 @@ async function render() {
         if (ph.key === "export") {                       // CLIP toggle → clip_filter
           const cb = card.querySelector(".clip-toggle");
           body.clip_filter = cb ? cb.checked : true;     // label mode (no toggle) → default true (ignored server-side)
+          const bf = card.querySelector(".bg-frac");
+          body.bg_fraction = bf ? parseFloat(bf.value) : 0;   // bg negatives, 10-30% rule
         }
         try {
           const { job } = await sendJSON(`/api/p/${project}/run/${ph.run}`, "POST", body);

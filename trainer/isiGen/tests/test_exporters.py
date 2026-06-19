@@ -160,3 +160,30 @@ def test_no_clip_in_label_mode(tmp_path, monkeypatch):
                           mode="label")
     out = run_export(pdir, clip_filter=True)          # requested, but label → ignored
     assert out["clip_filtered"] is False and out["dropped"] == 0
+
+
+def test_export_bg_negatives_capped_to_rule(tiny_project):
+    """bg_fraction adds empty-label background negatives, capped to frac x positives."""
+    import glob
+    from pathlib import Path
+
+    from src.core.manifest import Manifest, ManifestRecord
+    pdir, project = tiny_project
+    _paint_masks(pdir, project)                       # 3 positives (real, masked)
+    (pdir / "raw/__bg__").mkdir(parents=True, exist_ok=True)
+    m = Manifest.load(pdir)
+    for i in range(5):                                # 5 backgrounds available
+        cv2.imwrite(str(pdir / f"raw/__bg__/bg{i}.jpg"), np.full((200, 300, 3), 70, np.uint8))
+        m.upsert(ManifestRecord(id=f"bg{i}", sha256=f"bgx{i}", image=f"raw/__bg__/bg{i}.jpg",
+                                class_name="", width=300, height=200, background=True))
+    m.save()
+
+    # 30% of 3 positives → cap = 1 bg (capped well below the 5 available)
+    out = run_export(pdir, clip_filter=False, bg_fraction=0.3)
+    assert out["backgrounds"] == 1 and out["records"] == 4
+    lbls = glob.glob(str(pdir / "export_noclip/yolo_seg/labels/**/bg*.txt"), recursive=True)
+    assert lbls and Path(lbls[0]).read_text().strip() == ""   # background → empty label
+
+    # opt-out: no fraction → no background negatives
+    out0 = run_export(pdir, clip_filter=False, bg_fraction=0.0)
+    assert out0["backgrounds"] == 0 and out0["records"] == 3

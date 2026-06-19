@@ -588,19 +588,26 @@ def _clip_gate(project, project_dir, manifest, records):
     return kept, dropped
 
 
-def run_export(project_dir: Path, *, clip_filter: bool = True) -> dict:
+def run_export(project_dir: Path, *, clip_filter: bool = True,
+               bg_fraction: float = 0.0) -> dict:
     """Phase 8b — package records into the configured formats.
 
     Generate mode: records with image + mask (synthetic + optionally real curated).
     Label mode: the curated images + their masks PLUS background-only records as
     empty-label negatives (image, no mask) — the exporters write empty shapes for
-    those. Backgrounds in generate mode stay excluded (they're paste targets).
+    those. Backgrounds in generate mode are NOT exported by default (they're paste
+    targets), unless ``bg_fraction`` adds them (below).
 
     ``clip_filter`` (default True, generate mode only): drop synthetic mints whose
     CLIP score is below ``filtering.min_score`` before exporting → written to
     ``export/``. With ``clip_filter=False`` the UNFILTERED set is written to
     ``export_noclip/``, so both versions coexist. **Label mode has no synthetic
-    records, so CLIP never applies** (always ``export/``)."""
+    records, so CLIP never applies** (always ``export/``).
+
+    ``bg_fraction`` (generate mode only): add empty-scene backgrounds as empty-label
+    NEGATIVES, capped at ``bg_fraction`` x positives (the 10-30%-of-positives rule —
+    0.0 = none, 0.1/0.2/0.3 = 10/20/30%), bounded by how many backgrounds exist.
+    Label mode already includes ALL backgrounds by default + fixed (ignores this)."""
     from ..stages.exporting.base import DATASET_EXPORTERS
     project = load_project(project_dir)
     project_dir = Path(project_dir)
@@ -620,16 +627,27 @@ def run_export(project_dir: Path, *, clip_filter: bool = True) -> dict:
     dropped = 0
     if apply_clip:
         records, dropped = _clip_gate(project, project_dir, manifest, records)
+
+    # Generate mode: optionally add background negatives, capped to the 10-30% rule.
+    if not is_label and bg_fraction and bg_fraction > 0:
+        avail = sorted((r for r in manifest.active()
+                        if r.background and r.image and (project_dir / r.image).exists()),
+                       key=lambda r: r.id)
+        cap = round(float(bg_fraction) * len(records))    # records = positives here
+        records = records + avail[:max(0, min(len(avail), cap))]
+
     # with-CLIP (and label) → export/ ; without-CLIP → export_noclip/ (so both coexist)
     subdir = "export" if (apply_clip or is_label) else "export_noclip"
+    n_bg = sum(1 for r in records if getattr(r, "background", False))
 
-    out: dict = {"records": len(records), "clip_filtered": apply_clip, "dropped": dropped}
+    out: dict = {"records": len(records), "clip_filtered": apply_clip,
+                 "dropped": dropped, "backgrounds": n_bg}
     for name in exporters:
         exporter = DATASET_EXPORTERS.create(name, **cfg)
         root = exporter.export(project, records, project_dir / subdir)
         out[name] = str(root)
-        logger.info("export[%s]: %d record(s)%s → %s", name, len(records),
-                    f" (CLIP-filtered, dropped {dropped})" if apply_clip else "", root)
+        logger.info("export[%s]: %d record(s) (%d bg negatives)%s → %s", name, len(records),
+                    n_bg, f", CLIP dropped {dropped}" if apply_clip else "", root)
     return out
 
 
