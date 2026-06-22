@@ -7,20 +7,15 @@
   <h1>{{ project }} — calibration
     <button id="refresh-board" class="ghost-btn" title="Refresh status now">⟳ Refresh</button>
   </h1>
-  <div class="classes">
-    {% for c in cameras %}<span class="chip">{{ c }}</span>{% endfor %}
-    {% if not cameras %}<span class="msg">no cameras configured</span>{% endif %}
-    <button id="edit-cams" class="ghost-btn" title="Edit cameras (add cam_b later)">⚙ cameras</button>
-  </div>
-  <form id="cams-form" class="create-form" hidden>
+  <form id="cams-form" class="create-form cams-inline">
     <fieldset class="cam-fieldset">
-      <legend>Camera 1 (cam_a)</legend>
+      <legend>cam_a</legend>
       <label>Type <select name="a_type">
         <option value="rtsp">RTSP</option><option value="usb">USB</option></select></label>
       <label>Source <input name="a_src" placeholder="rtsp://…"></label>
     </fieldset>
     <fieldset class="cam-fieldset">
-      <legend>Camera 2 (cam_b) — blank = Mode 1</legend>
+      <legend>cam_b <span class="msg">(blank = Mode 1)</span></legend>
       <label>Type <select name="b_type">
         <option value="rtsp">RTSP</option><option value="usb">USB</option></select></label>
       <label>Source <input name="b_src" placeholder="rtsp://…  (blank = remove)"></label>

@@ -117,3 +117,26 @@ def test_grab_floor_shot_no_board(tmp_path, monkeypatch):
         sess_mod.grab_floor_shot(pdir, cfg, "cam_a",
                                  source_factory=lambda spec, cid: _StubSource(80),
                                  settle_frames=2)
+
+
+def test_wipe_phase_captures(tmp_path):
+    from isical.capture.session import wipe_phase_captures
+    pdir, _cfg = _project(tmp_path)
+    d = pdir / "intrinsic" / "cam_a"
+    d.mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        (d / f"x{i}.jpg").write_bytes(b"x")
+    removed = wipe_phase_captures(pdir, "intrinsic", ["cam_a"])
+    assert removed == 3 and not list(d.glob("*.jpg"))
+
+
+def test_session_camera_subset(tmp_path, monkeypatch):
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    from isical.core.project import CameraSpec, create_project, load_project
+    cams = {"cam_a": CameraSpec(id="cam_a", url="rtsp://x/a"),
+            "cam_b": CameraSpec(id="cam_b", url="rtsp://x/b")}
+    pdir = create_project(tmp_path / "data", "rig", cams)
+    cfg = load_project(pdir)
+    s = sess_mod.CaptureSession(pdir, cfg, "intrinsic", cameras=["cam_b"],
+                                source_factory=lambda spec, cid: _StubSource(4))
+    assert list(s.workers) == ["cam_b"]                 # only the selected camera

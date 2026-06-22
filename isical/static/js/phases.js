@@ -92,7 +92,7 @@ async function render() {
 
 document.getElementById("refresh-board")?.addEventListener("click", render);
 
-// ---- cameras editor (add cam_b later / fix a URL) ----
+// ---- cameras editor (always visible, pre-filled; add cam_b later / fix a URL) ----
 const camsForm = document.getElementById("cams-form");
 async function loadCams() {
   try {
@@ -105,10 +105,7 @@ async function loadCams() {
     set("a", c.cam_a); set("b", c.cam_b);
   } catch { /* */ }
 }
-document.getElementById("edit-cams")?.addEventListener("click", () => {
-  camsForm.hidden = !camsForm.hidden;
-  if (!camsForm.hidden) loadCams();
-});
+loadCams();          // pre-fill the saved links on page load (no button needed)
 camsForm?.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const f = new FormData(camsForm);

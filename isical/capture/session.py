@@ -37,6 +37,17 @@ def _open_source(cam_spec, camera_id: str):
     return RtspFrameSource(camera_id=camera_id, url=cam_spec.url, latency_ms=100)
 
 
+def wipe_phase_captures(project_dir: Path, phase: str, cameras: list[str]) -> int:
+    """Delete captured images for a phase (used by Restart). Returns files removed."""
+    sub = "intrinsic" if phase == "intrinsic" else "extrinsic"
+    removed = 0
+    for cid in cameras:
+        for f in (Path(project_dir) / sub / cid).glob("*.jpg"):
+            f.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
 def grab_floor_shot(project_dir: Path, cfg, camera_id: str, *,
                     source_factory=_open_source, settle_frames: int = 8) -> dict:
     """Grab ONE ChArUco-on-floor shot for a camera → floor/<cam>.jpg (world anchor).
@@ -186,7 +197,8 @@ class _CamWorker:
 class CaptureSession:
     """A live capture run for one project + phase across its configured cameras."""
 
-    def __init__(self, project_dir: Path, cfg, phase: str, *, source_factory=_open_source) -> None:
+    def __init__(self, project_dir: Path, cfg, phase: str, *,
+                 cameras: list[str] | None = None, source_factory=_open_source) -> None:
         from ..core.project import charuco_spec
         self.project_dir = Path(project_dir)
         self.cfg = cfg
@@ -194,7 +206,8 @@ class CaptureSession:
         self.charuco_spec = charuco_spec(cfg.board)
         self._pair_lock = threading.Lock()
         self.pair_count = 0
-        cams = cfg.configured_cameras()
+        configured = cfg.configured_cameras()
+        cams = [c for c in (cameras or configured) if c in configured]
         sub = "intrinsic" if phase == "intrinsic" else "extrinsic"
         self.workers: dict[str, _CamWorker] = {
             cid: _CamWorker(self, cid, cfg.cameras[cid],
@@ -260,11 +273,12 @@ class CaptureManager:
         self._key: tuple[str, str] | None = None          # (project, phase)
         self._lock = threading.Lock()
 
-    def start(self, project: str, project_dir: Path, cfg, phase: str, **kw) -> dict:
+    def start(self, project: str, project_dir: Path, cfg, phase: str,
+              cameras: list[str] | None = None, **kw) -> dict:
         with self._lock:
             if self._session is not None:
                 self._session.stop()
-            self._session = CaptureSession(project_dir, cfg, phase, **kw)
+            self._session = CaptureSession(project_dir, cfg, phase, cameras=cameras, **kw)
             self._key = (project, phase)
             self._session.start()
             return self._session.status()

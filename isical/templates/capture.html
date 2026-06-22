@@ -4,17 +4,27 @@
   <b>{{ phase }} capture</b></nav>
 {% endblock %}
 {% block content %}
-<section class="card" id="cap-root" data-project="{{ project }}" data-phase="{{ phase }}">
+<section class="card" id="cap-root" data-project="{{ project }}" data-phase="{{ phase }}"
+         data-cameras='{{ cameras | tojson }}'>
   <h1>{{ phase|capitalize }} capture
     <span class="msg">
-      {% if phase == "intrinsic" %}Point the ChArUco board at each camera — it auto-snaps sharp, steady,
-        well-spread views.{% else %}Show the 6-AprilGrid target to BOTH cameras at once — it auto-snaps
-        synchronized pairs.{% endif %}
+      {% if phase == "intrinsic" %}Pick a camera — the live view starts automatically and auto-snaps sharp,
+        steady, well-spread ChArUco views.{% else %}Show the 6-AprilGrid target to BOTH cameras at once — it
+        auto-snaps synchronized pairs.{% endif %}
     </span>
   </h1>
   <div class="toolbar">
+    {% if phase == "intrinsic" %}
+    <label>Camera
+      <select id="cam-select">
+        {% for c in cameras %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+      </select>
+    </label>
+    {% else %}
     <button id="cap-start">Start capture</button>
+    {% endif %}
     <button id="cap-stop" disabled>Stop</button>
+    <button id="cap-restart">Restart (wipe + recapture)</button>
     <span id="cap-msg" class="msg"></span>
   </div>
   {% if phase == "extrinsic" %}
@@ -28,7 +38,7 @@
   {% endif %}
   <div id="cap-views" class="fourup">
     {% for c in cameras %}
-    <figure>
+    <figure class="cap-figure" data-cam="{{ c }}">
       <figcaption>{{ c }} <span class="counts" data-cam="{{ c }}">—</span></figcaption>
       <div class="canvas-wrap"><img class="cap-stream" data-cam="{{ c }}" alt="{{ c }} live"></div>
     </figure>
@@ -36,8 +46,8 @@
   </div>
   <p class="msg">{% if phase == "intrinsic" %}Tip: vary distance + tilt (±30–45°) and push the board into all
     frame corners; aim for the per-camera target. Then go back and <b>Solve</b> on the board.
-    {% else %}Mount both cameras in their final positions first; one ChArUco floor shot per camera is also
-    needed (capture it in the intrinsic view, or drop it into <code>floor/&lt;cam&gt;.jpg</code>).{% endif %}</p>
+    {% else %}Mount both cameras in their final positions first, then capture one ChArUco floor shot per
+    camera (the buttons above).{% endif %}</p>
 </section>
 {% endblock %}
 {% block scripts %}<script type="module" src="/static/js/capture.js"></script>{% endblock %}

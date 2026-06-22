@@ -1065,3 +1065,46 @@ button:disabled:hover {
     width: 100%;
   }
 }
+
+/* ---- isical: camera fieldsets + source inputs (show full RTSP links) ---- */
+.cam-fieldset {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.cam-fieldset legend { font-weight: 600; color: var(--text-muted); padding: 0 6px; }
+/* Source URL boxes: wide enough to read a full rtsp://user:pass@ip:554/path link. */
+.cam-fieldset input[name$="_src"],
+.create-form input[name="a_src"],
+.create-form input[name="b_src"] {
+  min-width: 520px;
+  width: 100%;
+  max-width: 720px;
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+.cams-inline { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+
+/* ---- isical: LARGE live capture views (readable from across the room) ---- */
+#cap-views {
+  /* one camera → full-width big; two cameras → side by side, each still large */
+  grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
+  gap: 16px;
+}
+#cap-views .cap-stream {
+  width: 100%;
+  height: auto;
+  min-height: 60vh;          /* tall live view */
+  max-height: 82vh;
+  object-fit: contain;
+  aspect-ratio: auto;        /* cancel the 4/3 box; show the camera's real frame */
+  background: #05060a;
+  border-radius: 12px;
+}
+#cap-views figcaption { font-size: 15px; }
+#cap-views .counts { font-size: 14px; color: var(--accent); }

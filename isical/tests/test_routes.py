@@ -74,3 +74,23 @@ def test_floor_shot_unknown_cam_404():
     with _client() as c:
         c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
         assert c.post("/api/p/rig/floor/cam_b").status_code == 404   # cam_b not configured
+
+
+def test_intrinsic_start_single_camera_and_restart():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+                                      "cam_b": {"type": "rtsp", "url": "rtsp://x/b"}})
+        # single-camera intrinsic start (cam param)
+        r = c.post("/api/p/rig/capture/intrinsic/start?cam=cam_a")
+        assert r.status_code == 200
+        assert list(r.json()["status"]["cameras"]) == ["cam_a"]
+        # restart wipes + starts (no files yet → removed 0)
+        rr = c.post("/api/p/rig/capture/intrinsic/restart?cam=cam_a")
+        assert rr.status_code == 200 and rr.json()["removed"] == 0
+        c.post("/api/p/rig/capture/intrinsic/stop")
+
+
+def test_intrinsic_start_unknown_cam_404():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        assert c.post("/api/p/rig/capture/intrinsic/start?cam=cam_b").status_code == 404
