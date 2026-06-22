@@ -1,0 +1,35 @@
+# isical calibration template — copied into data/<name>/calib.yaml on creation.
+# A calibration project = one camera rig (cam_a [+ cam_b]) calibrated via Multical.
+# name + cameras are filled in by create_project; everything below is the default.
+
+name: __template__
+
+# Two fixed slots. type rtsp -> url ; type usb -> device. cam_b empty => Mode 1.
+cameras:
+  cam_a: {id: cam_a, type: rtsp, url: "", device: ""}
+
+# Board geometry — defaults match the printed tools/boards_print/ boards.
+board:
+  # ChArUco (intrinsics + floor anchor)
+  squares_x: 5
+  squares_y: 7
+  square_length_m: 0.035
+  marker_length_m: 0.026
+  dict_name: DICT_5X5_50
+  # AprilGrid target (extrinsics): 6 disjoint-id boards, each 1x2 tags
+  n_aprilgrids: 6
+  april_tags_x: 1
+  april_tags_y: 2
+  tag_length_m: 0.11
+  tag_spacing: 0.2
+  tag_family: t36h11
+
+# Auto-snap thresholds for the live capture loop.
+capture:
+  target_per_camera: 25      # intrinsic ChArUco shots wanted per camera
+  extrinsic_target: 20       # synchronized extrinsic pairs wanted
+  min_charuco_corners: 12    # snap only with >= this many ChArUco corners
+  min_april_tags: 4          # snap only with >= this many AprilTags (per camera)
+  blur_min_var: 80.0         # Laplacian-variance floor (reject motion blur)
+  steady_max_motion: 2.5     # max mean board-corner motion (px) to count as steady
+  novelty_min_dist: 0.06     # min normalized board-centroid move vs already-kept shots

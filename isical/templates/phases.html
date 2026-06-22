@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block nav %}
+<nav class="crumbs"><a href="/">calibrations</a> / <b>{{ project }}</b></nav>
+{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{{ project }} — calibration
+    <button id="refresh-board" class="ghost-btn" title="Refresh status now">⟳ Refresh</button>
+  </h1>
+  <div class="classes">
+    {% for c in cameras %}<span class="chip">{{ c }}</span>{% endfor %}
+    {% if not cameras %}<span class="msg">no cameras configured</span>{% endif %}
+  </div>
+  <div id="phase-board" class="phase-board" data-project="{{ project }}">loading…</div>
+</section>
+<section class="card">
+  <h2>Job log</h2>
+  <pre id="job-log" class="job-log">—</pre>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="/static/js/phases.js"></script>{% endblock %}

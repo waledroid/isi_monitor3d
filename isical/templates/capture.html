@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block nav %}
+<nav class="crumbs"><a href="/">calibrations</a> / <a href="/p/{{ project }}">{{ project }}</a> /
+  <b>{{ phase }} capture</b></nav>
+{% endblock %}
+{% block content %}
+<section class="card" id="cap-root" data-project="{{ project }}" data-phase="{{ phase }}">
+  <h1>{{ phase|capitalize }} capture
+    <span class="msg">
+      {% if phase == "intrinsic" %}Point the ChArUco board at each camera — it auto-snaps sharp, steady,
+        well-spread views.{% else %}Show the 6-AprilGrid target to BOTH cameras at once — it auto-snaps
+        synchronized pairs.{% endif %}
+    </span>
+  </h1>
+  <div class="toolbar">
+    <button id="cap-start">Start capture</button>
+    <button id="cap-stop" disabled>Stop</button>
+    <span id="cap-msg" class="msg"></span>
+  </div>
+  <div id="cap-views" class="fourup">
+    {% for c in cameras %}
+    <figure>
+      <figcaption>{{ c }} <span class="counts" data-cam="{{ c }}">—</span></figcaption>
+      <div class="canvas-wrap"><img class="cap-stream" data-cam="{{ c }}" alt="{{ c }} live"></div>
+    </figure>
+    {% endfor %}
+  </div>
+  <p class="msg">{% if phase == "intrinsic" %}Tip: vary distance + tilt (±30–45°) and push the board into all
+    frame corners; aim for the per-camera target. Then go back and <b>Solve</b> on the board.
+    {% else %}Mount both cameras in their final positions first; one ChArUco floor shot per camera is also
+    needed (capture it in the intrinsic view, or drop it into <code>floor/&lt;cam&gt;.jpg</code>).{% endif %}</p>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="/static/js/capture.js"></script>{% endblock %}

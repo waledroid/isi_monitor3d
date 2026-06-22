@@ -52,3 +52,7 @@ calibration/.venv-multical/
 # Claude Code local settings
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# isical calibration Studio — captures, workspaces, job logs (not source)
+isical/data/
+isical/runs/

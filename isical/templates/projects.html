@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Calibrations</h1>
+  <div id="project-list" class="project-list">loading…</div>
+</section>
+<section class="card">
+  <h2>New calibration</h2>
+  <form id="create-form" class="create-form">
+    <label>Name <input name="name" required pattern="[A-Za-z0-9_\-]+" placeholder="rig_v1"></label>
+    <fieldset class="cam-fieldset">
+      <legend>Camera 1 (cam_a) — required</legend>
+      <label>Type
+        <select name="a_type">
+          <option value="rtsp">RTSP (IP camera)</option>
+          <option value="usb">USB (V4L2)</option>
+        </select>
+      </label>
+      <label>Source <input name="a_src" required placeholder="rtsp://admin:admin@192.168.1.88:554/11"></label>
+    </fieldset>
+    <fieldset class="cam-fieldset">
+      <legend>Camera 2 (cam_b) — optional (leave blank for single-camera)</legend>
+      <label>Type
+        <select name="b_type">
+          <option value="rtsp">RTSP (IP camera)</option>
+          <option value="usb">USB (V4L2)</option>
+        </select>
+      </label>
+      <label>Source <input name="b_src" placeholder="rtsp://…  (blank = Mode 1)"></label>
+    </fieldset>
+    <button type="submit">Create</button>
+    <span id="create-msg" class="msg"></span>
+  </form>
+  <p class="msg">Intrinsics are per-camera (board only). Extrinsics need both cameras mounted, viewing the
+    6-AprilGrid target together. Boards: print <code>tools/boards_print/</code>.</p>
+</section>
+{% endblock %}
+{% block scripts %}<script type="module" src="/static/js/projects.js"></script>{% endblock %}

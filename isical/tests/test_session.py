@@ -1,0 +1,93 @@
+"""CaptureSession auto-snap with a stub frame source + stub detector."""
+
+from __future__ import annotations
+
+import time
+
+import numpy as np
+
+from isical.capture import session as sess_mod
+from isical.capture.detect import Detection
+
+
+class _StubFrame:
+    def __init__(self, img):
+        self.image = img
+
+
+class _StubSource:
+    """Yields N frames then ends; mimics RtspFrameSource start()/frames()/stop()."""
+    def __init__(self, n=40):
+        self._n = n
+
+    def start(self):
+        pass
+
+    def frames(self):
+        for i in range(self._n):
+            yield _StubFrame(np.full((120, 160, 3), i % 255, np.uint8))
+            time.sleep(0.002)
+
+    def stop(self):
+        pass
+
+
+class _StubCharuco:
+    """Detector that returns a snap-worthy, steady, pose-shifting Detection.
+
+    Centroid shifts every 4 frames so the novelty gate lets one snap per pose;
+    a fixed corner set keeps motion ~0 (steady) between frames of the same pose.
+    """
+    def __init__(self, *_a, **_k):
+        self._i = 0
+
+    def detect(self, frame):
+        pose = self._i // 4
+        self._i += 1
+        c = (0.1 + 0.08 * pose, 0.5)
+        pts = np.full((20, 2), 50.0, np.float32) + pose      # steady within a pose
+        return Detection(n=20, centroid=c, corners_px=pts, blur_var=300.0, coverage=1.0)
+
+    def annotate(self, frame, det):
+        return frame
+
+
+def _project(tmp_path, target=3):
+    from isical.core.project import CameraSpec, create_project, load_project
+    cams = {"cam_a": CameraSpec(id="cam_a", url="rtsp://x/a")}
+    pdir = create_project(tmp_path / "data", "rig", cams)
+    cfg = load_project(pdir)
+    cfg.capture.target_per_camera = target
+    return pdir, cfg
+
+
+def test_intrinsic_autosnaps_to_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    pdir, cfg = _project(tmp_path, target=3)
+    s = sess_mod.CaptureSession(pdir, cfg, "intrinsic",
+                                source_factory=lambda spec, cid: _StubSource(40))
+    s.start()
+    # wait for the worker thread to hit its target
+    for _ in range(200):
+        if s.workers["cam_a"].count >= 3:
+            break
+        time.sleep(0.02)
+    s.stop()
+    saved = list((pdir / "intrinsic" / "cam_a").glob("*.jpg"))
+    assert len(saved) == 3                               # exactly target, novel poses
+    st = s.status()
+    assert st["cameras"]["cam_a"]["count"] == 3
+
+
+def test_camera_open_failure_surfaces(tmp_path, monkeypatch):
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    pdir, cfg = _project(tmp_path)
+
+    def _boom(spec, cid):
+        raise RuntimeError("no such camera")
+
+    s = sess_mod.CaptureSession(pdir, cfg, "intrinsic", source_factory=_boom)
+    s.start()
+    time.sleep(0.1)
+    s.stop()
+    assert "camera error" in s.workers["cam_a"].status

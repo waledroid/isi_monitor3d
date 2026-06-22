@@ -383,6 +383,31 @@ per-record (precedence COCO → LabelMe → YOLO), and flow straight to export. 
 
 ---
 
+## 📓 Session log — 2026-06-22 (`isical` — guided calibration Studio + dataset_v2)
+
+**isiGen export polish** ✅ — **COCO-seg exporter** (`src/stages/exporting/coco_seg.py`, color masks → COCO
+instance-seg JSON, 1-based cats, same stable split as yolo_seg) + **format multi-select** on the export card
+(YOLO / COCO / LabelMe, both modes; `run_export(formats=...)` persists `export.exporters`), **bg-negatives
+toggle** (10–30%-of-positives rule, generate-mode opt-in; label mode includes all bg fixed), and **export
+progress bar** (all 3 exporters call `progress.report`). `dataset_v1` (carton+polybag, RF-DETR auto-masker,
+hand-cleaned) + `black_polybag` (polybag) merged into **`dataset_v2`** (2-class YOLO-seg, 2743 imgs) via the
+new **`trainer/isidet/scripts/merge_yolo_datasets.py`** (unifies YOLO datasets by class NAME, remaps indices).
+
+**`isical` — NEW calibration Studio** ✅ (top-level `isical/`, runs in **monitor3d** env, `python -m isical`
+on :8300). Mirrors the isiGen Studio (JobRunner, progress/cleanup, phase board, base/css/api/jobs verbatim)
+but CPU-only and live-camera-driven. A named calibration project + **3 phases — Intrinsic → Extrinsic →
+Export**: Intrinsic/Extrinsic each have a **live capture page** (annotated MJPEG per camera) that **auto-snaps**
+sharp + steady + novel-pose board views (ChArUco via `cv2.aruco.CharucoDetector`; AprilTag-36h11 sync-pairs
+for extrinsic) into the right dir — the quality gates *are* the pruning. The phase **Solve** spawns the
+matching Multical run (`calibration/calibrate.py`: `run_multical_intrinsics` → intrinsic.json + per-cam RMS;
+`run_multical_extrinsics` + floor anchor + `assemble_calibration` → calibration.json, RMS-gated 0.5px). Export
+writes `isical/data/<name>/calibration.json` + a **"install to live system"** that copies to
+`config/mode2/calibration.json` and stamps `backbone.yaml`. New: `capture/{detect,session}.py` (the novel live
+auto-snap), `core/{project,runners}.py`, `api/routes_{pages,projects,jobs,capture}.py`, templates + JS.
+Reuses `backbone.ingestion.{rtsp,v4l2}` for frames; Multical stays its own `.venv-multical` subprocess. **21
+hermetic tests green**, ruff clean; live-verified — capture opened the real RTSP camera (192.168.1.88) and all
+pages render on :8300. `isical/data` + `isical/runs` gitignored.
+
 ## 📓 Session log — 2026-06-17 → 19 (isiGen realistic-synthesis pipeline + first dataset `black_polybag`)
 
 Drove a full real-world build (black polybags on a conveyor) and hardened the isiGen pipeline for
