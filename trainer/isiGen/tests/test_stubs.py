@@ -20,7 +20,7 @@ def test_all_seams_registered():
     assert SCAFFOLD_SOURCES.names() == ["box3d_procedural", "copy_paste", "depth_remix"]
     assert IMAGE_GENERATORS.names() == ["sdxl_controlnet", "sdxl_inpaint"]
     assert QUALITY_FILTERS.names() == ["clip_score"]
-    assert DATASET_EXPORTERS.names() == ["labelme", "yolo_seg"]
+    assert DATASET_EXPORTERS.names() == ["coco_seg", "labelme", "yolo_seg"]
 
 
 def test_heavy_plugins_construct_without_loading_models():

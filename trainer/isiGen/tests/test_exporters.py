@@ -187,3 +187,59 @@ def test_export_bg_negatives_capped_to_rule(tiny_project):
     # opt-out: no fraction → no background negatives
     out0 = run_export(pdir, clip_filter=False, bg_fraction=0.0)
     assert out0["backgrounds"] == 0 and out0["records"] == 3
+
+
+def test_coco_seg_export_multiclass(tiny_project):
+    """COCO-seg writes instances_{train,val}.json with 1-based category ids,
+    polygon segmentation, bbox + area; backgrounds become annotation-less images."""
+    from src.core.manifest import Manifest, ManifestRecord
+    pdir, project = tiny_project
+    _paint_masks(pdir, project)                       # 3 object records (masked)
+    (pdir / "raw/__bg__").mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(pdir / "raw/__bg__/bg.jpg"), np.full((480, 640, 3), 70, np.uint8))
+    m = Manifest.load(pdir)
+    m.upsert(ManifestRecord(id="bgrec", sha256="bg" * 6, image="raw/__bg__/bg.jpg",
+                            class_name="", width=640, height=480, background=True))
+    m.save()
+
+    # generate mode excludes bg unless bg_fraction → pull the 1 bg in as a negative
+    out = run_export(pdir, formats=["coco_seg"], bg_fraction=1.0)
+    assert out["records"] == 4 and out["backgrounds"] == 1
+    root = pdir / "export" / "coco_seg"
+    # all images present across splits
+    imgs = list((root / "images").rglob("*.*"))
+    assert len(imgs) == 4
+    import json as _j
+    cats, anns, img_count = set(), 0, 0
+    for split in ("train", "val"):
+        doc = _j.loads((root / "annotations" / f"instances_{split}.json").read_text())
+        assert [c["id"] for c in doc["categories"]] == [1, 2, 3]      # 1-based
+        assert [c["name"] for c in doc["categories"]] == project.class_names()
+        img_count += len(doc["images"])
+        for a in doc["annotations"]:
+            assert a["category_id"] in (1, 2, 3)
+            assert a["segmentation"] and len(a["segmentation"][0]) >= 6 and len(a["bbox"]) == 4
+            assert a["area"] > 0 and a["iscrowd"] == 0
+            cats.add(a["category_id"])
+            anns += 1
+    assert img_count == 4 and anns >= 3                # one ann per masked object min
+
+
+def test_export_formats_override_persists(tiny_project):
+    """The export-page selector overrides + persists export.exporters; writes only those."""
+    from src.core.project import load_project
+    pdir, project = tiny_project
+    _paint_masks(pdir, project)
+    run_export(pdir, formats=["yolo_seg", "coco_seg"])
+    assert (pdir / "export" / "yolo_seg" / "data.yaml").exists()
+    assert (pdir / "export" / "coco_seg" / "annotations").exists()
+    assert not (pdir / "export" / "labelme").exists()      # labelme NOT selected
+    assert load_project(pdir).phase("export")["exporters"] == ["yolo_seg", "coco_seg"]
+
+
+def test_export_formats_rejects_unknown(tiny_project):
+    import pytest
+    pdir, _ = tiny_project
+    _paint_masks(pdir, _)
+    with pytest.raises(ValueError):
+        run_export(pdir, formats=["bogus_format"])

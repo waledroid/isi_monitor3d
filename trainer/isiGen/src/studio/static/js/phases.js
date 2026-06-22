@@ -85,6 +85,22 @@ async function render() {
       a.href = `/p/${project}/${ph.page}`; a.textContent = "open ›";
       actions.appendChild(a);
     }
+    // Export format multi-select (BOTH modes). Pre-checked from the project's
+    // configured exporters; the run sends `formats: [...]` (persisted).
+    if (ph.key === "export") {
+      const have = new Set(s.export_formats || []);
+      const fmts = document.createElement("span");
+      fmts.className = "chip";
+      fmts.style.marginRight = "8px";
+      fmts.title = "Which dataset formats to write. Pick one or more.";
+      fmts.innerHTML = [
+        ["yolo_seg", "YOLO"], ["coco_seg", "COCO"], ["labelme", "LabelMe"],
+      ].map(([v, lab]) =>
+        `<label style="margin:0 8px 0 0">
+           <input type="checkbox" class="fmt" value="${v}" ${have.has(v) ? "checked" : ""}> ${lab}
+         </label>`).join("");
+      actions.appendChild(fmts);
+    }
     // Export-only CLIP toggle (generate mode). Default ON = export WITH clip → export/;
     // unchecked = export WITHOUT clip → export_noclip/. Label mode has no synthetic
     // mints to score, so no toggle (the spec: no CLIP option in dataset-only mode).
@@ -124,6 +140,8 @@ async function render() {
           body.clip_filter = cb ? cb.checked : true;     // label mode (no toggle) → default true (ignored server-side)
           const bf = card.querySelector(".bg-frac");
           body.bg_fraction = bf ? parseFloat(bf.value) : 0;   // bg negatives, 10-30% rule
+          const fmts = [...card.querySelectorAll(".fmt:checked")].map((c) => c.value);
+          if (fmts.length) body.formats = fmts;          // export formats (else → configured)
         }
         try {
           const { job } = await sendJSON(`/api/p/${project}/run/${ph.run}`, "POST", body);

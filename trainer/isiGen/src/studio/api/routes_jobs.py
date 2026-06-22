@@ -45,6 +45,7 @@ class RunBody(BaseModel):
     strength: float | None = None       # generate only — inpaint strength (copy_paste path)
     clip_filter: bool | None = None     # export only — CLIP-filter mints (False → export_noclip/)
     bg_fraction: float | None = None    # export only — add bg negatives at this frac of positives
+    formats: list[str] | None = None    # export only — exporters to write (yolo_seg/coco_seg/labelme)
     prompt_detector: str | None = None  # masks only — auto-prompt detector ONNX path
                                         # ("" / "none" clears, None leaves configured)
 
@@ -76,7 +77,8 @@ async def run_phase(request: Request, name: str, phase: str,
                      clip_filter=(body.clip_filter if body and body.clip_filter is not None
                                   else True),            # default: export WITH clip
                      bg_fraction=(body.bg_fraction if body and body.bg_fraction is not None
-                                  else 0.0))             # default: no bg negatives (opt-in)
+                                  else 0.0),             # default: no bg negatives (opt-in)
+                     formats=(body.formats if body and body.formats else None))
     else:
         fn = factory(d)
     try:

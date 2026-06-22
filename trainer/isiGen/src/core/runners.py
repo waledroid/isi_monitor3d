@@ -589,8 +589,13 @@ def _clip_gate(project, project_dir, manifest, records):
 
 
 def run_export(project_dir: Path, *, clip_filter: bool = True,
-               bg_fraction: float = 0.0) -> dict:
+               bg_fraction: float = 0.0, formats: list[str] | None = None) -> dict:
     """Phase 8b — package records into the configured formats.
+
+    ``formats`` (the export-page selector, both modes): which exporters to write —
+    a subset of the registered ``DATASET_EXPORTERS`` (``yolo_seg``, ``coco_seg``,
+    ``labelme``). Overrides + persists ``export.exporters``; ``None`` keeps the
+    configured value.
 
     Generate mode: records with image + mask (synthetic + optionally real curated).
     Label mode: the curated images + their masks PLUS background-only records as
@@ -609,8 +614,17 @@ def run_export(project_dir: Path, *, clip_filter: bool = True,
     0.0 = none, 0.1/0.2/0.3 = 10/20/30%), bounded by how many backgrounds exist.
     Label mode already includes ALL backgrounds by default + fixed (ignores this)."""
     from ..stages.exporting.base import DATASET_EXPORTERS
+    from .project import save_project
     project = load_project(project_dir)
     project_dir = Path(project_dir)
+    # Persist a format override (the export-page selector) before reading config.
+    if formats:
+        valid = [f for f in formats if f in DATASET_EXPORTERS.names()]
+        if not valid:
+            raise ValueError(f"no known exporters in {formats}; "
+                             f"available: {DATASET_EXPORTERS.names()}")
+        project.phase("export")["exporters"] = valid
+        save_project(project_dir, project)
     cfg = dict(project.phase("export"))
     include_real = bool(cfg.pop("include_real", True))
     exporters = cfg.pop("exporters", ["yolo_seg"])

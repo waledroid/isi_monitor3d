@@ -142,5 +142,7 @@ phases:
     min_score: 0.25
     model_id: openai/clip-vit-base-patch32
   export:
-    exporters: [yolo_seg]
-    val_fraction: 0.1
+    exporters: [yolo_seg]      # any of: yolo_seg, coco_seg, labelme (pick on the
+                               # export card — multi-select, persists here). Label
+                               # mode defaults to [labelme].
+    val_fraction: 0.1          # yolo_seg + coco_seg share this train/val split

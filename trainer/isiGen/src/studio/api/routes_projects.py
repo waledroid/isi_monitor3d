@@ -89,9 +89,13 @@ async def status(request: Request, name: str) -> dict:
     # not count toward their completion, or those phases could never go green.
     real = [r for r in active
             if not getattr(r, "synthetic", False) and not r.background]
-    mode = getattr(load_project(d), "mode", "generate")
-    # export is "done" once either dataset format has landed (label mode = labelme)
+    proj = load_project(d)
+    mode = getattr(proj, "mode", "generate")
+    export_formats = list(proj.phase("export").get("exporters")
+                          or (["labelme"] if mode == "label" else ["yolo_seg"]))
+    # export is "done" once any dataset format has landed
     exported = ((d / "export" / "yolo_seg" / "data.yaml").exists()
+                or (d / "export" / "coco_seg" / "annotations").exists()
                 or any((d / "export" / "labelme").glob("*.json")))
     return {
         "mode": mode,
@@ -113,6 +117,7 @@ async def status(request: Request, name: str) -> dict:
         "synthetic": sum(bool(getattr(r, "synthetic", False)) for r in recs),
         "clip_scored": sum(getattr(r, "clip_score", None) is not None for r in recs),
         "exported": exported,
+        "export_formats": export_formats,
     }
 
 
