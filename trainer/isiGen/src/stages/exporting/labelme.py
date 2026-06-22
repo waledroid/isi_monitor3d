@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 import cv2
 
+from ...core import progress
 from .base import DATASET_EXPORTERS, DatasetExporter
 from .yolo_seg import mask_to_polygons
 
@@ -32,7 +33,8 @@ class LabelmeExporter(DatasetExporter):
         root = Path(out_dir) / "labelme"
         root.mkdir(parents=True, exist_ok=True)
         project_dir = Path(out_dir).parent
-        for rec in records:
+        for i, rec in enumerate(records, 1):
+            progress.report(i, len(records), "export:labelme")
             if not rec.image:
                 continue
             img_path = project_dir / rec.image

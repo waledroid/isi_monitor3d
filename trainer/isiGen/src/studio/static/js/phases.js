@@ -48,7 +48,7 @@ const PHASES = [
 const LABEL_PHASES = [
   { ...PHASES.find((p) => p.key === "curate"), n: 1 },
   { ...PHASES.find((p) => p.key === "masks"),  n: 2 },
-  { key: "export", n: 3, title: "Export (LabelMe)", run: "export",
+  { key: "export", n: 3, title: "Export", run: "export",
     counts: (s) => `${s.masked ?? 0} masked${s.backgrounds ? ` · ${s.backgrounds} bg` : ""} · labelme ${s.exported ? "OK" : "—"}`,
     state: (s) => s.exported ? "done" : "todo" },
 ];
@@ -90,15 +90,13 @@ async function render() {
     if (ph.key === "export") {
       const have = new Set(s.export_formats || []);
       const fmts = document.createElement("span");
-      fmts.className = "chip";
-      fmts.style.marginRight = "8px";
+      fmts.className = "fmt-group";
       fmts.title = "Which dataset formats to write. Pick one or more.";
       fmts.innerHTML = [
         ["yolo_seg", "YOLO"], ["coco_seg", "COCO"], ["labelme", "LabelMe"],
       ].map(([v, lab]) =>
-        `<label style="margin:0 8px 0 0">
-           <input type="checkbox" class="fmt" value="${v}" ${have.has(v) ? "checked" : ""}> ${lab}
-         </label>`).join("");
+        `<label><input type="checkbox" class="fmt" value="${v}" ${have.has(v) ? "checked" : ""}> ${lab}</label>`
+      ).join("");
       actions.appendChild(fmts);
     }
     // Export-only CLIP toggle (generate mode). Default ON = export WITH clip → export/;

@@ -23,6 +23,7 @@ import cv2
 import numpy as np
 import yaml
 
+from ...core import progress
 from .base import DATASET_EXPORTERS, DatasetExporter
 
 if TYPE_CHECKING:
@@ -74,7 +75,8 @@ class YoloSegExporter(DatasetExporter):
         # records carry paths relative to the PROJECT dir = out_dir's parent by
         # convention (export/ lives inside the project); resolve against it.
         project_dir = Path(out_dir).parent
-        for rec in records:
+        for i, rec in enumerate(records, 1):
+            progress.report(i, len(records), "export:yolo_seg")
             if not rec.image:
                 continue
             img_path = project_dir / rec.image

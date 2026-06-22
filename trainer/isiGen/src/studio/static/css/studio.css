@@ -607,6 +607,30 @@ label.chip input, .toolbar label input {
 }
 .phase-actions a { margin-right: auto; }   /* keep "open ›" left, buttons right */
 
+/* Export format multi-select — clean inline "☐ YOLO  ☐ COCO  ☐ LabelMe"
+   (NOT a .chip: that adds a ::before dot + pill border). */
+.fmt-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  margin-right: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.fmt-group label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  cursor: pointer;
+}
+.fmt-group input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+}
+
 .phase-card .phase-actions .reset-btn {
   padding: 5px 10px; font-size: 11px; color: var(--text-muted);
   background: transparent; border-color: rgba(255,255,255,0.14);

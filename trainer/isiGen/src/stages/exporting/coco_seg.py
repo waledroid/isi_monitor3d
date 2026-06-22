@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+from ...core import progress
 from .base import DATASET_EXPORTERS, DatasetExporter
 from .yolo_seg import _split_for, mask_to_polygons
 
@@ -62,7 +63,8 @@ class CocoSegExporter(DatasetExporter):
         img_id = {"train": 0, "val": 0}
         ann_id = {"train": 0, "val": 0}
 
-        for rec in records:
+        for i, rec in enumerate(records, 1):
+            progress.report(i, len(records), "export:coco_seg")
             if not rec.image:
                 continue
             img_path = project_dir / rec.image
