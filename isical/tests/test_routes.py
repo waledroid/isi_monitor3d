@@ -53,3 +53,24 @@ def test_run_unknown_phase_404():
     with _client() as c:
         c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
         assert c.post("/api/p/rig/run/bogus").status_code == 404
+
+
+def test_edit_cameras_add_cam_b():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        assert c.get("/api/p/rig/status").json()["mode2"] is False
+        # GET pre-fill
+        cams = c.get("/api/p/rig/cameras").json()
+        assert cams["cam_a"]["url"] == "rtsp://x/a" and cams["cam_b"] is None
+        # add cam_b
+        r = c.put("/api/p/rig/cameras", json={
+            "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+            "cam_b": {"type": "rtsp", "url": "rtsp://x/b"}})
+        assert r.json()["mode2"] is True
+        assert c.get("/api/p/rig/status").json()["cameras"] == ["cam_a", "cam_b"]
+
+
+def test_floor_shot_unknown_cam_404():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        assert c.post("/api/p/rig/floor/cam_b").status_code == 404   # cam_b not configured

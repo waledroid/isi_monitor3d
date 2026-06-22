@@ -37,6 +37,44 @@ def _open_source(cam_spec, camera_id: str):
     return RtspFrameSource(camera_id=camera_id, url=cam_spec.url, latency_ms=100)
 
 
+def grab_floor_shot(project_dir: Path, cfg, camera_id: str, *,
+                    source_factory=_open_source, settle_frames: int = 8) -> dict:
+    """Grab ONE ChArUco-on-floor shot for a camera → floor/<cam>.jpg (world anchor).
+
+    Opens the source, lets it settle a few frames, then keeps the first frame with
+    enough ChArUco corners (≥4 — the floor anchor's requirement). Raises if no board
+    is detected. Used by the Extrinsic phase's "capture floor shot" button.
+    """
+    from ..core.project import charuco_spec
+    detector = CharucoBoardDetector(charuco_spec(cfg.board))
+    cam_spec = cfg.cameras[camera_id]
+    source = source_factory(cam_spec, camera_id)
+    source.start()
+    best = None
+    try:
+        for i, frame in enumerate(source.frames()):
+            if i < settle_frames:
+                continue
+            det = detector.detect(frame.image)
+            if det.n >= 4:
+                best = (frame.image, det.n)
+                break
+            if i > settle_frames + 60:        # ~a couple seconds of trying
+                break
+    finally:
+        try:
+            source.stop()
+        except Exception:
+            pass
+    if best is None:
+        raise ValueError("no ChArUco board detected on the floor — lay the board flat in "
+                         "view of the camera and try again")
+    out = Path(project_dir) / "floor" / f"{camera_id}.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out), best[0])
+    return {"camera": camera_id, "corners": best[1], "path": str(out)}
+
+
 class _CamWorker:
     """One camera's capture thread: stream → detect → annotate → gate → (snap)."""
 

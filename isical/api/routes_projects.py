@@ -8,14 +8,16 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..core.project import (
+    CAMERA_IDS,
     CameraSpec,
     create_project,
     delete_project,
     list_projects,
     load_project,
+    save_project,
 )
 from ..core.runners import phase_status
-from .deps import project_dir
+from .deps import project_cfg, project_dir
 
 router = APIRouter()
 
@@ -71,3 +73,34 @@ async def delete(request: Request, name: str) -> dict:
 async def status(request: Request, name: str) -> dict:
     d = project_dir(request, name)
     return phase_status(d)
+
+
+class CamerasBody(BaseModel):
+    cam_a: CameraIn
+    cam_b: CameraIn | None = None
+
+
+@router.get("/api/p/{name}/cameras")
+async def get_cameras(request: Request, name: str) -> dict:
+    _d, cfg = project_cfg(request, name)
+    return {cid: cfg.cameras[cid].model_dump() if cid in cfg.cameras else None
+            for cid in CAMERA_IDS}
+
+
+@router.put("/api/p/{name}/cameras")
+async def put_cameras(request: Request, name: str, body: CamerasBody) -> dict:
+    """Edit the rig's cameras (e.g. add cam_b once the second camera is mounted)."""
+    d, cfg = project_cfg(request, name)
+    cam_a = CameraSpec(id="cam_a", **body.cam_a.model_dump())
+    if not cam_a.configured():
+        raise HTTPException(status_code=422, detail="cam_a needs an RTSP url or USB device")
+    cams = {"cam_a": cam_a}
+    if body.cam_b is not None and (body.cam_b.url or body.cam_b.device):
+        cams["cam_b"] = CameraSpec(id="cam_b", **body.cam_b.model_dump())
+    cfg.cameras = cams
+    save_project(d, cfg)
+    # make sure the per-camera capture dirs exist for any newly-added camera
+    for cid in cams:
+        (d / "intrinsic" / cid).mkdir(parents=True, exist_ok=True)
+        (d / "extrinsic" / cid).mkdir(parents=True, exist_ok=True)
+    return {"ok": True, "cameras": cfg.configured_cameras(), "mode2": cfg.is_mode2()}

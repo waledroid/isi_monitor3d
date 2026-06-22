@@ -50,6 +50,25 @@ async def status(request: Request, name: str) -> dict:
     return {"active": True, **sess.status()}
 
 
+@router.post("/api/p/{name}/floor/{cam}")
+async def floor_shot(request: Request, name: str, cam: str) -> dict:
+    """Grab one ChArUco-on-floor shot for a camera (the world anchor for extrinsics)."""
+    d, cfg = project_cfg(request, name)
+    if cam not in cfg.configured_cameras():
+        raise HTTPException(status_code=404, detail=f"camera {cam!r} not configured")
+    if request.app.state.capture.active(name) is not None:
+        raise HTTPException(status_code=409,
+                            detail="stop the live capture first (the camera is busy)")
+    from ..capture.session import grab_floor_shot
+    try:
+        res = grab_floor_shot(d, cfg, cam)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"floor shot failed: {exc}") from exc
+    return {"ok": True, **res}
+
+
 @router.get("/stream/{name}/{cam}")
 def stream(request: Request, name: str, cam: str) -> StreamingResponse:
     project_dir(request, name)

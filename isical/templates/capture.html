@@ -17,6 +17,15 @@
     <button id="cap-stop" disabled>Stop</button>
     <span id="cap-msg" class="msg"></span>
   </div>
+  {% if phase == "extrinsic" %}
+  <div class="toolbar" id="floor-tools">
+    <span class="msg">Floor anchor (one ChArUco-on-floor shot per camera, capture stopped):</span>
+    {% for c in cameras %}
+    <button class="floor-btn" data-cam="{{ c }}">floor {{ c }}</button>
+    <span class="msg floor-status" data-cam="{{ c }}"></span>
+    {% endfor %}
+  </div>
+  {% endif %}
   <div id="cap-views" class="fourup">
     {% for c in cameras %}
     <figure>

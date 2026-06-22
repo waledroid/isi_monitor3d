@@ -91,5 +91,41 @@ async function render() {
 }
 
 document.getElementById("refresh-board")?.addEventListener("click", render);
+
+// ---- cameras editor (add cam_b later / fix a URL) ----
+const camsForm = document.getElementById("cams-form");
+async function loadCams() {
+  try {
+    const c = await getJSON(`/api/p/${project}/cameras`);
+    const set = (slot, spec) => {
+      const t = spec?.type || "rtsp";
+      camsForm.elements[`${slot}_type`].value = t;
+      camsForm.elements[`${slot}_src`].value = spec ? (t === "usb" ? spec.device : spec.url) : "";
+    };
+    set("a", c.cam_a); set("b", c.cam_b);
+  } catch { /* */ }
+}
+document.getElementById("edit-cams")?.addEventListener("click", () => {
+  camsForm.hidden = !camsForm.hidden;
+  if (!camsForm.hidden) loadCams();
+});
+camsForm?.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = new FormData(camsForm);
+  const cam = (type, src) => {
+    const s = String(src || "").trim();
+    return String(type) === "usb" ? { type: "usb", device: s } : { type: "rtsp", url: s };
+  };
+  const body = { cam_a: cam(f.get("a_type"), f.get("a_src")) };
+  const bsrc = String(f.get("b_src") || "").trim();
+  if (bsrc) body.cam_b = cam(f.get("b_type"), bsrc);
+  const msg = document.getElementById("cams-msg");
+  try {
+    const r = await sendJSON(`/api/p/${project}/cameras`, "PUT", body);
+    msg.textContent = `saved · ${r.cameras.join(", ")} (${r.mode2 ? "Mode 2" : "Mode 1"})`;
+    setTimeout(() => location.reload(), 600);     // refresh chips + capture views
+  } catch (e) { msg.textContent = e.message; msg.className = "msg bad"; }
+});
+
 render();
 setInterval(render, 5000);

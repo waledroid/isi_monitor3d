@@ -91,3 +91,29 @@ def test_camera_open_failure_surfaces(tmp_path, monkeypatch):
     time.sleep(0.1)
     s.stop()
     assert "camera error" in s.workers["cam_a"].status
+
+
+def test_grab_floor_shot(tmp_path, monkeypatch):
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    pdir, cfg = _project(tmp_path)
+    res = sess_mod.grab_floor_shot(pdir, cfg, "cam_a",
+                                   source_factory=lambda spec, cid: _StubSource(40),
+                                   settle_frames=2)
+    assert res["camera"] == "cam_a" and res["corners"] >= 4
+    assert (pdir / "floor" / "cam_a.jpg").exists()
+
+
+def test_grab_floor_shot_no_board(tmp_path, monkeypatch):
+    class _Blank:
+        def __init__(self, *_a, **_k): pass
+        def detect(self, frame):
+            from isical.capture.detect import Detection
+            return Detection(n=0)
+        def annotate(self, frame, det): return frame
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _Blank)
+    pdir, cfg = _project(tmp_path)
+    import pytest
+    with pytest.raises(ValueError):
+        sess_mod.grab_floor_shot(pdir, cfg, "cam_a",
+                                 source_factory=lambda spec, cid: _StubSource(80),
+                                 settle_frames=2)

@@ -45,6 +45,22 @@ stopBtn.onclick = async () => {
   flash(msg, "stopped — go to the board to Solve", true);
 };
 
+// ---- floor anchor shots (extrinsic only; needs capture stopped) ----
+document.querySelectorAll(".floor-btn").forEach((btn) => {
+  btn.onclick = async () => {
+    const cam = btn.dataset.cam;
+    const st = document.querySelector(`.floor-status[data-cam="${cam}"]`);
+    btn.disabled = true;
+    if (st) { st.textContent = "grabbing…"; st.className = "msg floor-status"; }
+    try {
+      const r = await sendJSON(`/api/p/${project}/floor/${cam}`, "POST", {});
+      if (st) { st.textContent = `✓ ${r.corners} corners`; st.className = "msg floor-status ok"; }
+    } catch (e) {
+      if (st) { st.textContent = e.message; st.className = "msg floor-status bad"; }
+    } finally { btn.disabled = false; }
+  };
+});
+
 window.addEventListener("beforeunload", () => {
   navigator.sendBeacon?.(`/api/p/${project}/capture/${phase}/stop`);
 });
