@@ -192,49 +192,79 @@ def _warp_camera(cfg, camera_id: str):
     return rig[camera_id] if camera_id in rig else None
 
 
+def _draw_unified_tracks(frame, bounds, bus) -> None:
+    """Overlay the FUSED (one-identity) tracks on a rectified floor view — Mode-2
+    calibration visibility. Each unified track is drawn at its world (X, Y) mapped
+    to the warp's pixels (u=(X-x_min)·ppm, v=(Y-y_min)·ppm); 3D-triangulated tracks
+    are ringed green, 2D-only amber. Mutates ``frame``. Best-effort: stale/empty
+    bus → nothing drawn."""
+    try:
+        if not bus.is_fresh(1.5):
+            return
+        snap = bus.snapshot()
+    except Exception:
+        return
+    ppm, xm, ym = bounds["px_per_m"], bounds["x_min"], bounds["y_min"]
+    ow, oh = bounds["out_wh"]
+    t3d = snap.last_track3d_by_id
+    pos: dict[int, tuple[float, float]] = {
+        tid: (m.xy_m[0], m.xy_m[1]) for tid, m in snap.last_track2d_by_id.items()}
+    pos.update({tid: (m.xyz_m[0], m.xyz_m[1]) for tid, m in t3d.items()})  # 3D wins
+    for tid, (x, y) in pos.items():
+        u, v = round((x - xm) * ppm), round((y - ym) * ppm)
+        if not (0 <= u < ow and 0 <= v < oh):
+            continue
+        color = (80, 230, 120) if tid in t3d else (80, 170, 255)  # green=3D, amber=2D
+        cv2.circle(frame, (u, v), 9, color, 2)
+        cv2.circle(frame, (u, v), 2, color, -1)
+        cv2.putText(frame, f"#{tid}", (u + 11, v - 6), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, color, 1, cv2.LINE_AA)
+
+
 def _warp_detect_iter(frames: Iterator, cfg, camera_id: str, cam, M, out_wh, do_detect: bool,
-                      is_running=None) -> Iterator:
+                      is_running=None, bus=None, mode2: bool = False) -> Iterator:
     """Warp each frame to the bird's-eye floor view (M = S·H) at the auto-fit
     output size ``out_wh``, then — when ``do_detect`` — run the detector ON THE
     RECTIFIED frame and draw boxes, so detection continues over the warped view.
     Detector re-fetched per frame (cached) so a model swap applies live; falls
     back to the plain warp if no model is resolvable.
 
+    In Mode 2 (``mode2`` + a ``bus``), also overlays the FUSED tracks on the
+    rectified floor — visibility that calibration unifies both cameras into one
+    identity space (an object seen by either camera lands at the same floor spot).
+
     Frame-size guard: when the live camera delivers frames at a different
-    resolution than the calibration's ``image_size_wh`` (e.g. calibrated at
-    1280x720 but streaming 1920x1080), M and out_wh are recomputed on the very
-    first frame so that the full source content is visible in the rectified view
-    instead of being silently clipped to the calibration-size bounding box.
+    resolution than the calibration's ``image_size_wh``, M/out_wh (and the
+    world→pixel ``bounds``) are recomputed on the first frame so the full source
+    content is visible instead of being clipped to the calibration-size box.
     """
-    _M = M
-    _out_wh = out_wh
+    _M, _out_wh, _bounds = M, out_wh, None
     _checked = False
     detector = None
     for image in frames:
         if not _checked:
             _checked = True
-            # Recompute M/out_wh from the ACTUAL frame size via the shared helper —
-            # the exact same logic the MAP tracing snapshot uses, so the two
-            # rectified images are identical (the helper rescales H when the stream
-            # resolution differs from the calibration size).
             ih, iw = image.shape[:2]
             params = rectify_params_for_frame(cam.H, cam.image_size_wh, (iw, ih))
             if params is not None:
-                _M, _out_wh = params["M"], params["out_wh"]
+                _M, _out_wh, _bounds = params["M"], params["out_wh"], params["bounds"]
         warped = rectify_frame(image, cam.K, cam.D, cam.H, out_wh=_out_wh, M=_M)
-        # Detect only when ?detect=1 AND the Backbone is running (gated per frame).
-        if not do_detect or (is_running is not None and not is_running()):
+        running = is_running is None or is_running()
+        if do_detect and running:
+            try:
+                detector = get_detector(cfg)
+                warped = annotate_frame(
+                    warped, detector, cam_id=camera_id, show_nodes=nodes_enabled(cfg),
+                    show_masks=masks_enabled(cfg), show_boxes=boxes_enabled(cfg),
+                    pose_detector=get_pose_detector(cfg))
+            except HTTPException:
+                pass
+        else:
             detector = None   # don't pin the session in the suspended frame after STOP
-            yield warped
-            continue
-        try:
-            detector = get_detector(cfg)
-        except HTTPException:
-            yield warped
-            continue
-        yield annotate_frame(warped, detector, cam_id=camera_id,
-                             show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
-                             show_boxes=boxes_enabled(cfg), pose_detector=get_pose_detector(cfg))
+        # Mode-2 visibility: unified (fused) tracks on the rectified floor.
+        if mode2 and bus is not None and _bounds is not None and running:
+            _draw_unified_tracks(warped, _bounds, bus)
+        yield warped
 
 
 def _to_crop(d, x0: int, y0: int, ch: int, cw: int):
@@ -450,10 +480,14 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         # window cropped and tightens the black margin to just the unavoidable
         # perspective wedges.
         M, out_wh = build_fit_rectify_matrix(warp_cam.H, warp_cam.image_size_wh)
+        # Mode 2 (≥2 cameras) → overlay the fused/unified tracks on the warp for
+        # calibration visibility (replaces the retired unified BEV render).
+        mode2 = len(cameras) >= 2
         # Cap before the (expensive) warp+detect; raw passthrough below stays smooth.
         frames = _warp_detect_iter(_cap_fps(frames, display_fps(cfg)) if detect else frames,
                                    cfg, camera_id, warp_cam, M, out_wh, do_detect=detect,
-                                   is_running=is_running)
+                                   is_running=is_running,
+                                   bus=getattr(state, "bus", None), mode2=mode2)
     elif detect:
         # Per-frame detector lookup (see _detect_iter) so model changes apply live.
         manager = getattr(state, "zone_manager", None)
