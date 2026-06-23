@@ -90,6 +90,65 @@ async function render() {
   }
 }
 
+// ---- calibration results + live stream-sync probe ----
+function rmsBadge(v, gate) {
+  if (v == null) return "<span class='msg'>?</span>";
+  const ok = Number(v) <= gate;
+  return `<b class="${ok ? "ok" : "bad"}">${Number(v).toFixed(3)} px ${ok ? "✓" : "✗"}</b>`;
+}
+async function loadResults() {
+  const card = document.getElementById("results-card");
+  if (!card) return;
+  try {
+    const { summary } = await getJSON(`/api/p/${project}/calibration-summary`);
+    if (!summary) { card.hidden = true; return; }
+    card.hidden = false;
+    const rows = Object.entries(summary.cameras).map(([cid, c]) =>
+      `<tr><td><b>${cid}</b></td>
+         <td>${rmsBadge(c.reprojection_rms_px, summary.rms_gate_px)}</td>
+         <td>${c.image_size}</td>
+         <td>f=${c.focal_px.join(", ")}</td>
+         <td>c=${c.principal_px.join(", ")}</td>
+         <td>pos=[${c.position_m.join(", ")}] m</td></tr>`).join("");
+    const baseline = summary.baseline_m != null
+      ? `<p class="msg">Camera separation (baseline): <b>${summary.baseline_m} m</b> ·
+         floor anchor: ${summary.floor_anchor || "?"} · mode: ${summary.calibration_mode || "?"}</p>` : "";
+    document.getElementById("cal-summary").innerHTML =
+      `<table class="cal-table"><thead><tr>
+         <th>camera</th><th>reproj RMS (gate ${summary.rms_gate_px}px)</th><th>image</th>
+         <th>focal px</th><th>principal px</th><th>world position</th></tr></thead>
+       <tbody>${rows}</tbody></table>${baseline}`;
+  } catch { card.hidden = true; }
+}
+document.getElementById("sync-probe-btn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("sync-probe-btn");
+  const msg = document.getElementById("sync-msg");
+  const out = document.getElementById("sync-result");
+  btn.disabled = true; msg.textContent = "probing both cameras for 4 s…";
+  try {
+    const r = await getJSON(`/api/p/${project}/sync-probe?seconds=4`);
+    const camRows = Object.entries(r.cameras).map(([cid, c]) => c.error
+      ? `<tr><td><b>${cid}</b></td><td colspan="3" class="bad">${c.error}</td></tr>`
+      : `<tr><td><b>${cid}</b></td><td>${c.fps} fps</td>
+           <td>interval ${c.mean_interval_ms ?? "?"} ms</td>
+           <td>jitter ±${c.jitter_ms ?? "?"} ms</td></tr>`).join("");
+    let sync = "";
+    if (r.sync && r.sync.pairs) {
+      const s = r.sync;
+      const ok = s.in_window_pct >= 80;
+      sync = `<p class="msg">Inter-camera skew (${s.pair}): mean <b>${s.mean_skew_ms} ms</b> ·
+        p95 ${s.p95_skew_ms} ms · max ${s.max_skew_ms} ms ·
+        <b class="${ok ? "ok" : "bad"}">${s.in_window_pct}%</b> within the ${s.window_ms} ms
+        sync window</p>`;
+    } else if (r.sync) {
+      sync = `<p class="msg">sync: not enough frames from one camera</p>`;
+    }
+    out.innerHTML = `<table class="cal-table"><tbody>${camRows}</tbody></table>${sync}`;
+    msg.textContent = "";
+  } catch (e) { msg.textContent = e.message; msg.className = "msg bad"; }
+  finally { btn.disabled = false; }
+});
+
 document.getElementById("refresh-board")?.addEventListener("click", render);
 
 // ---- cameras editor (always visible, pre-filled; add cam_b later / fix a URL) ----
@@ -125,4 +184,5 @@ camsForm?.addEventListener("submit", async (ev) => {
 });
 
 render();
-setInterval(render, 5000);
+loadResults();
+setInterval(() => { render(); loadResults(); }, 5000);

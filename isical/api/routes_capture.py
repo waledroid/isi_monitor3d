@@ -71,6 +71,21 @@ async def stop(request: Request, name: str, phase: str) -> dict:
     return {"ok": True}
 
 
+@router.get("/api/p/{name}/sync-probe")
+def sync_probe(request: Request, name: str, seconds: float = 4.0) -> dict:
+    """LIVE stream-sync probe (NOT a calibration output): per-camera FPS + the
+    inter-camera capture-timestamp skew. Sync def → runs in the threadpool so the
+    few-second probe doesn't block the event loop."""
+    d, cfg = project_cfg(request, name)
+    if request.app.state.capture.active(name) is not None:
+        raise HTTPException(status_code=409, detail="stop the live capture first (cameras busy)")
+    from ..capture.probe import probe_streams
+    try:
+        return probe_streams(d, cfg, seconds=seconds)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/api/p/{name}/capture/status")
 async def status(request: Request, name: str) -> dict:
     project_dir(request, name)

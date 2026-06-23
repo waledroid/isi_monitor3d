@@ -16,7 +16,7 @@ from ..core.project import (
     load_project,
     save_project,
 )
-from ..core.runners import phase_status
+from ..core.runners import calibration_summary, phase_status
 from .deps import project_cfg, project_dir
 
 router = APIRouter()
@@ -73,6 +73,13 @@ async def delete(request: Request, name: str) -> dict:
 async def status(request: Request, name: str) -> dict:
     d = project_dir(request, name)
     return phase_status(d)
+
+
+@router.get("/api/p/{name}/calibration-summary")
+async def cal_summary(request: Request, name: str) -> dict:
+    """Vital calibration facts from the SOLVE (reprojection RMS + geometry)."""
+    d = project_dir(request, name)
+    return {"summary": calibration_summary(d)}
 
 
 class CamerasBody(BaseModel):

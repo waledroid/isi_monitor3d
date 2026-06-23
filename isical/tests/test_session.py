@@ -140,3 +140,38 @@ def test_session_camera_subset(tmp_path, monkeypatch):
     s = sess_mod.CaptureSession(pdir, cfg, "intrinsic", cameras=["cam_b"],
                                 source_factory=lambda spec, cid: _StubSource(4))
     assert list(s.workers) == ["cam_b"]                 # only the selected camera
+
+
+def test_probe_streams_skew(tmp_path):
+    from isical.capture import probe as probe_mod
+    from isical.core.project import CameraSpec, create_project, load_project
+    cams = {"cam_a": CameraSpec(id="cam_a", url="rtsp://x/a"),
+            "cam_b": CameraSpec(id="cam_b", url="rtsp://x/b")}
+    pdir = create_project(tmp_path / "data", "rig", cams)
+    cfg = load_project(pdir)
+
+    import time as _t
+
+    class _TsSource:
+        """Yields frames at ~50 fps; cam_b offset by a fixed lag to exercise skew."""
+        def __init__(self, lag_s):
+            self._lag = lag_s
+        def start(self): pass
+        def frames(self):
+            import numpy as np
+            for _ in range(40):
+                f = type("F", (), {})()
+                f.image = np.zeros((4, 4, 3), "uint8")
+                f.capture_ts = _t.time() + self._lag
+                yield f
+                _t.sleep(0.005)
+        def stop(self): pass
+
+    def factory(spec, cid):
+        return _TsSource(0.0 if cid == "cam_a" else 0.02)   # cam_b lags 20 ms
+
+    r = probe_mod.probe_streams(pdir, cfg, seconds=1.0, source_factory=factory)
+    assert set(r["cameras"]) == {"cam_a", "cam_b"}
+    assert r["cameras"]["cam_a"]["fps"] > 0
+    assert "sync" in r and r["sync"]["pairs"] > 0
+    assert r["sync"]["mean_skew_ms"] >= 0    # measured a skew

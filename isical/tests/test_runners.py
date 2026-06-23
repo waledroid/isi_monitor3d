@@ -102,3 +102,25 @@ def test_phase_status(tmp_path):
     assert st["mode2"] is True
     assert st["intrinsic_counts"]["cam_a"] == 4
     assert st["intrinsic_done"] is False and st["extrinsic_done"] is False
+
+
+def test_calibration_summary(tmp_path):
+    pdir = _proj(tmp_path)
+    (pdir / "calibration.json").write_text(json.dumps({
+        "calibration_mode": "multical_full", "floor_anchor_method": "charuco_floor",
+        "cameras": {
+            "cam_a": {"reprojection_rms_px": 0.21, "image_size_wh": [1920, 1080],
+                      "K": [[1000, 0, 960], [0, 1000, 540], [0, 0, 1]],
+                      "D": [0.1, -0.05, 0, 0, 0], "t": [0.0, 0.0, 0.0]},
+            "cam_b": {"reprojection_rms_px": 0.28, "image_size_wh": [1920, 1080],
+                      "K": [[1010, 0, 955], [0, 1010, 545], [0, 0, 1]],
+                      "D": [0.09, -0.04, 0, 0, 0], "t": [1.5, 0.0, 0.0]}}}))
+    s = runners.calibration_summary(pdir)
+    assert s["cameras"]["cam_a"]["reprojection_rms_px"] == 0.21
+    assert s["cameras"]["cam_a"]["focal_px"] == [1000.0, 1000.0]
+    assert s["baseline_m"] == 1.5            # ||t_b - t_a||
+    assert s["rms_gate_px"] == 0.5
+
+
+def test_calibration_summary_none_before_solve(tmp_path):
+    assert runners.calibration_summary(_proj(tmp_path)) is None

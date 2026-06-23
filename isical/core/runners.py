@@ -182,6 +182,47 @@ def _stamp_backbone_yaml(backbone_yaml: Path, calibration_path: Path) -> None:
         logger.warning("export: could not stamp backbone.yaml (%s)", exc)
 
 
+def calibration_summary(project_dir: Path) -> dict | None:
+    """Vital calibration facts from calibration.json (the SOLVE output): per-camera
+    reprojection RMS + focal length / principal point / distortion / world position,
+    and the camera baseline (their physical separation). Returns None if not solved.
+    """
+    src = Path(project_dir) / _CALIBRATION_JSON
+    if not src.exists():
+        return None
+    data = json.loads(src.read_text())
+    cams = data.get("cameras") or {}
+    out_cams = {}
+    centers = {}
+    for cid, c in cams.items():
+        K = c.get("K") or [[0, 0, 0]] * 3
+        D = c.get("D") or []
+        t = c.get("t") or [0, 0, 0]
+        wh = c.get("image_size_wh") or [0, 0]
+        centers[cid] = t
+        out_cams[cid] = {
+            "reprojection_rms_px": c.get("reprojection_rms_px"),
+            "image_size": f"{int(wh[0])}x{int(wh[1])}",
+            "focal_px": [round(float(K[0][0]), 1), round(float(K[1][1]), 1)],   # fx, fy
+            "principal_px": [round(float(K[0][2]), 1), round(float(K[1][2]), 1)],  # cx, cy
+            "distortion": [round(float(v), 4) for v in D[:5]],
+            "position_m": [round(float(v), 3) for v in t],                       # world-frame
+        }
+    summary = {
+        "cameras": out_cams,
+        "rms_gate_px": 0.5,
+        "floor_anchor": data.get("floor_anchor_method"),
+        "calibration_mode": data.get("calibration_mode"),
+        "created_at": data.get("created_at"),
+    }
+    if len(centers) == 2:
+        a, b = list(centers)
+        import math
+        d = math.dist(centers[a], centers[b])
+        summary["baseline_m"] = round(d, 3)            # camera separation
+    return summary
+
+
 # ---- status helpers (for the phase board) ----
 
 def phase_status(project_dir: Path) -> dict:

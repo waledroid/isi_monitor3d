@@ -1108,3 +1108,12 @@ button:disabled:hover {
 }
 #cap-views figcaption { font-size: 15px; }
 #cap-views .counts { font-size: 14px; color: var(--accent); }
+
+/* ---- isical: calibration results table ---- */
+.cal-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+.cal-table th, .cal-table td {
+  text-align: left; padding: 6px 12px; border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.cal-table th { color: var(--text-muted); font-weight: 600; }
+.cal-table .ok { color: var(--ok); }
+.cal-table .bad { color: var(--bad); }
