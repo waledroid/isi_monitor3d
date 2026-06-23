@@ -8,8 +8,7 @@
   </div>
   <div class="header-actions">
     <div class="lang-toggle">
-      <button class="glass-btn lang-btn" data-lang="en" aria-pressed="false">GB</button>
-      <button class="glass-btn lang-btn" data-lang="fr" aria-pressed="false">FR</button>
+      <button class="glass-btn lang-btn" id="lang-toggle-btn" aria-label="Toggle language"></button>
     </div>
     <div class="status-system">
       <span data-i18n="status_system">{{ t.status_system or 'STATUS SYSTEM' }}</span>
@@ -43,8 +42,10 @@
                 @click="$store.bigPanel.select('cam_b')">
           <span data-i18n="cam_2">{{ t.cam_2 or 'CAM 2' }}</span>
         </button>
+        <!-- UNIFIED (bird's-eye composite) retired: overlapping cameras + triangulation
+             replace the merged BEV render. Tab hidden; stream code left dormant. -->
         <button class="custom-tab" data-view="unified" id="unified-btn" x-cloak
-                x-show="$store.bigPanel.unifiedAvailable"
+                x-show="false"
                 :class="{ active: $store.bigPanel.view === 'unified' }"
                 @click="$store.bigPanel.select('unified')">
           <span data-i18n="unified">{{ t.unified or 'UNIFIED' }}</span>

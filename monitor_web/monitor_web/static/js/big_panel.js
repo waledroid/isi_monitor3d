@@ -17,7 +17,10 @@
 (function () {
   "use strict";
 
-  const VIEWS = ["map", "cam_a", "cam_b", "unified", "mp4"];
+  // "unified" (bird's-eye composite of both cameras) is retired — the rig uses
+  // overlapping cameras + triangulation, not a merged BEV render. The stream code
+  // stays dormant; the tab is hidden (dashboard.html) and it's not selectable here.
+  const VIEWS = ["map", "cam_a", "cam_b", "mp4"];
   const BADGE_KEY = { map: "live", cam_a: "cam_1", cam_b: "cam_2", unified: "unified", mp4: "mp4" };
   const BADGE_FALLBACK = { map: "LIVE", cam_a: "CAM 1", cam_b: "CAM 2", unified: "UNIFIED", mp4: "MP4" };
 

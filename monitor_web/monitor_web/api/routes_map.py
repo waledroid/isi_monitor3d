@@ -25,6 +25,35 @@ from .routes_video import _load_cameras_from_backbone_yaml, _warp_camera, grab_r
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Two cross-camera detections of the same object in the overlap rarely land on the
+# exact same floor point (calibration + timing); merge within this radius.
+OVERLAP_MERGE_M = 0.4
+
+
+def _dedupe_floor(items: list[dict], *, key: tuple[str, ...],
+                  radius_m: float = OVERLAP_MERGE_M) -> list[dict]:
+    """Merge same-object detections seen by >1 camera in the overlap into one.
+
+    Two entries merge when they share every field in ``key`` (e.g. zone_id+cls)
+    AND their floor (X,Y) are within ``radius_m``. Keeps the higher-confidence
+    entry and records which cameras saw it (``cameras``). Items are camera-tagged
+    dicts with ``xy_m`` + optional ``conf``."""
+    kept: list[dict] = []
+    r2 = radius_m * radius_m
+    for it in sorted(items, key=lambda d: -float(d.get("conf", 0.0))):
+        x, y = it["xy_m"]
+        dup = next(
+            (k for k in kept
+             if all(k.get(f) == it.get(f) for f in key)
+             and (k["xy_m"][0] - x) ** 2 + (k["xy_m"][1] - y) ** 2 <= r2),
+            None,
+        )
+        if dup is None:
+            kept.append({**it, "cameras": [it.get("camera")]})
+        elif it.get("camera") not in dup["cameras"]:
+            dup["cameras"].append(it.get("camera"))
+    return kept
+
 
 @router.get("/api/warehouse-map")
 async def get_warehouse_map(request: Request) -> JSONResponse:
@@ -194,6 +223,15 @@ async def map_twin(request: Request) -> JSONResponse:
                 "color": patch.get("color") or "#ff3b3b", "camera": cam_id,
                 "polygon_m": [[float(x), float(y)] for x, y in world],
             })
+
+    # Overlap dedup: in Mode 2 the two cameras' zone workers detect the SAME
+    # physical object in the overlap → two floor entries at ~one spot. Count each
+    # object ONCE (fused-identity semantics): merge cross-camera detections that
+    # land within OVERLAP_MERGE_M, keeping the higher-confidence one. Per-camera
+    # detections still drive the box overlay; this only fixes the floor-map tally.
+    if len(rig.camera_ids) >= 2:
+        objects = _dedupe_floor(objects, key=("zone_id", "cls"))
+        people = _dedupe_floor(people, key=())
 
     return JSONResponse({
         "available": True,
