@@ -143,3 +143,12 @@ def test_list_shots_unknown_cam_404():
     with _client() as c:
         c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
         assert c.get("/api/p/rig/shots/intrinsic/cam_b").status_code == 404
+
+
+def test_intrinsic_capture_page_has_tabs_and_gallery_markup():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+                                      "cam_b": {"type": "rtsp", "url": "rtsp://x/b"}})
+        html = c.get("/p/rig/capture/intrinsic").text
+        assert "cam-tab" in html          # per-camera tab buttons
+        assert "shot-gallery" in html      # gallery container per figure
