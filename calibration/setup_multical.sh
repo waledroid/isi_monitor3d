@@ -121,6 +121,37 @@ fi
 echo "[setup_multical] re-asserting numpy<2 + opencv-contrib pins (final)"
 "${VENV_DIR}/bin/pip" install --no-deps "numpy<2" "opencv-contrib-python<=4.7.0" >/dev/null 2>&1 || true
 
+# Patch a Multical 0.4.0 bug: the `multical intrinsic` subcommand
+# (app/intrinsic.py) calls calibrate_cameras() WITHOUT the `intrinsic_error_limit`
+# positional that camera.py:calibrate_cameras() requires, so the per-camera
+# intrinsics solve crashes with
+#   TypeError: calibrate_cameras() missing 1 required positional argument: 'intrinsic_error_limit'
+# The parsed value (args.camera.intrinsic_error_limit, default 0.5) already exists;
+# the call site just fails to pass it. The `multical calibrate` (joint) path is
+# unaffected. Idempotent: re-running this script (or --force) re-applies it.
+echo "[setup_multical] patching multical intrinsic subcommand (0.4.0 calibrate_cameras arg bug)"
+"${VENV_DIR}/bin/python" - <<'PYPATCH'
+import re
+from pathlib import Path
+import multical.app.intrinsic as m
+p = Path(m.__file__)
+src = p.read_text()
+if "args.camera.intrinsic_error_limit" in src:
+    print("[setup_multical]   already patched")
+else:
+    new = src.replace(
+        "calibrate_cameras(boards, detected_points, image_sizes,",
+        "calibrate_cameras(boards, detected_points, image_sizes,\n"
+        "      args.camera.intrinsic_error_limit,",
+        1,
+    )
+    if new == src:
+        print("[setup_multical]   WARN: call site not found; intrinsic solve may fail")
+    else:
+        p.write_text(new)
+        print("[setup_multical]   patched", p)
+PYPATCH
+
 echo
 echo "[setup_multical] verifying installation"
 "${VENV_DIR}/bin/multical" --help >/dev/null

@@ -129,9 +129,17 @@ class JobRunner:
                 job.result = job.fn()
                 job.state = "done"
             except Exception as exc:
+                # subprocess.CalledProcessError (e.g. a failing `multical` call)
+                # carries the child's stderr — surface it so the operator sees the
+                # real cause, not just "returned non-zero exit status 1".
+                stderr = getattr(exc, "stderr", None)
                 job.error = f"{type(exc).__name__}: {exc}"
+                if stderr:
+                    job.error += f"\n{stderr.strip() if isinstance(stderr, str) else stderr}"
                 job.state = "failed"
                 logging.getLogger(__name__).exception("job %s failed", job.id)
+                if stderr:
+                    logging.getLogger(__name__).error("job %s child stderr:\n%s", job.id, stderr)
             finally:
                 progress.set_sink(None)
                 job.progress = None
