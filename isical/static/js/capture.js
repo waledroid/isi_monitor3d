@@ -9,6 +9,7 @@ const stopBtn = document.getElementById("cap-stop");
 const restartBtn = document.getElementById("cap-restart");
 const camSelect = document.getElementById("cam-select");    // intrinsic only
 let statusTimer = null;
+const shownGallery = new Set();   // cams already swapped from live → gallery (one-shot)
 
 // ---- ingested-shot gallery (intrinsic only) ----
 function coverageSVG(shots) {
@@ -67,7 +68,7 @@ async function switchCam(cam) {
     done = (st.intrinsic_counts?.[cam] || 0) >= (st.targets?.intrinsic || Infinity);
   } catch { /* fall through to live */ }
   if (done) { showLive(cam); await showGallery(cam); }
-  else { showLive(cam); startCapture(false); }
+  else { shownGallery.delete(cam); showLive(cam); startCapture(false); }
 }
 
 // intrinsic captures ONE selected camera; extrinsic captures all (sync pairs).
@@ -95,7 +96,8 @@ async function pollStatus() {
     for (const [cam, c] of Object.entries(s.cameras || {})) {
       const el = document.querySelector(`.counts[data-cam="${cam}"]`);
       if (el) el.textContent = `${c.count}/${c.target} · ${c.status} · ${c.detections} det`;
-      if (phase === "intrinsic" && cam === activeCam() && c.count >= c.target) {
+      if (phase === "intrinsic" && cam === activeCam() && c.count >= c.target && !shownGallery.has(cam)) {
+        shownGallery.add(cam);
         await stopCapture();
         showGallery(cam);
       }
