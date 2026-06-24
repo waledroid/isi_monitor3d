@@ -12,6 +12,7 @@ const PHASES = [
     counts: (s) => Object.entries(s.intrinsic_counts || {})
       .map(([c, n]) => `${c}: ${n}/${s.targets.intrinsic}`).join(" · ") || "no shots",
     state: (s) => s.intrinsic_done ? "done"
+      : s.intrinsic_captured ? "captured"
       : Object.values(s.intrinsic_counts || {}).some((n) => n > 0) ? "partial" : "todo",
     extra: (s) => rmsLine(s.intrinsic_done ? s.rms : null) },
   { key: "extrinsic", n: 2, title: "Extrinsic", capture: true,
@@ -21,6 +22,7 @@ const PHASES = [
       return `${pairs || "no pairs"}${floors ? " · floor: " + floors : ""}`;
     },
     state: (s) => s.extrinsic_done ? "done"
+      : s.extrinsic_captured ? "captured"
       : Object.values(s.extrinsic_counts || {}).some((n) => n > 0) ? "partial" : "todo",
     extra: (s) => rmsLine(s.extrinsic_done ? s.rms : null) },
   { key: "export", n: 3, title: "Export", capture: false,
@@ -45,16 +47,20 @@ async function render() {
   for (const ph of PHASES) {
     const st = ph.state(s);
     const locked = !prevDone && st !== "done";
-    const glyph = locked ? "🔒" : st === "done" ? "✓" : st === "partial" ? "◐" : "";
+    const glyph = locked ? "🔒" : (st === "done" || st === "captured") ? "✓"
+      : st === "partial" ? "◐" : "";
     const card = document.createElement("div");
     card.className = "phase-card" + (locked ? " locked" : "") +
-      (st === "done" ? " done" : st === "partial" ? " partial" : "");
+      (st === "done" ? " done" : st === "captured" ? " captured"
+        : st === "partial" ? " partial" : "");
+    const hint = st === "captured" ? `<div class="counts solve-hint">captured ✓ — Solve now ↓</div>` : "";
     card.innerHTML =
       `<div class="phase-head"><span class="phase-num">${ph.n}</span>
          <span class="phase-title">${ph.title}</span>
          <span class="phase-status">${glyph}</span></div>
        <div class="counts">${ph.counts(s)}</div>
        <div class="counts">${ph.extra(s)}</div>
+       ${hint}
        <div class="phase-actions"></div>`;
     const actions = card.querySelector(".phase-actions");
     if (ph.capture) {

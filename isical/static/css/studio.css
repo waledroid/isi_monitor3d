@@ -718,6 +718,28 @@ button:disabled:hover {
   color: #3a2c0c;
 }
 
+/* Capture complete, not yet solved — solid light-blue card with dark text */
+.phase-card.captured {
+  background: #e8f1fc;
+  border-color: #bcd6f2;
+}
+.phase-card.captured .phase-title { color: #0f2a4a; }
+.phase-card.captured .counts { color: #2c5a8c; }
+.phase-card.captured .phase-num { background: #cfe2f7; color: #1858a8; }
+.phase-card.captured .phase-status { color: #1858a8; }
+.phase-card.captured a { color: #1858a8; }
+.phase-card.captured .solve-hint { font-weight: 600; color: #1858a8; }
+.phase-card.captured .phase-actions button {
+  background: #ffffff;
+  border-color: #bcd6f2;
+  color: #0f2a4a;
+}
+.phase-card.captured .phase-actions button:hover {
+  background: #d8e8fb;
+  border-color: #1858a8;
+  color: #0f2a4a;
+}
+
 .job-log {
   background: rgba(7, 8, 12, 0.85);
   backdrop-filter: blur(10px);
