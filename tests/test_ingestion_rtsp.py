@@ -18,6 +18,7 @@ import pytest
 
 from backbone.core.interfaces import frame_source_registry
 from backbone.ingestion.rtsp import (
+    _CODEC_ELEMENTS,
     PIPELINE_TEMPLATE,
     RtspFrameSource,
     _ensure_gst_initialized,
@@ -42,6 +43,14 @@ def test_url_rtsps_accepted() -> None:
     assert src.camera_id == "cam_a"
 
 
+def _render(codec: str = "h264", **kw) -> str:
+    depay, decoder = _CODEC_ELEMENTS[codec]
+    return PIPELINE_TEMPLATE.format(
+        url=kw.get("url", "rtsp://x/y"), latency_ms=kw.get("latency_ms", 100),
+        depay=depay, decoder=decoder,
+    )
+
+
 @pytest.mark.parametrize(
     "knob",
     ["latency=", "drop-on-latency=true", "ntp-sync=true", "protocols=tcp",
@@ -49,17 +58,15 @@ def test_url_rtsps_accepted() -> None:
 )
 def test_pipeline_template_contains_required_knob(knob: str) -> None:
     """If anyone removes a load-bearing pipeline knob, this test fires."""
-    rendered = PIPELINE_TEMPLATE.format(url="rtsp://x/y", latency_ms=100)
-    assert knob in rendered, f"missing pipeline knob: {knob}"
+    assert knob in _render(), f"missing pipeline knob: {knob}"
 
 
-def test_pipeline_string_parses_in_this_env() -> None:
-    """The pipeline must be syntactically valid GStreamer."""
+@pytest.mark.parametrize("codec", ["h264", "hevc", "h265"])
+def test_pipeline_parses_for_each_codec(codec: str) -> None:
+    """Both H.264 and H.265 depay/decode chains must parse in this env."""
     _ensure_gst_initialized()
-    rendered = PIPELINE_TEMPLATE.format(url="rtsp://127.0.0.1/x", latency_ms=100)
-    pipeline = Gst.parse_launch(rendered)
+    pipeline = Gst.parse_launch(_render(codec, url="rtsp://127.0.0.1/x"))
     assert pipeline is not None
-    # Required elements present:
     for name in ("src", "sink"):
         assert pipeline.get_by_name(name) is not None, f"missing element: {name}"
 
