@@ -1168,3 +1168,81 @@ button:disabled:hover {
 .shot .dot.ok { background: #1c7a3f; }
 .shot .dot.warn { background: #d9a514; }
 .shot .dot.bad { background: #b00020; }
+
+/* ---- isical: intrinsic results panel (per-camera K matrix + details) ---- */
+.intr-cam-body {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.intr-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.intr-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* K matrix: bracket + monospace number grid */
+.kmat-wrap {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kmat-bracket {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 42px;
+  line-height: 1;
+  color: var(--text-muted);
+  font-weight: 300;
+  user-select: none;
+}
+
+.kmat {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.kmat-cell {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
+  color: #e2e8f0;
+  text-align: right;
+  padding: 5px 10px;
+  min-width: 90px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.kmat tr:first-child .kmat-cell:first-child { border-radius: 4px 0 0 0; }
+.kmat tr:first-child .kmat-cell:last-child  { border-radius: 0 4px 0 0; }
+.kmat tr:last-child  .kmat-cell:first-child { border-radius: 0 0 0 4px; }
+.kmat tr:last-child  .kmat-cell:last-child  { border-radius: 0 0 4px 0; }
+
+/* detail table (fx, fy, dist, RMS) */
+.intr-detail { flex: 1; min-width: 340px; }
+.intr-detail code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  color: var(--accent);
+}
+.intr-key {
+  color: var(--text-muted);
+  font-weight: 600;
+  white-space: nowrap;
+  padding-right: 20px !important;
+}
+
+/* ok/bad are re-used from .cal-table but we declare them standalone for safety */
+.ok { color: var(--ok); }
+.bad { color: var(--bad); }

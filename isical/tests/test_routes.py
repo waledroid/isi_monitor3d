@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from isical.app import create_app
@@ -152,3 +153,119 @@ def test_intrinsic_capture_page_has_tabs_and_gallery_markup():
         html = c.get("/p/rig/capture/intrinsic").text
         assert "cam-tab" in html          # per-camera tab buttons
         assert "shot-gallery" in html      # gallery container per figure
+
+
+# ---- intrinsic-summary endpoint ----
+
+def test_intrinsic_summary_empty_when_no_intrinsic_json():
+    """Endpoint returns empty cameras dict when work/intrinsic.json is absent."""
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig",
+                                      "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+                                      "cam_b": {"type": "rtsp", "url": "rtsp://x/b"}})
+        r = c.get("/api/p/rig/intrinsic-summary")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["cameras"] == {}
+
+
+def test_intrinsic_summary_shape_with_intrinsic_json_and_rms():
+    """With both work/intrinsic.json and work/intrinsic_rms.json present the endpoint
+    returns per-camera K, dist, image_size, rms and the rms_gate_px."""
+    import json as _json
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig",
+                                      "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+                                      "cam_b": {"type": "rtsp", "url": "rtsp://x/b"}})
+        d = Settings().data_dir / "rig" / "work"
+        d.mkdir(parents=True, exist_ok=True)
+        intr = {
+            "cameras": {
+                "cam_a": {
+                    "model": "standard",
+                    "image_size": [1920, 1080],
+                    "K": [[1387.16, 0.0, 942.99],
+                           [0.0, 1389.26, 548.75],
+                           [0.0, 0.0, 1.0]],
+                    "dist": [[-0.4525, 0.2886, 0.0006, 0.0009, -0.1396]],
+                },
+                "cam_b": {
+                    "model": "standard",
+                    "image_size": [1920, 1080],
+                    "K": [[1076.55, 0.0, 961.15],
+                           [0.0, 1076.70, 550.00],
+                           [0.0, 0.0, 1.0]],
+                    "dist": [[-0.3603, 0.1617, -0.0033, -0.0010, -0.0686]],
+                },
+            }
+        }
+        (d / "intrinsic.json").write_text(_json.dumps(intr))
+        (d / "intrinsic_rms.json").write_text(_json.dumps({"cam_a": 0.8712, "cam_b": 1.2345}))
+
+        r = c.get("/api/p/rig/intrinsic-summary")
+        assert r.status_code == 200
+        body = r.json()
+
+        assert "rms_gate_px" in body
+        assert set(body["cameras"].keys()) == {"cam_a", "cam_b"}
+
+        ca = body["cameras"]["cam_a"]
+        assert ca["image_size"] == [1920, 1080]
+        assert ca["fx"] == pytest.approx(1387.16, abs=0.01)
+        assert ca["fy"] == pytest.approx(1389.26, abs=0.01)
+        assert ca["cx"] == pytest.approx(942.99, abs=0.01)
+        assert ca["cy"] == pytest.approx(548.75, abs=0.01)
+        assert len(ca["K"]) == 3 and len(ca["K"][0]) == 3
+        assert len(ca["dist"]) == 5
+        assert ca["rms"] == pytest.approx(0.8712, abs=1e-4)
+
+        cb = body["cameras"]["cam_b"]
+        assert cb["rms"] == pytest.approx(1.2345, abs=1e-4)
+
+
+def test_intrinsic_summary_rms_null_when_no_rms_sidecar():
+    """rms is null per camera when intrinsic_rms.json is absent (old solve)."""
+    import json as _json
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig",
+                                      "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        d = Settings().data_dir / "rig" / "work"
+        d.mkdir(parents=True, exist_ok=True)
+        intr = {
+            "cameras": {
+                "cam_a": {
+                    "model": "standard",
+                    "image_size": [1920, 1080],
+                    "K": [[1000.0, 0.0, 960.0],
+                           [0.0, 1000.0, 540.0],
+                           [0.0, 0.0, 1.0]],
+                    "dist": [[0.1, -0.05, 0.0, 0.0, 0.0]],
+                }
+            }
+        }
+        (d / "intrinsic.json").write_text(_json.dumps(intr))
+        # no intrinsic_rms.json written
+
+        r = c.get("/api/p/rig/intrinsic-summary")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["cameras"]["cam_a"]["rms"] is None
+
+
+def test_intrinsic_summary_404_for_unknown_project():
+    with _client() as c:
+        assert c.get("/api/p/nope/intrinsic-summary").status_code == 404
+
+
+def test_phases_board_page_200_with_intrinsic_done(tmp_path):
+    """Board page still returns 200 when intrinsic.json exists (panel visibility check)."""
+    import json as _json
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig",
+                                      "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        d = Settings().data_dir / "rig" / "work"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "intrinsic.json").write_text(_json.dumps({"cameras": {}}))
+        assert c.get("/p/rig").status_code == 200
+        html = c.get("/p/rig").text
+        assert "intrinsic-results-card" in html   # panel present in DOM

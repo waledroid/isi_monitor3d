@@ -16,7 +16,7 @@ from ..core.project import (
     load_project,
     save_project,
 )
-from ..core.runners import calibration_summary, phase_status
+from ..core.runners import calibration_summary, intrinsic_summary, phase_status
 from .deps import project_cfg, project_dir
 
 router = APIRouter()
@@ -73,6 +73,18 @@ async def delete(request: Request, name: str) -> dict:
 async def status(request: Request, name: str) -> dict:
     d = project_dir(request, name)
     return phase_status(d)
+
+
+@router.get("/api/p/{name}/intrinsic-summary")
+async def intr_summary(request: Request, name: str) -> dict:
+    """Per-camera intrinsics from work/intrinsic.json (after the Intrinsic solve).
+
+    Returns ``{"rms_gate_px", "cameras": {cam: {image_size, fx, fy, cx, cy,
+    K, dist, rms}}}`` when solved, or ``{"cameras": {}}`` when not yet solved
+    (the UI hides the intrinsic-results panel in that case).
+    """
+    d = project_dir(request, name)
+    return intrinsic_summary(d)
 
 
 @router.get("/api/p/{name}/calibration-summary")

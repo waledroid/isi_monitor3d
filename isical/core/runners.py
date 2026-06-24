@@ -30,6 +30,11 @@ _MIN_INTRINSIC_SHOTS = 8       # multical/opencv floor for a usable intrinsics s
 _INTRINSIC_JSON = "work/intrinsic.json"
 _CALIBRATION_JSON = "calibration.json"
 
+# Acceptance gate for the intrinsic-results badge (≤2 px = usable intrinsics).
+# Distinct from REPROJECTION_RMS_HARD_LIMIT_PX (0.5 px, the solver's "excellent" log
+# threshold) — do NOT conflate them.
+INTRINSIC_RMS_GATE_PX: float = 2.0
+
 
 def _imgdirs(project_dir: Path, sub: str, cameras: list[str]) -> dict[str, Path]:
     """{cam: dir} for the per-camera subdirs that actually contain images."""
@@ -88,6 +93,14 @@ def run_intrinsic(project_dir: Path) -> dict:
                         "OK" if rms[cid] <= REPROJECTION_RMS_HARD_LIMIT_PX else "HIGH")
         except Exception as exc:                       # readout only — don't fail the phase
             logger.warning("intrinsic[%s]: RMS readout failed (%s)", cid, exc)
+
+    # persist RMS sidecar so the UI panel can read it without re-running the solver
+    try:
+        rms_path = project_dir / "work" / "intrinsic_rms.json"
+        rms_path.write_text(json.dumps(rms))
+    except Exception as exc:
+        logger.warning("intrinsic: could not write intrinsic_rms.json (%s)", exc)
+
     return {"cameras_solved": list(ready), "rms": rms,
             "intrinsic_json": str(project_dir / _INTRINSIC_JSON)}
 
@@ -180,6 +193,53 @@ def _stamp_backbone_yaml(backbone_yaml: Path, calibration_path: Path) -> None:
         logger.info("export: stamped %s calibration_path=%s", backbone_yaml, calibration_path)
     except Exception as exc:
         logger.warning("export: could not stamp backbone.yaml (%s)", exc)
+
+
+def intrinsic_summary(project_dir: Path) -> dict:
+    """Per-camera intrinsics from work/intrinsic.json.
+
+    Returns ``{"rms_gate_px": <float>, "cameras": {<cam>: {image_size, fx, fy,
+    cx, cy, K, dist, rms}}}`` when the file exists, or ``{"cameras": {}}``
+    when it does not (UI hides the panel in that case).
+    rms is null when work/intrinsic_rms.json is absent (old solve).
+    """
+    project_dir = Path(project_dir)
+    intr_path = project_dir / "work" / "intrinsic.json"
+    if not intr_path.exists():
+        return {"cameras": {}}
+
+    data = json.loads(intr_path.read_text())
+
+    # load per-camera RMS sidecar (written by run_intrinsic; absent for old solves)
+    rms_map: dict[str, float] = {}
+    rms_path = project_dir / "work" / "intrinsic_rms.json"
+    if rms_path.exists():
+        try:
+            rms_map = json.loads(rms_path.read_text())
+        except Exception:
+            pass
+
+    out_cams: dict = {}
+    for cid, c in (data.get("cameras") or {}).items():
+        K = c.get("K") or [[0, 0, 0]] * 3
+        # dist stored as [[k1,k2,p1,p2,k3]] (1x5 nested) or flat [k1,k2,p1,p2,k3]
+        raw_dist = c.get("dist") or []
+        if raw_dist and isinstance(raw_dist[0], list):
+            dist = raw_dist[0]
+        else:
+            dist = raw_dist
+        out_cams[cid] = {
+            "image_size": list(c.get("image_size") or [0, 0]),
+            "fx": round(float(K[0][0]), 4),
+            "fy": round(float(K[1][1]), 4),
+            "cx": round(float(K[0][2]), 4),
+            "cy": round(float(K[1][2]), 4),
+            "K": [[round(float(v), 4) for v in row] for row in K],
+            "dist": [round(float(v), 6) for v in dist[:5]],
+            "rms": rms_map.get(cid),   # None when absent
+        }
+
+    return {"rms_gate_px": INTRINSIC_RMS_GATE_PX, "cameras": out_cams}
 
 
 def calibration_summary(project_dir: Path) -> dict | None:
