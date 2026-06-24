@@ -15,11 +15,12 @@
   </h1>
   <div class="toolbar">
     {% if phase == "intrinsic" %}
-    <label>Camera
-      <select id="cam-select">
-        {% for c in cameras %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
-      </select>
-    </label>
+    <div class="cam-tabs">
+      {% for c in cameras %}<button type="button" class="cam-tab" data-cam="{{ c }}">{{ c }}</button>{% endfor %}
+    </div>
+    <select id="cam-select" hidden>
+      {% for c in cameras %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+    </select>
     {% else %}
     <button id="cap-start">Start capture</button>
     {% endif %}
@@ -41,6 +42,7 @@
     <figure class="cap-figure" data-cam="{{ c }}">
       <figcaption>{{ c }} <span class="counts" data-cam="{{ c }}">—</span></figcaption>
       <div class="canvas-wrap"><img class="cap-stream" data-cam="{{ c }}" alt="{{ c }} live"></div>
+      <div class="shot-gallery" data-cam="{{ c }}" hidden></div>
     </figure>
     {% endfor %}
   </div>

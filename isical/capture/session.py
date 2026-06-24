@@ -15,6 +15,7 @@ module imports without GStreamer/Multical present.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Iterator
@@ -86,6 +87,24 @@ def grab_floor_shot(project_dir: Path, cfg, camera_id: str, *,
     return {"camera": camera_id, "corners": best[1], "path": str(out)}
 
 
+def _write_shot_meta(jpg_path: Path, det) -> None:
+    """Persist per-shot quality next to the jpg (powers the Studio gallery).
+
+    Schema: {"corners": int, "centroid": [x, y] | null, "blur_var": float},
+    centroid normalized to [0, 1]. Best-effort: never raises into the capture loop.
+    """
+    centroid = getattr(det, "centroid", None)
+    meta = {
+        "corners": int(getattr(det, "n", 0) or 0),
+        "centroid": [float(centroid[0]), float(centroid[1])] if centroid else None,
+        "blur_var": float(getattr(det, "blur_var", 0.0) or 0.0),
+    }
+    try:
+        jpg_path.with_suffix(".json").write_text(json.dumps(meta))
+    except OSError:
+        pass
+
+
 class _CamWorker:
     """One camera's capture thread: stream → detect → annotate → gate → (snap)."""
 
@@ -144,6 +163,7 @@ class _CamWorker:
         idx = self.count
         path = self.out_dir / f"{self.camera_id}_{idx:03d}.jpg"
         cv2.imwrite(str(path), raw)
+        _write_shot_meta(path, det)
         self.count += 1
         self._gate.note_kept(det)
 

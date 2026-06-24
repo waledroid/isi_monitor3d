@@ -94,3 +94,61 @@ def test_intrinsic_start_unknown_cam_404():
     with _client() as c:
         c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
         assert c.post("/api/p/rig/capture/intrinsic/start?cam=cam_b").status_code == 404
+
+
+def test_status_captured_flags():
+    from isical.config import Settings
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        st = c.get("/api/p/rig/status").json()
+        assert st["intrinsic_captured"] is False
+        assert st["extrinsic_captured"] is False
+        # fill cam_a's intrinsic dir up to target
+        d = Settings().data_dir / "rig" / "intrinsic" / "cam_a"
+        target = st["targets"]["intrinsic"]
+        for i in range(target):
+            (d / f"cam_a_{i:03d}.jpg").write_bytes(b"x")
+        st2 = c.get("/api/p/rig/status").json()
+        assert st2["intrinsic_captured"] is True       # capture complete
+        assert st2["intrinsic_done"] is False           # but not solved
+
+
+def test_list_shots_and_serve_with_backfill():
+    import cv2
+    import numpy as np
+
+    from isical.config import Settings
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        d = Settings().data_dir / "rig" / "intrinsic" / "cam_a"
+        cv2.imwrite(str(d / "cam_a_000.jpg"), np.zeros((48, 64, 3), np.uint8))
+        assert not (d / "cam_a_000.json").exists()              # no sidecar yet
+        r = c.get("/api/p/rig/shots/intrinsic/cam_a").json()
+        assert r["count"] == 1
+        assert r["shots"][0]["file"] == "cam_a_000.jpg"
+        assert "corners" in r["shots"][0] and "blur_var" in r["shots"][0]
+        assert "blur_min_var" in r
+        assert (d / "cam_a_000.json").exists()                   # backfilled + cached
+        assert c.get("/shots/rig/intrinsic/cam_a/cam_a_000.jpg").status_code == 200
+
+
+def test_shot_serve_path_guarded():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        assert c.get("/shots/rig/intrinsic/cam_a/evil.png").status_code == 404      # not .jpg
+        assert c.get("/shots/rig/intrinsic/cam_a/missing.jpg").status_code == 404   # absent
+
+
+def test_list_shots_unknown_cam_404():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        assert c.get("/api/p/rig/shots/intrinsic/cam_b").status_code == 404
+
+
+def test_intrinsic_capture_page_has_tabs_and_gallery_markup():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+                                      "cam_b": {"type": "rtsp", "url": "rtsp://x/b"}})
+        html = c.get("/p/rig/capture/intrinsic").text
+        assert "cam-tab" in html          # per-camera tab buttons
+        assert "shot-gallery" in html      # gallery container per figure

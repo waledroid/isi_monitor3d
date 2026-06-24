@@ -718,6 +718,28 @@ button:disabled:hover {
   color: #3a2c0c;
 }
 
+/* Capture complete, not yet solved — solid light-blue card with dark text */
+.phase-card.captured {
+  background: #e8f1fc;
+  border-color: #bcd6f2;
+}
+.phase-card.captured .phase-title { color: #0f2a4a; }
+.phase-card.captured .counts { color: #2c5a8c; }
+.phase-card.captured .phase-num { background: #cfe2f7; color: #1858a8; }
+.phase-card.captured .phase-status { color: #1858a8; }
+.phase-card.captured a { color: #1858a8; }
+.phase-card.captured .solve-hint { font-weight: 600; color: #1858a8; }
+.phase-card.captured .phase-actions button {
+  background: #ffffff;
+  border-color: #bcd6f2;
+  color: #0f2a4a;
+}
+.phase-card.captured .phase-actions button:hover {
+  background: #d8e8fb;
+  border-color: #1858a8;
+  color: #0f2a4a;
+}
+
 .job-log {
   background: rgba(7, 8, 12, 0.85);
   backdrop-filter: blur(10px);
@@ -1117,3 +1139,32 @@ button:disabled:hover {
 .cal-table th { color: var(--text-muted); font-weight: 600; }
 .cal-table .ok { color: var(--ok); }
 .cal-table .bad { color: var(--bad); }
+
+/* ---- capture: camera tabs + ingested-shot gallery ---- */
+.cam-tabs { display: flex; gap: 6px; }
+.cam-tab {
+  padding: 4px 14px; border-radius: 6px; cursor: pointer;
+  background: #ffffff; border: 1px solid #d7dde6; color: #334155; font-weight: 600;
+}
+.cam-tab.active { background: #e8f1fc; border-color: #1858a8; color: #0f2a4a; }
+
+.shot-gallery .coverage {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+}
+.cov-svg { background: #0b1220; border-radius: 4px; }
+.shot-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px;
+}
+.shot { position: relative; margin: 0; }
+.shot img { width: 100%; border-radius: 4px; display: block; }
+.shot figcaption {
+  position: absolute; left: 4px; bottom: 4px; display: flex; align-items: center; gap: 6px;
+}
+.shot .badge {
+  background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 11px;
+  padding: 1px 6px; border-radius: 10px;
+}
+.shot .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.shot .dot.ok { background: #1c7a3f; }
+.shot .dot.warn { background: #d9a514; }
+.shot .dot.bad { background: #b00020; }

@@ -9,6 +9,67 @@ const stopBtn = document.getElementById("cap-stop");
 const restartBtn = document.getElementById("cap-restart");
 const camSelect = document.getElementById("cam-select");    // intrinsic only
 let statusTimer = null;
+const shownGallery = new Set();   // cams already swapped from live → gallery (one-shot)
+
+// ---- ingested-shot gallery (intrinsic only) ----
+function coverageSVG(shots) {
+  const W = 160, H = 90;
+  const dots = shots.filter((s) => s.centroid).map((s) => {
+    const [x, y] = s.centroid;
+    const col = s.corners >= 16 ? "#1c7a3f" : s.corners >= 8 ? "#95680f" : "#b00020";
+    return `<circle cx="${(x * W).toFixed(1)}" cy="${(y * H).toFixed(1)}" r="3" `
+         + `fill="${col}" fill-opacity="0.8"/>`;
+  }).join("");
+  return `<svg class="cov-svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">`
+       + `<rect x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" fill="none" stroke="#cbd5e1"/>`
+       + `${dots}</svg>`;
+}
+
+function thumbHTML(cam, s, blurMin) {
+  const sharp = s.blur_var >= blurMin * 1.5 ? "ok" : s.blur_var >= blurMin ? "warn" : "bad";
+  return `<figure class="shot">
+    <img loading="lazy" src="/shots/${project}/intrinsic/${cam}/${s.file}" alt="${s.file}">
+    <figcaption><span class="badge">${s.corners} ⌗</span>
+      <span class="dot ${sharp}" title="sharpness ${Math.round(s.blur_var)}"></span></figcaption>
+  </figure>`;
+}
+
+async function showGallery(cam) {
+  const fig = document.querySelector(`.cap-figure[data-cam="${cam}"]`);
+  if (!fig) return;
+  const gal = fig.querySelector(".shot-gallery");
+  try {
+    const r = await getJSON(`/api/p/${project}/shots/intrinsic/${cam}`);
+    const blurMin = r.blur_min_var || 80;
+    gal.innerHTML =
+      `<div class="coverage">${coverageSVG(r.shots)}
+         <span class="msg">${r.count}/${r.target} shots · board coverage</span></div>
+       <div class="shot-grid">${r.shots.map((s) => thumbHTML(cam, s, blurMin)).join("")}</div>`;
+    fig.querySelector(".canvas-wrap").style.display = "none";
+    gal.hidden = false;
+  } catch { /* keep live view on error */ }
+}
+
+function showLive(cam) {
+  const fig = document.querySelector(`.cap-figure[data-cam="${cam}"]`);
+  if (!fig) return;
+  fig.querySelector(".canvas-wrap").style.display = "";
+  const gal = fig.querySelector(".shot-gallery");
+  gal.hidden = true; gal.innerHTML = "";
+}
+
+async function switchCam(cam) {
+  document.querySelectorAll(".cam-tab").forEach((b) =>
+    b.classList.toggle("active", b.dataset.cam === cam));
+  showOnly(cam);
+  let done = false;
+  try {
+    const st = await getJSON(`/api/p/${project}/status`);
+    done = (st.intrinsic_counts?.[cam] || 0) >= (st.targets?.intrinsic || Infinity);
+  } catch { /* fall through to live */ }
+  if (done) { showLive(cam); await showGallery(cam); }
+  else { shownGallery.delete(cam); showLive(cam); startCapture(false); }
+}
 
 // intrinsic captures ONE selected camera; extrinsic captures all (sync pairs).
 function activeCam() { return camSelect ? camSelect.value : null; }
@@ -35,6 +96,11 @@ async function pollStatus() {
     for (const [cam, c] of Object.entries(s.cameras || {})) {
       const el = document.querySelector(`.counts[data-cam="${cam}"]`);
       if (el) el.textContent = `${c.count}/${c.target} · ${c.status} · ${c.detections} det`;
+      if (phase === "intrinsic" && cam === activeCam() && c.count >= c.target && !shownGallery.has(cam)) {
+        shownGallery.add(cam);
+        await stopCapture();
+        showGallery(cam);
+      }
     }
   } catch { /* studio busy */ }
 }
@@ -73,14 +139,17 @@ restartBtn.onclick = async () => {
   await startCapture(true);
 };
 
-// Intrinsic: auto-start the selected camera, and re-start on change.
+// Intrinsic: tabs drive the (hidden) select; switching decides live vs gallery.
 if (camSelect) {
-  showOnly(camSelect.value);
-  camSelect.addEventListener("change", async () => {
-    await stopCapture();
-    startCapture(false);
+  document.querySelectorAll(".cam-tab").forEach((btn) => {
+    btn.onclick = async () => {
+      if (btn.dataset.cam === camSelect.value && !stopBtn.disabled) return; // already live here
+      await stopCapture();
+      camSelect.value = btn.dataset.cam;
+      switchCam(btn.dataset.cam);
+    };
   });
-  startCapture(false);     // auto-start on page load
+  switchCam(camSelect.value);     // auto-open the first camera on load
 }
 
 window.addEventListener("beforeunload", () => {

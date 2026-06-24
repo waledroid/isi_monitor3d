@@ -7,8 +7,12 @@ the phase solve (run/{phase}) is the separate JobRunner job.
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from .deps import project_cfg, project_dir
 
@@ -119,3 +123,68 @@ def stream(request: Request, name: str, cam: str) -> StreamingResponse:
     project_dir(request, name)
     gen = request.app.state.capture.mjpeg(name, cam)
     return StreamingResponse(gen, media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+_SHOT_FILE_RE = re.compile(r"^[A-Za-z0-9_\-]+\.jpg$")
+
+
+def _shot_meta(jpg: Path, cfg) -> dict:
+    """Metadata for one shot, reading the sidecar or backfilling via ChArUco detection.
+
+    Backfill detects once on the saved jpg and caches the sidecar, so already-captured
+    projects (no sidecars) work without re-capture. Never raises into the request.
+    """
+    side = jpg.with_suffix(".json")
+    if side.exists():
+        try:
+            return json.loads(side.read_text())
+        except (OSError, ValueError):
+            pass
+    meta = {"corners": 0, "centroid": None, "blur_var": 0.0}
+    try:
+        import cv2
+
+        from ..capture.detect import CharucoBoardDetector
+        from ..core.project import charuco_spec
+        img = cv2.imread(str(jpg))
+        if img is not None:
+            det = CharucoBoardDetector(charuco_spec(cfg.board)).detect(img)
+            meta = {
+                "corners": int(det.n),
+                "centroid": [float(det.centroid[0]), float(det.centroid[1])] if det.centroid else None,
+                "blur_var": float(det.blur_var),
+            }
+            try:
+                side.write_text(json.dumps(meta))
+            except OSError:
+                pass
+    except Exception:
+        pass
+    return meta
+
+
+@router.get("/api/p/{name}/shots/{phase}/{cam}")
+def list_shots(request: Request, name: str, phase: str, cam: str) -> dict:
+    if phase not in _PHASES:
+        raise HTTPException(status_code=404, detail=f"phase must be one of {_PHASES}")
+    d, cfg = project_cfg(request, name)
+    if cam not in cfg.configured_cameras():
+        raise HTTPException(status_code=404, detail=f"camera {cam!r} not configured")
+    cam_dir = d / phase / cam
+    jpgs = sorted(cam_dir.glob("*.jpg")) if cam_dir.is_dir() else []
+    shots = [{"file": p.name, **_shot_meta(p, cfg)} for p in jpgs]
+    target = cfg.capture.target_per_camera if phase == "intrinsic" else cfg.capture.extrinsic_target
+    return {"target": target, "count": len(shots),
+            "blur_min_var": float(cfg.capture.blur_min_var), "shots": shots}
+
+
+@router.get("/shots/{name}/{phase}/{cam}/{file}")
+def shot_image(request: Request, name: str, phase: str, cam: str, file: str) -> FileResponse:
+    if phase not in _PHASES or not _SHOT_FILE_RE.match(file):
+        raise HTTPException(status_code=404, detail="not found")
+    d = project_dir(request, name)
+    base = (d / phase / cam).resolve()
+    target = (base / file).resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(str(target), media_type="image/jpeg")
