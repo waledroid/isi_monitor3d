@@ -8,8 +8,7 @@
          data-cameras='{{ cameras | tojson }}'>
   <h1>{{ phase|capitalize }} capture
     <span class="msg">
-      {% if phase == "intrinsic" %}Pick a camera — the live view starts automatically and auto-snaps sharp,
-        steady, well-spread ChArUco views.{% else %}Show the 6-AprilGrid target to BOTH cameras at once — it
+      {% if phase == "extrinsic" %}Show the 6-AprilGrid target to BOTH cameras at once — it
         auto-snaps synchronized pairs.{% endif %}
     </span>
   </h1>
@@ -46,10 +45,10 @@
     </figure>
     {% endfor %}
   </div>
-  <p class="msg">{% if phase == "intrinsic" %}Tip: vary distance + tilt (±30–45°) and push the board into all
-    frame corners; aim for the per-camera target. Then go back and <b>Solve</b> on the board.
-    {% else %}Mount both cameras in their final positions first, then capture one ChArUco floor shot per
-    camera (the buttons above).{% endif %}</p>
+  {% if phase == "extrinsic" %}
+  <p class="msg">Mount both cameras in their final positions first, then capture one ChArUco floor shot per
+    camera (the buttons above).</p>
+  {% endif %}
 </section>
 {% endblock %}
 {% block scripts %}<script type="module" src="/static/js/capture.js"></script>{% endblock %}
