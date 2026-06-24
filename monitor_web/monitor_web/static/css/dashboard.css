@@ -108,6 +108,7 @@ html, body {
   letter-spacing: -0.02em;
   background: linear-gradient(135deg, #ffffff, #94a3b8);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -119,7 +120,6 @@ html, body {
 
 .lang-toggle {
   display: flex;
-  gap: 6px;
   background: rgba(255, 255, 255, 0.03);
   padding: 4px;
   border-radius: 8px;
@@ -127,20 +127,26 @@ html, body {
 }
 
 .lang-btn {
-  padding: 4px 12px;
-  font-weight: 600;
-  font-size: 11px;
+  padding: 4px 8px;
   border-radius: 6px;
   background: transparent;
   border: 1px solid transparent;
-  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.lang-btn[aria-pressed="true"] {
+.lang-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.12);
-  color: #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transform: translateY(-0.5px);
+}
+
+.lang-btn:active {
+  transform: translateY(0.5px);
 }
 
 .status-system {

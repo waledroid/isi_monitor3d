@@ -36,8 +36,7 @@ def test_dashboard_page_renders(tmp_path) -> None:
         assert 'data-view="cam_b"' in html
         # Status indicator + lang toggle.
         assert "status-dot" in html
-        assert 'data-lang="en"' in html
-        assert 'data-lang="fr"' in html
+        assert 'id="lang-toggle-btn"' in html
         # Zone-empty placeholders (S9 v1 — before zone manager).
         assert "zone-empty" in html
 
