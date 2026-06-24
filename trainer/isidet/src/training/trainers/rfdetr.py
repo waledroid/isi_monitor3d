@@ -189,6 +189,10 @@ class RFDETRTrainer(BaseTrainer):
         resolution = self.config.get('image_size', 448)  # 448 is safer than 640 for 12GB VRAM
         mixed_precision = self.config.get('mixed_precision', True)
 
+        resume_path = self.config.get('resume_path')
+
+        if resume_path:
+            logger.info(f"🔄 RESUMING RF-DETR from checkpoint: {resume_path}")
         logger.info(f"🔥 Starting RF-DETR SEGMENTATION training (Resolution: {resolution}px)...")
         self._flush_memory()
         logger.info(f"📂 Outputting logs & weights to: {self.output_dir}")
@@ -217,7 +221,8 @@ class RFDETRTrainer(BaseTrainer):
             num_workers=self.tricks_cfg.get('num_workers', 1),  # Low for WSL stability
             pin_memory=self.tricks_cfg.get('pin_memory', False),
 
-            log_every_n_steps=1
+            log_every_n_steps=1,
+            **({"resume": resume_path} if resume_path else {}),
         )
 
         self.call_hooks('after_train')

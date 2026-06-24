@@ -2,7 +2,7 @@
 
 epochs: 100
 batch_size: 2           # Keep at 2 on 12GB VRAM with segmentation masks
-image_size: 416         # 448 = 56×8, proper DINOv2 multiple, ~23% less VRAM than 512
+image_size: 312         # 448 = 56×8, proper DINOv2 multiple, ~23% less VRAM than 512
 num_select: 100         # Lowered from 300 to prevent VRAM OOM during mask interpolation
 
 optimizer:
@@ -18,5 +18,5 @@ training_tricks:
 
 early_stopping:
   enabled: true
-  patience: 20 #7           # Roboflow recommended patience
+  patience: 5               # reduced to confirm early stop was the cause
 

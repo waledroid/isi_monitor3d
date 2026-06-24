@@ -19,13 +19,13 @@ hooks:
 
 # --- model: RF-DETR SEGMENTATION (transformer) ---
 model_type: "rfdetr"
-model_size: "m"               # RFDETRSegMedium (DINOv2-B/14); 's'/'n' are lighter
+model_size: "n"               # RFDETRSegMedium (DINOv2-B/14); 's'/'n' are lighter
 dataset_path: "data/pallet3_coco"   # COCO layout: train/ valid/ test/ + _annotations.coco.json
 optimizer_config: "configs/optimizers/rfdetr_optim.yaml"   # dual LR + EMA + grad-accum
 
 # --- 12 GB RTX 5070 (RF-DETR-Seg masks are VRAM-heavy) ---
 batch_size: 2                 # keep at 2; grad_accum (optimizer cfg) gives effective ~16
-image_size: 448               # DINOv2 multiple; 448 is the safe ceiling on 12 GB.
+image_size: 312 #448               # DINOv2 multiple; 448 is the safe ceiling on 12 GB.
                               # NOTE: this is RF-DETR's weak spot vs YOLO@1024 for the
                               # FAR/small floor objects — it can't easily go higher here.
 mixed_precision: true
