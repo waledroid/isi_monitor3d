@@ -94,3 +94,20 @@ def test_intrinsic_start_unknown_cam_404():
     with _client() as c:
         c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
         assert c.post("/api/p/rig/capture/intrinsic/start?cam=cam_b").status_code == 404
+
+
+def test_status_captured_flags():
+    from isical.config import Settings
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        st = c.get("/api/p/rig/status").json()
+        assert st["intrinsic_captured"] is False
+        assert st["extrinsic_captured"] is False
+        # fill cam_a's intrinsic dir up to target
+        d = Settings().data_dir / "rig" / "intrinsic" / "cam_a"
+        target = st["targets"]["intrinsic"]
+        for i in range(target):
+            (d / f"cam_a_{i:03d}.jpg").write_bytes(b"x")
+        st2 = c.get("/api/p/rig/status").json()
+        assert st2["intrinsic_captured"] is True       # capture complete
+        assert st2["intrinsic_done"] is False           # but not solved

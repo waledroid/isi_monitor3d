@@ -247,6 +247,10 @@ def phase_status(project_dir: Path) -> dict:
             pass
         from ..config import Settings
         installed = Settings().mode2_calibration_path.exists()
+    t_intr = cfg.capture.target_per_camera
+    t_extr = cfg.capture.extrinsic_target
+    intrinsic_captured = bool(cams) and all(intr.get(c, 0) >= t_intr for c in cams)
+    extrinsic_captured = bool(cams) and all(extr.get(c, 0) >= t_extr for c in cams)
     return {
         "cameras": cams, "mode2": cfg.is_mode2(),
         "intrinsic_counts": intr, "extrinsic_counts": extr, "floor": floors,
@@ -254,6 +258,7 @@ def phase_status(project_dir: Path) -> dict:
         "extrinsic_done": extrinsic_done, "rms": rms,
         "calibration_json": str(calibration) if extrinsic_done else None,
         "installed": installed,
-        "targets": {"intrinsic": cfg.capture.target_per_camera,
-                    "extrinsic": cfg.capture.extrinsic_target},
+        "intrinsic_captured": intrinsic_captured,
+        "extrinsic_captured": extrinsic_captured,
+        "targets": {"intrinsic": t_intr, "extrinsic": t_extr},
     }
