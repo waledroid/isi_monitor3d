@@ -136,6 +136,13 @@ class RfdetrOnnxSegDetector(Detector):
     def class_names(self) -> tuple[str, ...]:
         return tuple(self._class_names)
 
+    @property
+    def supports_batch(self) -> bool:
+        """RF-DETR exports are fixed batch-1 (``[1,3,S,S]``) and the decode loops
+        per-image with a hardcoded ``[0]``, so it can never be batched. Constant
+        False — these zones gracefully fall back to per-zone inference."""
+        return False
+
     def warmup(self) -> None:
         dummy = np.zeros((1, 3, self._input_size[1], self._input_size[0]), dtype=np.float32)
         for _ in range(2):

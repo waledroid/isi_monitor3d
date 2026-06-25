@@ -26,9 +26,14 @@ NUM_ANCHORS = 64         # tiny — fast tests
 MH, MW = 160, 160        # YOLO11-seg proto map size at 640 input (stride 4)
 
 
-def _build_constant_seg_onnx(head: np.ndarray, protos: np.ndarray, path: Path) -> None:
-    """Minimal 2-output ONNX returning constant head + protos regardless of input."""
-    input_tv = helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, 640, 640])
+def _build_constant_seg_onnx(head: np.ndarray, protos: np.ndarray, path: Path,
+                             batch_dim=1) -> None:
+    """Minimal 2-output ONNX returning constant head + protos regardless of input.
+
+    ``batch_dim`` declares the input batch dim — an int (fixed) or a string like
+    "N" (dynamic), to exercise ``supports_batch``."""
+    input_tv = helper.make_tensor_value_info(
+        "images", TensorProto.FLOAT, [batch_dim, 3, 640, 640])
     head_tv = helper.make_tensor_value_info("head", TensorProto.FLOAT, list(head.shape))
     protos_tv = helper.make_tensor_value_info("protos", TensorProto.FLOAT, list(protos.shape))
     head_const = numpy_helper.from_array(head.astype(np.float32), name="head_const")
@@ -92,6 +97,29 @@ def test_one_output_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="expected 2"):
         YoloOnnxSegDetector(onnx_path=p, class_names=CLASS_NAMES,
                             providers=["CPUExecutionProvider"])
+
+
+# ---------- supports_batch ----------
+
+
+def test_supports_batch_true_for_dynamic_batch_dim(tmp_path: Path) -> None:
+    head = np.zeros((1, 4 + NC + NM, NUM_ANCHORS), dtype=np.float32)
+    protos = np.zeros((1, NM, MH, MW), dtype=np.float32)
+    model_path = tmp_path / "seg_dyn.onnx"
+    _build_constant_seg_onnx(head, protos, model_path, batch_dim="N")
+    det = YoloOnnxSegDetector(onnx_path=model_path, class_names=CLASS_NAMES,
+                              providers=["CPUExecutionProvider"])
+    assert det.supports_batch is True
+
+
+def test_supports_batch_false_for_fixed_batch_dim(tmp_path: Path) -> None:
+    head = np.zeros((1, 4 + NC + NM, NUM_ANCHORS), dtype=np.float32)
+    protos = np.zeros((1, NM, MH, MW), dtype=np.float32)
+    model_path = tmp_path / "seg_fixed.onnx"
+    _build_constant_seg_onnx(head, protos, model_path, batch_dim=1)
+    det = YoloOnnxSegDetector(onnx_path=model_path, class_names=CLASS_NAMES,
+                              providers=["CPUExecutionProvider"])
+    assert det.supports_batch is False
 
 
 # ---------- end-to-end inference ----------

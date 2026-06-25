@@ -93,7 +93,8 @@ class YoloOnnxSegDetector(Detector):
         # [batch, 3, H, W]; H/W are ints when static, strings/-1 when dynamic.
         # Letterboxing to a different size triggers the run() error
         # "Got invalid dimensions for input: images ... Got 640 Expected 1024".
-        ishape = inputs[0].shape
+        self._input_shape = inputs[0].shape
+        ishape = self._input_shape
         if (len(ishape) == 4 and isinstance(ishape[2], int) and isinstance(ishape[3], int)
                 and ishape[2] > 0 and ishape[3] > 0):
             model_wh = (int(ishape[3]), int(ishape[2]))   # (w, h)
@@ -155,6 +156,14 @@ class YoloOnnxSegDetector(Detector):
     @property
     def class_names(self) -> tuple[str, ...]:
         return tuple(self._class_names)
+
+    @property
+    def supports_batch(self) -> bool:
+        """True when the ONNX has a dynamic batch dim, so >1 frame can be fed in
+        one ``detect()`` call. The input shape is ``[batch, 3, H, W]``; ``batch`` is
+        an int when fixed, a string ('batch'/'N') or None/-1 when dynamic."""
+        bdim = self._input_shape[0] if self._input_shape else None
+        return (not isinstance(bdim, int)) or bdim <= 0
 
     def warmup(self) -> None:
         dummy = np.zeros((1, 3, self._input_size[1], self._input_size[0]), dtype=np.float32)

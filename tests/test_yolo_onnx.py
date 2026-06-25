@@ -24,15 +24,19 @@ NC = len(CLASS_NAMES)
 NUM_ANCHORS = 64  # tiny — keeps the test fast
 
 
-def _build_constant_yolo_onnx(out_tensor: np.ndarray, path: Path) -> None:
+def _build_constant_yolo_onnx(out_tensor: np.ndarray, path: Path, batch_dim=None) -> None:
     """Write a minimal ONNX model that ignores its input and returns a constant.
 
     The model declares the input shape YOLO11-detect expects (N, 3, 640, 640)
     and the output shape (N, 4+nc, A). We use a Constant node to return the
     same tensor regardless of input — sufficient to exercise the pre/post path.
+
+    ``batch_dim`` overrides the declared input batch dim ("N" dynamic by default;
+    pass an int for a fixed batch — exercises ``supports_batch``).
     """
+    bdim = "N" if batch_dim is None else batch_dim
     input_tv = helper.make_tensor_value_info(
-        "images", TensorProto.FLOAT, ["N", 3, 640, 640]
+        "images", TensorProto.FLOAT, [bdim, 3, 640, 640]
     )
     output_tv = helper.make_tensor_value_info(
         "output", TensorProto.FLOAT, [out_tensor.shape[0], out_tensor.shape[1], out_tensor.shape[2]]
@@ -101,6 +105,29 @@ def test_unknown_keep_classes_dropped_not_fatal(tmp_path: Path) -> None:
         keep_classes=["ghost"],
     )
     assert det._keep_classes is None   # 'ghost' dropped → no filter
+
+
+# ---------- supports_batch ----------
+
+
+def test_supports_batch_true_for_dynamic_batch_dim(tmp_path: Path) -> None:
+    """A model whose ONNX declares a dynamic batch dim ('N') can be batched."""
+    out = np.zeros((1, 4 + NC, NUM_ANCHORS), dtype=np.float32)
+    model_path = tmp_path / "dyn.onnx"
+    _build_constant_yolo_onnx(out, model_path)   # batch dim = "N" (dynamic)
+    det = YoloOnnxDetector(onnx_path=model_path, class_names=CLASS_NAMES,
+                           providers=["CPUExecutionProvider"])
+    assert det.supports_batch is True
+
+
+def test_supports_batch_false_for_fixed_batch_dim(tmp_path: Path) -> None:
+    """A model exported with a fixed batch dim (1) cannot accept >1 frame."""
+    out = np.zeros((1, 4 + NC, NUM_ANCHORS), dtype=np.float32)
+    model_path = tmp_path / "fixed.onnx"
+    _build_constant_yolo_onnx(out, model_path, batch_dim=1)
+    det = YoloOnnxDetector(onnx_path=model_path, class_names=CLASS_NAMES,
+                           providers=["CPUExecutionProvider"])
+    assert det.supports_batch is False
 
 
 # ---------- end-to-end inference ----------

@@ -157,6 +157,14 @@ class YoloOnnxDetector(Detector):
     def class_names(self) -> tuple[str, ...]:
         return tuple(self._class_names)
 
+    @property
+    def supports_batch(self) -> bool:
+        """True when the ONNX has a dynamic batch dim, so >1 frame can be fed in
+        one ``detect()`` call. The input shape is ``[batch, 3, H, W]``; ``batch`` is
+        an int when fixed, a string ('batch'/'N') or None/-1 when dynamic."""
+        bdim = self._input_shape[0] if self._input_shape else None
+        return (not isinstance(bdim, int)) or bdim <= 0
+
     def warmup(self) -> None:
         """Run a couple of dummy inferences to JIT-stabilize timings."""
         dummy = np.zeros((1, 3, self._input_size[1], self._input_size[0]), dtype=np.float32)
