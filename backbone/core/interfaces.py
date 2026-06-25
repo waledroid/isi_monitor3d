@@ -84,13 +84,22 @@ class Triangulator(ABC):
 
 
 class MetadataSink(ABC):
-    """Publishes `Track2D` and `Track3D` envelopes to the outside world."""
+    """Publishes ``Track2D``, ``Track3D``, and event envelopes to the outside world."""
 
     @abstractmethod
     def publish_track_2d(self, track: Track2D) -> None: ...
 
     @abstractmethod
     def publish_track_3d(self, track: Track3D) -> None: ...
+
+    def publish_event(self, event: object) -> None:
+        """Publish a ``PassingEvent`` (or future event type).
+
+        Non-abstract default no-op: existing sink implementations and test mocks
+        that don't override this still satisfy the ABC, and the five-seam count
+        is unchanged. Override in sink plugins to emit zone-crossing events.
+        """
+        return None
 
     @abstractmethod
     def close(self) -> None: ...

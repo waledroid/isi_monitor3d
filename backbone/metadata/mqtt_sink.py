@@ -33,7 +33,7 @@ import paho.mqtt.client as mqtt
 from backbone.core.interfaces import MetadataSink, metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
 
-from .schemas import Track2DMessage, Track3DMessage
+from .schemas import PassingEventMessage, Track2DMessage, Track3DMessage
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ class MqttSink(MetadataSink):
         tls: bool = False,
         track2d_topic: str = "{prefix}/track2d/{cls}",
         track3d_topic: str = "{prefix}/track3d/{cls}",
+        event_topic: str = "{prefix}/zones/{zone}/passings",
     ) -> None:
         """Initialise and start the MQTT client background thread.
 
@@ -87,6 +88,10 @@ class MqttSink(MetadataSink):
                            ``{prefix}`` and ``{cls}`` tokens.
             track3d_topic: Topic template for ``Track3DMessage``; supports
                            ``{prefix}`` and ``{cls}`` tokens.
+            event_topic:   Topic template for ``PassingEventMessage``; supports
+                           ``{prefix}`` and ``{zone}`` tokens. The zone name is
+                           sanitised (``/``, ``+``, ``#`` → ``_``) before
+                           substitution so it is safe as a MQTT topic segment.
 
         Raises:
             ValueError: If ``port`` is outside (0, 65536) or ``qos`` is not
@@ -104,6 +109,7 @@ class MqttSink(MetadataSink):
         self._retain = retain
         self._track2d_topic = track2d_topic
         self._track3d_topic = track3d_topic
+        self._event_topic = event_topic
         self._closed = False
 
         self._client = mqtt.Client(
@@ -151,6 +157,19 @@ class MqttSink(MetadataSink):
         topic = self._track3d_topic.format(
             prefix=self._prefix,
             cls=_sanitize_cls(track.cls),
+        )
+        self._publish(topic, msg.model_dump_json().encode("utf-8"))
+
+    def publish_event(self, event: object) -> None:
+        """Publish a ``PassingEventMessage`` to the configured event topic.
+
+        The ``{zone}`` token in the topic template is populated with the
+        sanitised zone name so that MQTT wildcard chars can't appear in topics.
+        """
+        msg = PassingEventMessage.from_event(event)
+        topic = self._event_topic.format(
+            prefix=self._prefix,
+            zone=_sanitize_cls(msg.zone),   # reuse the same sanitiser
         )
         self._publish(topic, msg.model_dump_json().encode("utf-8"))
 

@@ -78,6 +78,7 @@ from backbone.ingestion import FrameBus, FrameSynchronizer
 from backbone.metadata import Publisher
 from backbone.shared.camera_rig import CameraRig
 from backbone.shared.timestamps import LatencyMeter, elapsed_ms
+from backbone.shared.zone_transitions import ZoneTransitionDetector
 from backbone.shared.zones import ZoneRegistry
 from backbone.triangulation import (
     KeypointAssociator,
@@ -237,6 +238,13 @@ class Orchestrator:
                 "backbone.yaml has no metadata.sinks — at least one sink (e.g. 'udp') is required."
             )
         self._publisher = Publisher(sinks)
+
+        # Zone transitions (enter/leave events). Enabled by default; opt-out via
+        # ``metadata.passings.enabled: false`` in backbone.yaml.
+        self._transitions = ZoneTransitionDetector(self._zones)
+        self._passings_enabled: bool = bool(
+            meta_cfg.get("passings", {}).get("enabled", True)
+        )
 
         # Diagnostics.
         self._latency_total = LatencyMeter("capture_to_publish", window=2048)
@@ -404,9 +412,16 @@ class Orchestrator:
         # track; sets occupancy_* on the Track2D before it's published.
         self._occupancy.enrich(tracks_2d, detections_by_camera)
 
-        # --- publish 2D ---
+        # --- publish 2D + zone transitions ---
         for track in tracks_2d:
             self._publisher.publish_track_2d(track)
+            if self._passings_enabled:
+                for ev in self._transitions.update(
+                    track.track_id, track.cls, track.xy_m, pair.capture_ts
+                ):
+                    self._publisher.publish_event(ev)
+        if self._passings_enabled:
+            self._transitions.forget({t.track_id for t in tracks_2d})
 
         # --- triangulation (Mode 2 only; subscription-driven) ---
         tracks_3d: list[Any] = []

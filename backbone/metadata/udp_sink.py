@@ -21,7 +21,7 @@ import socket
 from backbone.core.interfaces import MetadataSink, metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
 
-from .schemas import Track2DMessage, Track3DMessage
+from .schemas import PassingEventMessage, Track2DMessage, Track3DMessage
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,10 @@ class UdpSink(MetadataSink):
 
     def publish_track_3d(self, track: Track3D) -> None:
         msg = Track3DMessage.from_track(track)
+        self._send(msg.model_dump_json().encode("utf-8"))
+
+    def publish_event(self, event: object) -> None:
+        msg = PassingEventMessage.from_event(event)
         self._send(msg.model_dump_json().encode("utf-8"))
 
     def close(self) -> None:

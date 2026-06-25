@@ -48,6 +48,16 @@ class Publisher:
             except Exception:
                 logger.warning("sink %s failed on track_3d", type(sink).__name__, exc_info=True)
 
+    def publish_event(self, event: object) -> None:
+        """Fan-out a ``PassingEvent`` to all sinks via ``publish_event``."""
+        if self._closed:
+            return
+        for sink in self._sinks:
+            try:
+                sink.publish_event(event)
+            except Exception:
+                logger.warning("sink %s failed on publish_event", type(sink).__name__, exc_info=True)
+
     def close(self) -> None:
         if self._closed:
             return

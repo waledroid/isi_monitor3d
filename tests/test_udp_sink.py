@@ -11,6 +11,7 @@ from backbone.core.interfaces import metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
 from backbone.metadata.schemas import SCHEMA_VERSION, MessageType
 from backbone.metadata.udp_sink import UdpSink
+from backbone.shared.zone_transitions import PassingEvent
 
 
 def _bind_receiver() -> tuple[socket.socket, int]:
@@ -93,6 +94,26 @@ def test_port_validation() -> None:
         UdpSink(host="127.0.0.1", port=0)
     with pytest.raises(ValueError, match="port"):
         UdpSink(host="127.0.0.1", port=65536)
+
+
+def test_publish_event_arrives_as_json_with_passing_type() -> None:
+    """publish_event sends a PassingEventMessage datagram with type=='passing'."""
+    sock, port = _bind_receiver()
+    try:
+        sink = UdpSink(host="127.0.0.1", port=port)
+        ev = PassingEvent(track_id=42, cls="palette", zone="B3D", direction="enter", ts=1.0)
+        sink.publish_event(ev)
+        payload, _ = sock.recvfrom(8192)
+        msg = json.loads(payload.decode("utf-8"))
+        assert msg["type"] == MessageType.PASSING.value
+        assert msg["schema_version"] == SCHEMA_VERSION
+        assert msg["track_id"] == 42
+        assert msg["zone"] == "B3D"
+        assert msg["direction"] == "enter"
+        assert msg["cls"] == "palette"
+        sink.close()
+    finally:
+        sock.close()
 
 
 def test_close_is_idempotent() -> None:

@@ -1,11 +1,14 @@
 """UDP/JSON envelopes — the **public contract** between the Backbone and modules.
 
-Two envelope types:
+Three envelope types:
 
 * ``Track2DMessage`` — always-on output from the homography layer (S4).
 * ``Track3DMessage`` — subscription-driven output from the triangulation
   layer (S5). Same ``track_id`` as the corresponding ``Track2DMessage`` —
   the "one identity space" principle.
+* ``PassingEventMessage`` — zone entry/leave event (Phase B). Emitted when a
+  tracked object crosses a zone boundary. Published on the same sinks as
+  track messages (UDP/JSON, MQTT).
 
 These are **on-wire** types, validated and serialized by pydantic. The
 in-process types (``backbone.core.types.Track2D``, ``.Track3D``) are
@@ -25,16 +28,21 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backbone.core.types import Track2D, Track3D
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 """Bumped on any breaking change to the UDP/JSON contract.
 
 v2: added optional pallet ``occupancy_*`` fields to ``Track2DMessage`` (additive,
-non-breaking — v1 consumers can ignore them)."""
+non-breaking — v1 consumers can ignore them).
+v4: added ``PassingEventMessage`` (zone entry/leave events, Phase B). All prior
+message shapes are unchanged; ``parse_envelope`` accepts both v3 and v4."""
+
+_ACCEPTED_VERSIONS = frozenset({3, 4})
 
 
 class MessageType(str, Enum):
     TRACK_2D = "track_2d"
     TRACK_3D = "track_3d"
+    PASSING = "passing"
 
 
 class Track2DMessage(BaseModel):
@@ -110,23 +118,65 @@ class Track3DMessage(BaseModel):
         )
 
 
+class PassingEventMessage(BaseModel):
+    """Wire format for a zone entry/leave event (Phase B).
+
+    Emitted when a tracked object crosses a zone boundary. Published through
+    the same ``MetadataSink`` fan-out as ``Track2DMessage`` / ``Track3DMessage``.
+
+    MQTT topic: ``{prefix}/zones/{zone}/passings`` (zone name sanitised).
+    UDP: same JSON datagram channel as tracks.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.PASSING] = MessageType.PASSING
+    ts: float = Field(..., description="capture_ts in Unix seconds")
+    track_id: int = Field(..., ge=0)
+    cls: str
+    zone: str
+    direction: Literal["enter", "leave"]
+
+    @classmethod
+    def from_event(cls, event: object) -> PassingEventMessage:
+        """Construct from a ``PassingEvent`` (avoid hard import of shared module)."""
+        return cls(
+            ts=float(event.ts),          # type: ignore[attr-defined]
+            track_id=int(event.track_id),  # type: ignore[attr-defined]
+            cls=str(event.cls),            # type: ignore[attr-defined]
+            zone=str(event.zone),          # type: ignore[attr-defined]
+            direction=str(event.direction),  # type: ignore[attr-defined]
+        )
+
+
 class SchemaVersionError(ValueError):
     """Raised when a received message has an incompatible schema_version."""
 
 
-def parse_envelope(data: dict) -> Track2DMessage | Track3DMessage:
+def parse_envelope(
+    data: dict,
+) -> Track2DMessage | Track3DMessage | PassingEventMessage:
     """Discriminate by ``type`` field and parse with the right model.
 
     Consumer-side helper — modules will use this to decode UDP payloads.
+
+    Accepts both schema_version 3 (pre-Phase-B) and 4 (current). Version 3
+    messages never carry the ``PASSING`` type, so consumers can parse mixed
+    streams produced by older Backbone builds without rejecting old packets.
+    Any version outside {3, 4} raises ``SchemaVersionError``.
     """
     version = int(data.get("schema_version", 0))
-    if version != SCHEMA_VERSION:
+    if version not in _ACCEPTED_VERSIONS:
         raise SchemaVersionError(
-            f"received schema_version={version}, this Backbone speaks {SCHEMA_VERSION}"
+            f"received schema_version={version}; "
+            f"accepted versions are {sorted(_ACCEPTED_VERSIONS)}"
         )
     msg_type = data.get("type")
     if msg_type == MessageType.TRACK_2D.value:
         return Track2DMessage.model_validate(data)
     if msg_type == MessageType.TRACK_3D.value:
         return Track3DMessage.model_validate(data)
+    if msg_type == MessageType.PASSING.value:
+        return PassingEventMessage.model_validate(data)
     raise ValueError(f"unknown message type: {msg_type!r}")

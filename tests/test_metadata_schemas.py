@@ -12,6 +12,7 @@ from backbone.core.types import Track2D, Track3D
 from backbone.metadata.schemas import (
     SCHEMA_VERSION,
     MessageType,
+    PassingEventMessage,
     SchemaVersionError,
     Track2DMessage,
     Track3DMessage,
@@ -117,6 +118,86 @@ def test_parse_envelope_rejects_wrong_version() -> None:
     payload["schema_version"] = 0
     with pytest.raises(SchemaVersionError):
         parse_envelope(payload)
+
+
+def test_parse_envelope_accepts_version_3() -> None:
+    """Version 3 messages (pre-Phase-B) are still accepted by parse_envelope."""
+    payload = json.loads(Track2DMessage.from_track(_track_2d()).model_dump_json())
+    payload["schema_version"] = 3
+    # Should not raise — parse_envelope accepts both v3 and v4.
+    msg = parse_envelope(payload)
+    assert isinstance(msg, Track2DMessage)
+
+
+def test_parse_envelope_accepts_version_4() -> None:
+    """Version 4 messages (current SCHEMA_VERSION) are accepted."""
+    payload = json.loads(Track2DMessage.from_track(_track_2d()).model_dump_json())
+    assert payload["schema_version"] == SCHEMA_VERSION == 4
+    msg = parse_envelope(payload)
+    assert isinstance(msg, Track2DMessage)
+
+
+def test_passing_event_message_fields() -> None:
+    """PassingEventMessage has correct type and required fields."""
+    msg = PassingEventMessage(
+        ts=99.0, track_id=5, cls="palette", zone="B3D", direction="enter",
+    )
+    assert msg.type == MessageType.PASSING
+    assert msg.schema_version == SCHEMA_VERSION
+    assert msg.track_id == 5
+    assert msg.cls == "palette"
+    assert msg.zone == "B3D"
+    assert msg.direction == "enter"
+    assert msg.ts == pytest.approx(99.0)
+
+
+def test_passing_event_message_json_roundtrip() -> None:
+    """PassingEventMessage serialises and deserialises cleanly."""
+    msg = PassingEventMessage(
+        ts=100.5, track_id=7, cls="person", zone="RACK_A", direction="leave",
+    )
+    data = json.loads(msg.model_dump_json())
+    back = PassingEventMessage.model_validate(data)
+    assert back == msg
+
+
+def test_passing_event_message_from_event() -> None:
+    """``PassingEventMessage.from_event`` accepts any duck-typed event object."""
+    from backbone.shared.zone_transitions import PassingEvent
+
+    ev = PassingEvent(track_id=3, cls="forklift", zone="DANGER", direction="enter", ts=10.0)
+    msg = PassingEventMessage.from_event(ev)
+    assert msg.track_id == 3
+    assert msg.cls == "forklift"
+    assert msg.zone == "DANGER"
+    assert msg.direction == "enter"
+    assert msg.ts == pytest.approx(10.0)
+
+
+def test_parse_envelope_dispatches_passing_type() -> None:
+    """parse_envelope returns a PassingEventMessage for 'passing' type."""
+    msg = PassingEventMessage(
+        ts=5.0, track_id=1, cls="person", zone="B3D", direction="leave",
+    )
+    data = json.loads(msg.model_dump_json())
+    parsed = parse_envelope(data)
+    assert isinstance(parsed, PassingEventMessage)
+    assert parsed.direction == "leave"
+
+
+def test_passing_direction_rejects_invalid_value() -> None:
+    """'direction' must be 'enter' or 'leave' — pydantic rejects anything else."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        PassingEventMessage(
+            ts=1.0, track_id=1, cls="person", zone="B3D", direction="sideways",
+        )
+
+
+def test_schema_version_is_4() -> None:
+    """Pin the current schema version so a bump is explicit and visible."""
+    assert SCHEMA_VERSION == 4
 
 
 def test_extra_fields_rejected() -> None:

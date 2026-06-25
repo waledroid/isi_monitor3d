@@ -14,6 +14,7 @@ import pytest
 from backbone.core.interfaces import metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
 from backbone.metadata.schemas import SCHEMA_VERSION, MessageType
+from backbone.shared.zone_transitions import PassingEvent
 
 # ---------------------------------------------------------------------------
 # Track factories — identical pattern to test_udp_sink.py
@@ -160,6 +161,50 @@ def test_publish_swallows_client_error() -> None:
         sink = MqttSink(host="127.0.0.1", port=1883)
         # Must not raise, even though client.publish raises.
         sink.publish_track_2d(_t2())
+        sink.close()
+
+
+def test_publish_event_correct_topic_and_payload() -> None:
+    """publish_event calls client.publish with the per-zone passings topic and valid JSON."""
+    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.metadata.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
+        ev = PassingEvent(track_id=3, cls="palette", zone="B3D", direction="enter", ts=5.0)
+        sink.publish_event(ev)
+
+        mock_instance.publish.assert_called_once()
+        call_args = mock_instance.publish.call_args
+        topic = call_args[0][0]
+        payload_bytes = call_args[0][1]
+
+        assert topic == "isi/monitor3d/zones/B3D/passings"
+        msg = json.loads(payload_bytes.decode("utf-8"))
+        assert msg["type"] == MessageType.PASSING.value
+        assert msg["schema_version"] == SCHEMA_VERSION
+        assert msg["zone"] == "B3D"
+        assert msg["direction"] == "enter"
+        assert msg["track_id"] == 3
+
+        sink.close()
+
+
+def test_publish_event_sanitises_zone_name() -> None:
+    """Zone names containing MQTT wildcards are sanitised before topic formatting."""
+    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.metadata.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
+        ev = PassingEvent(track_id=1, cls="person", zone="zone/A+B#C", direction="leave", ts=1.0)
+        sink.publish_event(ev)
+
+        call_args = mock_instance.publish.call_args
+        topic = call_args[0][0]
+        assert topic == "isi/monitor3d/zones/zone_A_B_C/passings"
         sink.close()
 
 
