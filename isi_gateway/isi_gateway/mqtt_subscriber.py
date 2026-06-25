@@ -3,7 +3,7 @@
 Subscribes to ``{base}/#`` on a central broker. Each arriving message:
 
 1. Derives ``node_id`` from the second topic segment.
-2. Parses the payload via ``backbone.metadata.schemas.parse_envelope``.
+2. Parses the payload via ``backbone.comms.schemas.parse_envelope``.
 3. Routes into a per-node ``NodeState`` cache (thread-safe).
 
 ``update_from_message`` is intentionally split out so tests can feed
@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import paho.mqtt.client as mqtt
-from backbone.metadata.schemas import (
+from backbone.comms.schemas import (
     ConfigMessage,
     DiagnosticsMessage,
     ImageRefMessage,

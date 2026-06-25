@@ -1,7 +1,7 @@
 """Shared dataclasses passed between Backbone sub-modules.
 
 These are the in-process types. The on-wire types (UDP/JSON payloads)
-live in `backbone.metadata.schemas`; keep the two intentionally separate so
+live in `backbone.comms.schemas`; keep the two intentionally separate so
 internal refactors do not break the public contract.
 """
 

@@ -1,7 +1,7 @@
 """UDP listener — typed-parse Backbone envelopes into an in-process state.
 
 Runs in a daemon thread. Each received packet is decoded via
-``backbone.metadata.schemas.parse_envelope`` (typed pydantic models) and
+``backbone.comms.schemas.parse_envelope`` (typed pydantic models) and
 folded into a small thread-safe state:
 
 * ``last_envelope_ts`` — wall clock of the most recent envelope (drives
@@ -26,7 +26,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
-from backbone.metadata.schemas import (
+from backbone.comms.schemas import (
     SchemaVersionError,
     Track2DMessage,
     Track3DMessage,

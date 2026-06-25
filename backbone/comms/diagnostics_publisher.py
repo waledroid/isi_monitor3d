@@ -15,8 +15,8 @@ import logging
 import threading
 from typing import Any
 
-from backbone.metadata.publisher import Publisher
-from backbone.metadata.schemas import (
+from backbone.comms.publisher import Publisher
+from backbone.comms.schemas import (
     CalibrationFactCheck,
     DiagnosticsMessage,
     LatencyStats,

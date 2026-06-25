@@ -11,7 +11,7 @@ import time
 from unittest.mock import MagicMock
 
 import pytest
-from backbone.metadata.schemas import (
+from backbone.comms.schemas import (
     CalibrationFactCheck,
     ConfigMessage,
     DiagnosticsMessage,

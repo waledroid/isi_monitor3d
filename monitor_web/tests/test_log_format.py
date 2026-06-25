@@ -16,7 +16,7 @@ def test_parse_wellformed_line():
 def test_source_tags_map_known_modules():
     assert parse_line("00:00:00 | backbone.runtime.orchestrator | INFO | x").source == "core"
     assert parse_line("00:00:00 | backbone.ingestion._gst_source | ERROR | x").source == "cam"
-    assert parse_line("00:00:00 | backbone.metadata.udp_sink | WARNING | x").source == "bus"
+    assert parse_line("00:00:00 | backbone.comms.udp_sink | WARNING | x").source == "bus"
     # Unknown module → last path segment.
     assert parse_line("00:00:00 | backbone.weird.thing | INFO | x").source == "thing"
 

@@ -11,12 +11,12 @@ from dataclasses import dataclass
 
 import pytest
 
-from backbone.metadata.schemas import (
+from backbone.comms.diagnostics_publisher import DiagnosticsPublisher
+from backbone.comms.schemas import (
     SCHEMA_VERSION,
     DiagnosticsMessage,
     MessageType,
 )
-from backbone.runtime.diagnostics_publisher import DiagnosticsPublisher
 from backbone.shared.timestamps import LatencyMeter
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from backbone.metadata.schemas import ImageRefMessage
+from backbone.comms.schemas import ImageRefMessage
 
 from isi_gateway.mqtt_subscriber import MqttSubscriber
 from tests.conftest import (

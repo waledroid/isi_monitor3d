@@ -6,8 +6,8 @@ import json
 import socket
 import time
 
+from backbone.comms.schemas import Track2DMessage, Track3DMessage
 from backbone.core.types import Track2D, Track3D
-from backbone.metadata.schemas import Track2DMessage, Track3DMessage
 
 from monitor_web.bus_subscriber import BusSubscriber
 

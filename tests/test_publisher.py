@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from backbone.core.interfaces import MetadataSink
-from backbone.core.types import Track2D, Track3D
-from backbone.metadata.publisher import Publisher
-from backbone.metadata.schemas import (
+from backbone.comms.publisher import Publisher
+from backbone.comms.schemas import (
     CalibrationFactCheck,
     ConfigMessage,
     DiagnosticsMessage,
     LatencyStats,
 )
+from backbone.core.interfaces import MetadataSink
+from backbone.core.types import Track2D, Track3D
 
 
 class _RecordingSink(MetadataSink):

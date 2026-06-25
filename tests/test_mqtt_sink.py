@@ -11,9 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backbone.core.interfaces import metadata_sink_registry
-from backbone.core.types import Track2D, Track3D
-from backbone.metadata.schemas import (
+from backbone.comms.schemas import (
     SCHEMA_VERSION,
     CalibrationFactCheck,
     ConfigMessage,
@@ -21,6 +19,8 @@ from backbone.metadata.schemas import (
     LatencyStats,
     MessageType,
 )
+from backbone.core.interfaces import metadata_sink_registry
+from backbone.core.types import Track2D, Track3D
 from backbone.shared.zone_transitions import PassingEvent
 
 # ---------------------------------------------------------------------------
@@ -51,12 +51,12 @@ def _t3() -> Track3D:
 
 def _make_sink(**kwargs):
     """Instantiate MqttSink with a mocked paho Client."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
         # Import here so the module is already loaded; patch targets the
         # already-imported name in mqtt_sink's namespace.
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(**kwargs)
         return sink, mock_instance
 
@@ -66,19 +66,19 @@ def _make_sink(**kwargs):
 # ---------------------------------------------------------------------------
 
 def test_plugin_registered_under_mqtt() -> None:
-    """``"mqtt"`` appears in the registry after importing backbone.metadata."""
-    import backbone.metadata  # noqa: F401
+    """``"mqtt"`` appears in the registry after importing backbone.comms."""
+    import backbone.comms  # noqa: F401
 
     assert "mqtt" in metadata_sink_registry
 
 
 def test_construction_via_registry_calls_loop_start() -> None:
     """Creating via the registry returns a MqttSink and starts the loop."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = metadata_sink_registry.create("mqtt", host="127.0.0.1", port=1883)
         assert isinstance(sink, MqttSink)
         mock_instance.loop_start.assert_called_once()
@@ -87,11 +87,11 @@ def test_construction_via_registry_calls_loop_start() -> None:
 
 def test_publish_track_2d_correct_topic_and_payload() -> None:
     """publish_track_2d calls client.publish with the per-class topic and valid JSON."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
         sink.publish_track_2d(_t2())
 
@@ -112,11 +112,11 @@ def test_publish_track_2d_correct_topic_and_payload() -> None:
 
 def test_publish_track_3d_correct_topic_and_payload() -> None:
     """publish_track_3d calls client.publish with the per-class topic and xyz_m present."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
         sink.publish_track_3d(_t3())
 
@@ -137,8 +137,8 @@ def test_publish_track_3d_correct_topic_and_payload() -> None:
 
 def test_port_validation() -> None:
     """Port values 0 and 65536 must raise ValueError."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client"):
-        from backbone.metadata.mqtt_sink import MqttSink
+    with patch("backbone.comms.mqtt_sink.mqtt.Client"):
+        from backbone.comms.mqtt_sink import MqttSink
 
         with pytest.raises(ValueError, match="port"):
             MqttSink(host="127.0.0.1", port=0)
@@ -148,8 +148,8 @@ def test_port_validation() -> None:
 
 def test_qos_validation() -> None:
     """QoS values outside {0, 1, 2} must raise ValueError."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client"):
-        from backbone.metadata.mqtt_sink import MqttSink
+    with patch("backbone.comms.mqtt_sink.mqtt.Client"):
+        from backbone.comms.mqtt_sink import MqttSink
 
         with pytest.raises(ValueError, match="qos"):
             MqttSink(host="127.0.0.1", port=1883, qos=3)
@@ -159,12 +159,12 @@ def test_qos_validation() -> None:
 
 def test_publish_swallows_client_error() -> None:
     """A client.publish() exception must not propagate out of publish_track_2d."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         mock_instance.publish.side_effect = RuntimeError("broker gone")
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(host="127.0.0.1", port=1883)
         # Must not raise, even though client.publish raises.
         sink.publish_track_2d(_t2())
@@ -173,11 +173,11 @@ def test_publish_swallows_client_error() -> None:
 
 def test_publish_event_correct_topic_and_payload() -> None:
     """publish_event calls client.publish with the per-zone passings topic and valid JSON."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
         ev = PassingEvent(track_id=3, cls="palette", zone="B3D", direction="enter", ts=5.0)
         sink.publish_event(ev)
@@ -200,11 +200,11 @@ def test_publish_event_correct_topic_and_payload() -> None:
 
 def test_publish_event_sanitises_zone_name() -> None:
     """Zone names containing MQTT wildcards are sanitised before topic formatting."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
         ev = PassingEvent(track_id=1, cls="person", zone="zone/A+B#C", direction="leave", ts=1.0)
         sink.publish_event(ev)
@@ -217,12 +217,12 @@ def test_publish_event_sanitises_zone_name() -> None:
 
 def test_publish_image_ref_correct_topic_and_payload() -> None:
     """publish_image_ref sends an ImageRefMessage with the URL but no image bytes."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
-        from backbone.metadata.schemas import MessageType
+        from backbone.comms.mqtt_sink import MqttSink
+        from backbone.comms.schemas import MessageType
         sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
         sink.publish_image_ref(
             track_id=42,
@@ -256,11 +256,11 @@ def test_publish_image_ref_correct_topic_and_payload() -> None:
 
 def test_close_is_idempotent() -> None:
     """Calling close() twice must not raise and must call loop_stop + disconnect."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(host="127.0.0.1", port=1883)
         sink.close()
         sink.close()  # second call must be a no-op
@@ -303,11 +303,11 @@ def _make_config() -> ConfigMessage:
 
 def test_publish_diagnostics_correct_topic_and_payload() -> None:
     """publish_diagnostics calls client.publish with the heartbeat topic and valid JSON."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/zone_a")
         sink.publish_diagnostics(_make_diag())
 
@@ -326,11 +326,11 @@ def test_publish_diagnostics_correct_topic_and_payload() -> None:
 
 def test_publish_diagnostics_custom_topic() -> None:
     """diag_topic parameter overrides the default heartbeat topic."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(
             host="127.0.0.1", port=1883, prefix="isi/z",
             diag_topic="{prefix}/hb",
@@ -348,11 +348,11 @@ def test_publish_diagnostics_custom_topic() -> None:
 
 def test_publish_config_uses_retain_true() -> None:
     """publish_config MUST call client.publish with retain=True unconditionally."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         # Even when instance retain=False, config must be retained.
         sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/zone_a", retain=False)
         sink.publish_config(_make_config())
@@ -374,11 +374,11 @@ def test_publish_config_uses_retain_true() -> None:
 
 def test_publish_config_custom_topic() -> None:
     """config_topic parameter overrides the default config topic."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(
             host="127.0.0.1", port=1883, prefix="isi/z",
             config_topic="{prefix}/node_config",
@@ -393,11 +393,11 @@ def test_publish_config_custom_topic() -> None:
 
 def test_publish_config_retain_true_even_when_instance_retain_is_false() -> None:
     """Force-retain test: instance retain=False must not bleed into config publish."""
-    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
         mock_instance = MagicMock()
         MockClient.return_value = mock_instance
 
-        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.comms.mqtt_sink import MqttSink
         sink = MqttSink(host="127.0.0.1", port=1883, retain=False)
         sink.publish_config(_make_config())
 

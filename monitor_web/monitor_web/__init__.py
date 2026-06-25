@@ -1,7 +1,7 @@
 """ISI Monitor 3D operator dashboard.
 
 Separate FastAPI process from the Backbone. Consumes UDP envelopes per the
-public ``backbone.metadata.schemas`` contract; never imports
+public ``backbone.comms.schemas`` contract; never imports
 ``backbone.runtime``.
 """
 

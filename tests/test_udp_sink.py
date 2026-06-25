@@ -7,9 +7,7 @@ import socket
 
 import pytest
 
-from backbone.core.interfaces import metadata_sink_registry
-from backbone.core.types import Track2D, Track3D
-from backbone.metadata.schemas import (
+from backbone.comms.schemas import (
     SCHEMA_VERSION,
     CalibrationFactCheck,
     ConfigMessage,
@@ -17,7 +15,9 @@ from backbone.metadata.schemas import (
     LatencyStats,
     MessageType,
 )
-from backbone.metadata.udp_sink import UdpSink
+from backbone.comms.udp_sink import UdpSink
+from backbone.core.interfaces import metadata_sink_registry
+from backbone.core.types import Track2D, Track3D
 from backbone.shared.zone_transitions import PassingEvent
 
 
@@ -49,7 +49,7 @@ def _t3() -> Track3D:
 
 
 def test_plugin_registered_under_udp() -> None:
-    import backbone.metadata  # noqa: F401
+    import backbone.comms  # noqa: F401
 
     assert "udp" in metadata_sink_registry
 

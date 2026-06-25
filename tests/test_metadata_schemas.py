@@ -8,8 +8,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from backbone.core.types import Track2D, Track3D
-from backbone.metadata.schemas import (
+from backbone.comms.schemas import (
     SCHEMA_VERSION,
     CalibrationFactCheck,
     ConfigMessage,
@@ -23,6 +22,7 @@ from backbone.metadata.schemas import (
     ZoneSpec,
     parse_envelope,
 )
+from backbone.core.types import Track2D, Track3D
 
 
 def _track_2d() -> Track2D:

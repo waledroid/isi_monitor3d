@@ -52,11 +52,14 @@ import yaml
 # These are listed explicitly so adding the orchestrator to a YAML config
 # is enough to instantiate any registered plugin — the user doesn't need
 # to know which package contains which seam.
+import backbone.comms
 import backbone.detection
 import backbone.homography
 import backbone.ingestion
-import backbone.metadata
 import backbone.triangulation  # noqa: F401  — registers opencv_dlt
+from backbone.comms import Publisher
+from backbone.comms.diagnostics_publisher import DiagnosticsPublisher
+from backbone.comms.schemas import CalibrationFactCheck, ConfigMessage, ZoneSpec
 from backbone.core.interfaces import (
     detector_registry,
     frame_source_registry,
@@ -75,9 +78,6 @@ from backbone.homography import (
     TrackConfig,
 )
 from backbone.ingestion import FrameBus, FrameSynchronizer
-from backbone.metadata import Publisher
-from backbone.metadata.schemas import CalibrationFactCheck, ConfigMessage, ZoneSpec
-from backbone.runtime.diagnostics_publisher import DiagnosticsPublisher
 from backbone.shared.camera_rig import CameraRig
 from backbone.shared.snapshot_writer import SnapshotWriter
 from backbone.shared.timestamps import LatencyMeter, elapsed_ms, now

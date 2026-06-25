@@ -1,7 +1,7 @@
-"""Metadata layer: UDP/JSON contract with the module ecosystem.
+"""Communications layer: UDP/JSON contract with the module ecosystem.
 
 Importing this package auto-registers the ``udp`` and ``mqtt``
-``MetadataSink`` plugins. After ``import backbone.metadata``,
+``MetadataSink`` plugins. After ``import backbone.comms``,
 ``metadata_sink_registry`` includes both ``"udp"`` and ``"mqtt"``.
 
 Public API:

@@ -31,9 +31,9 @@ def test_backbone_runtime_not_imported_after_create_app():
 
 
 def test_only_allowed_backbone_modules_are_imported():
-    """Only backbone.metadata.schemas and backbone.shared.zones may be imported."""
+    """Only backbone.comms.schemas and backbone.shared.zones may be imported."""
     allowed_prefixes = (
-        "backbone.metadata",
+        "backbone.comms",
         "backbone.shared",
         "backbone.core",   # schemas pulls in backbone.core.types
     )

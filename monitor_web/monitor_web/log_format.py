@@ -21,7 +21,7 @@ _SOURCE_TAGS = {
     "ingestion": "cam",
     "homography": "geo",
     "triangulation": "geo",
-    "metadata": "bus",
+    "comms": "bus",
     "calibration": "calib",
 }
 

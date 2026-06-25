@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backbone.metadata.schemas import ZoneSpec
+from backbone.comms.schemas import ZoneSpec
 
 from tests.conftest import make_config
 

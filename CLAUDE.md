@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | S3 — detection (YOLO11 via **ONNX Runtime**, detect-only) | ✅ | `backbone/detection/`, `tools/{detection_smoke,onnx_inspect}.py` |
 | S4 — homography layer (foot proj → fusion → ByteTrack-in-meters → stabilizer) | ✅ | `backbone/homography/` |
 | S5 — triangulation layer (subscription-driven, foot-centroid; pose deferred to S5.5) | ✅ | `backbone/triangulation/` |
-| S6 — metadata + orchestrator + latency probe | ✅ | `backbone/{metadata,runtime}/`, `tools/latency_probe.py` |
+| S6 — comms (metadata) + orchestrator + latency probe | ✅ | `backbone/{comms,runtime}/`, `tools/latency_probe.py` |
 | S7 — simplification pass (drop dead/speculative paths) | ✅ | -113 LOC, -7 tests; `FrameBus` single-subscriber, `Tracker3D.predict_only` removed, pose stubs gone, `UdpSink` multicast TTL gone |
 | S8 — operational modes (1-cam / 2-cam) + runtime degradation | ✅ | `calibration/calibrate_single_cam.py`, `frame_sync.degraded_emit_after_ms`, `Orchestrator.mode` / `.source_status` |
 
@@ -106,7 +106,7 @@ The Backbone is a single process that turns RTSP video into metric, identity-sta
 2. **One identity space.** The homography tracker owns `track_id`. The triangulation layer augments tracks with 3D and *never* re-IDs.
 3. **Subscription, not polling.** Triangulation runs only for tracks matching rules in `config/subscriptions.yaml`. The default output is `Track2D` from homography; `Track3D` is on-demand.
 4. **Plugin where multiplicity is real — concrete everywhere else.** There are exactly **five** ABC seams; `tests/test_registry.py::test_five_seams_present` pins this. Adding ABCs anywhere else is ceremony, not modularity.
-5. **Process boundaries are contractual.** Backbone has **zero imports** from modules. The UDP/JSON schema (later in `backbone/metadata/schemas.py`) is the only contract. Expand the schema rather than sharing code.
+5. **Process boundaries are contractual.** Backbone has **zero imports** from modules. The UDP/JSON schema (later in `backbone/comms/schemas.py`) is the only contract. Expand the schema rather than sharing code.
 6. **Fail honestly.** Every geometric output is gated — reprojection error for triangulation, cross-camera disagreement for fusion. Bad input must produce no output or flagged-uncertain output, never silent-bad output.
 7. **Industrial defaults.** systemd-supervised, no cloud, deterministic restart. Latency is measured against `frame.capture_ts` (the single capture-time clock propagated through every downstream message), never against `time.time()` at publish.
 
@@ -138,7 +138,7 @@ The orchestrator chooses an operational mode at build time from `len(cfg["camera
 | `Detector` | same | `yolo_onnx` ✅, `yolo_openvino` ✅ — `backbone/detection/` | ONNX Runtime + CUDAExecutionProvider (NVIDIA); `yolo_openvino` for Intel CPU/iGPU edge nodes (same raw head, reuses the decode — CPU-only on the RTX 5070); pose-mode `yolo_onnx_pose` lands in S5.5 |
 | `Tracker` | same | `bytetrack` ✅ — `backbone/homography/` | ByteTrack-in-meters; SORT/OC-SORT/Kalman-only easy to swap |
 | `Triangulator` | same | `opencv_dlt` ✅ — `backbone/triangulation/` | 2-cam DLT now; aniposelib for ≥3 cams in S5.5 |
-| `MetadataSink` | same | `udp` ✅ — `backbone/metadata/` | UDP/JSON now; future MQTT, ROS, S7 PLC |
+| `MetadataSink` | same | `udp` ✅ — `backbone/comms/` | UDP/JSON now; future MQTT, ROS, S7 PLC |
 
 Implementations register themselves via decorator:
 
@@ -148,7 +148,7 @@ class YoloOnnxDetector(Detector):
     ...
 ```
 
-The runtime orchestrator (`backbone/runtime/orchestrator.py`) is **the only place** that calls `registry.create()`. Plugins never instantiate each other. The orchestrator explicitly imports every layer package (`backbone.detection`, `backbone.homography`, `backbone.ingestion`, `backbone.metadata`, `backbone.triangulation`) at module top to fire `@register` before any plugin lookup.
+The runtime orchestrator (`backbone/runtime/orchestrator.py`) is **the only place** that calls `registry.create()`. Plugins never instantiate each other. The orchestrator explicitly imports every layer package (`backbone.comms`, `backbone.detection`, `backbone.homography`, `backbone.ingestion`, `backbone.triangulation`) at module top to fire `@register` before any plugin lookup.
 
 **Auto-registration pattern.** Each plugin's package `__init__.py` imports the implementation modules so the `@register` decorators run on `import` — e.g., `import backbone.ingestion` makes `frame_source_registry.names()` return `['replay', 'rtsp']`. Replicate this when adding a new plugin (e.g., S5.5's `yolo_onnx_pose`).
 
@@ -221,7 +221,7 @@ Refuses to start with no `metadata.sinks` configured — bad config fails fast.
 
 ## Operator dashboard (`monitor_web/`)
 
-A **separate FastAPI process** (sibling project under `monitor_web/`) — the operator UI. Consumes the Backbone over the UDP/JSON bus + shared YAML; per the process-boundary rule it imports only consumer-side helpers (`backbone.metadata.schemas`, `backbone.shared.zones`, `backbone.ingestion`), **never** `backbone.runtime/homography/triangulation`, and imports `backbone.detection` only in **one documented place** — `monitor_web/detection_overlay.py`, used by the zone workers, the cam-view pose overlay, and the hidden MP4 viewer (all below).
+A **separate FastAPI process** (sibling project under `monitor_web/`) — the operator UI. Consumes the Backbone over the UDP/JSON bus + shared YAML; per the process-boundary rule it imports only consumer-side helpers (`backbone.comms.schemas`, `backbone.shared.zones`, `backbone.ingestion`), **never** `backbone.runtime/homography/triangulation`, and imports `backbone.detection` only in **one documented place** — `monitor_web/detection_overlay.py`, used by the zone workers, the cam-view pose overlay, and the hidden MP4 viewer (all below).
 
 - **Run:** `conda activate monitor3d && cd monitor_web && pip install -e ".[dev]"` (one-time), then `python -m monitor_web` (uvicorn on :8000). Shell alias `3d` does activate + run. Open `http://localhost:8000/` (not `0.0.0.0`).
 - **Stack:** FastAPI + Jinja2 + HTMX + Material Web (CDN) + **Pixi.js** for the floor map + **Alpine.js** (CDN) driving the big-panel reactive state (`static/js/big_panel.js` = an `Alpine.store('bigPanel')`; markup binds via `x-show`/`:class`/`@click`; the live `<img>`s get their frames imperatively from `video_ws.js` via an Alpine effect in `boot()` — only the MP4 dev tab still uses a `:src` MJPEG URL). Script order matters twice: `video_ws.js` is the **first deferred script in `<head>`** so `window.__videoWS` exists before any module attaches a stream, and `big_panel.js` is a **classic deferred script immediately before the Alpine script** so its `alpine:init` listener registers first (module-vs-defer order is otherwise ambiguous → store never registers → bindings error → views hidden). Session persistence (view + mp4 pick) is plain `sessionStorage` via `Alpine.effect` (no persist plugin). No Node toolchain.

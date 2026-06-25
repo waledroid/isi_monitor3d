@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any
 
-from backbone.metadata.schemas import Track2DMessage, Track3DMessage
+from backbone.comms.schemas import Track2DMessage, Track3DMessage
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
