@@ -33,7 +33,7 @@ import paho.mqtt.client as mqtt
 from backbone.core.interfaces import MetadataSink, metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
 
-from .schemas import PassingEventMessage, Track2DMessage, Track3DMessage
+from .schemas import ImageRefMessage, PassingEventMessage, Track2DMessage, Track3DMessage
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ class MqttSink(MetadataSink):
         track2d_topic: str = "{prefix}/track2d/{cls}",
         track3d_topic: str = "{prefix}/track3d/{cls}",
         event_topic: str = "{prefix}/zones/{zone}/passings",
+        image_topic: str = "{prefix}/images/{zone}/{track_id}",
     ) -> None:
         """Initialise and start the MQTT client background thread.
 
@@ -92,6 +93,10 @@ class MqttSink(MetadataSink):
                            ``{prefix}`` and ``{zone}`` tokens. The zone name is
                            sanitised (``/``, ``+``, ``#`` → ``_``) before
                            substitution so it is safe as a MQTT topic segment.
+            image_topic:   Topic template for ``ImageRefMessage``; supports
+                           ``{prefix}``, ``{zone}``, and ``{track_id}`` tokens.
+                           Zone is sanitised the same way as ``event_topic``.
+                           Default: ``"{prefix}/images/{zone}/{track_id}"``.
 
         Raises:
             ValueError: If ``port`` is outside (0, 65536) or ``qos`` is not
@@ -110,6 +115,7 @@ class MqttSink(MetadataSink):
         self._track2d_topic = track2d_topic
         self._track3d_topic = track3d_topic
         self._event_topic = event_topic
+        self._image_topic = image_topic
         self._closed = False
 
         self._client = mqtt.Client(
@@ -170,6 +176,27 @@ class MqttSink(MetadataSink):
         topic = self._event_topic.format(
             prefix=self._prefix,
             zone=_sanitize_cls(msg.zone),   # reuse the same sanitiser
+        )
+        self._publish(topic, msg.model_dump_json().encode("utf-8"))
+
+    def publish_image_ref(
+        self,
+        track_id: int,
+        cls: str,
+        zone: str,
+        ts: float,
+        url: str,
+    ) -> None:
+        """Publish an ``ImageRefMessage`` (URL only, never raw bytes).
+
+        The ``{zone}`` and ``{track_id}`` tokens in the topic template are
+        populated; zone is sanitised so MQTT wildcard chars can't appear.
+        """
+        msg = ImageRefMessage(track_id=track_id, cls=cls, zone=zone, ts=ts, url=url)
+        topic = self._image_topic.format(
+            prefix=self._prefix,
+            zone=_sanitize_cls(zone),
+            track_id=track_id,
         )
         self._publish(topic, msg.model_dump_json().encode("utf-8"))
 

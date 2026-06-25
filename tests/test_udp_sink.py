@@ -9,7 +9,7 @@ import pytest
 
 from backbone.core.interfaces import metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
-from backbone.metadata.schemas import SCHEMA_VERSION, MessageType
+from backbone.metadata.schemas import SCHEMA_VERSION, MessageType  # IMAGE_REF added in Phase C
 from backbone.metadata.udp_sink import UdpSink
 from backbone.shared.zone_transitions import PassingEvent
 
@@ -111,6 +111,33 @@ def test_publish_event_arrives_as_json_with_passing_type() -> None:
         assert msg["zone"] == "B3D"
         assert msg["direction"] == "enter"
         assert msg["cls"] == "palette"
+        sink.close()
+    finally:
+        sock.close()
+
+
+def test_publish_image_ref_arrives_as_json() -> None:
+    """publish_image_ref sends an ImageRefMessage datagram with type=='image_ref'."""
+    sock, port = _bind_receiver()
+    try:
+        sink = UdpSink(host="127.0.0.1", port=port)
+        sink.publish_image_ref(
+            track_id=42,
+            cls="palette",
+            zone="B3D",
+            ts=5.0,
+            url="file:///var/lib/isi_monitor3d/snapshots/5000_B3D_42.jpg",
+        )
+        payload, _ = sock.recvfrom(8192)
+        msg = json.loads(payload.decode("utf-8"))
+        assert msg["type"] == MessageType.IMAGE_REF.value
+        assert msg["schema_version"] == SCHEMA_VERSION
+        assert msg["track_id"] == 42
+        assert msg["zone"] == "B3D"
+        assert msg["url"] == "file:///var/lib/isi_monitor3d/snapshots/5000_B3D_42.jpg"
+        # No raw image bytes
+        assert "image" not in msg
+        assert "image_bytes" not in msg
         sink.close()
     finally:
         sock.close()

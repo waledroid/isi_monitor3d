@@ -1,6 +1,6 @@
 """UDP/JSON envelopes — the **public contract** between the Backbone and modules.
 
-Three envelope types:
+Four envelope types:
 
 * ``Track2DMessage`` — always-on output from the homography layer (S4).
 * ``Track3DMessage`` — subscription-driven output from the triangulation
@@ -9,6 +9,9 @@ Three envelope types:
 * ``PassingEventMessage`` — zone entry/leave event (Phase B). Emitted when a
   tracked object crosses a zone boundary. Published on the same sinks as
   track messages (UDP/JSON, MQTT).
+* ``ImageRefMessage`` — image reference (Phase C). Emitted alongside a
+  ``PassingEventMessage`` when snapshot-writing is enabled. Carries a URL
+  (``file://`` or HTTP) to the saved JPEG; **never** raw image bytes.
 
 These are **on-wire** types, validated and serialized by pydantic. The
 in-process types (``backbone.core.types.Track2D``, ``.Track3D``) are
@@ -43,6 +46,7 @@ class MessageType(str, Enum):
     TRACK_2D = "track_2d"
     TRACK_3D = "track_3d"
     PASSING = "passing"
+    IMAGE_REF = "image_ref"
 
 
 class Track2DMessage(BaseModel):
@@ -150,13 +154,35 @@ class PassingEventMessage(BaseModel):
         )
 
 
+class ImageRefMessage(BaseModel):
+    """Wire format for an image-reference notification (Phase C).
+
+    Published when a zone-passing event fires **and** snapshot-writing is
+    enabled in ``backbone.yaml``.  The ``url`` points to the saved JPEG;
+    raw image bytes are **never** included in this message.
+
+    Fields mirror ``PassingEventMessage`` so consumers can correlate the two
+    by ``(track_id, zone, ts)``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.IMAGE_REF] = MessageType.IMAGE_REF
+    ts: float = Field(..., description="capture_ts in Unix seconds")
+    track_id: int = Field(..., ge=0)
+    cls: str
+    zone: str
+    url: str = Field(..., description="URL of the saved JPEG snapshot (no image bytes)")
+
+
 class SchemaVersionError(ValueError):
     """Raised when a received message has an incompatible schema_version."""
 
 
 def parse_envelope(
     data: dict,
-) -> Track2DMessage | Track3DMessage | PassingEventMessage:
+) -> Track2DMessage | Track3DMessage | PassingEventMessage | ImageRefMessage:
     """Discriminate by ``type`` field and parse with the right model.
 
     Consumer-side helper — modules will use this to decode UDP payloads.
@@ -179,4 +205,6 @@ def parse_envelope(
         return Track3DMessage.model_validate(data)
     if msg_type == MessageType.PASSING.value:
         return PassingEventMessage.model_validate(data)
+    if msg_type == MessageType.IMAGE_REF.value:
+        return ImageRefMessage.model_validate(data)
     raise ValueError(f"unknown message type: {msg_type!r}")

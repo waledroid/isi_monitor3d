@@ -101,6 +101,22 @@ class MetadataSink(ABC):
         """
         return None
 
+    def publish_image_ref(
+        self,
+        track_id: int,
+        cls: str,
+        zone: str,
+        ts: float,
+        url: str,
+    ) -> None:
+        """Publish an image-reference URL for a zone-passing snapshot.
+
+        Non-abstract default no-op so existing sink implementations that do
+        not override this remain valid.  Override in sink plugins to emit
+        the ``ImageRefMessage`` (URL only — never raw bytes).
+        """
+        return None
+
     @abstractmethod
     def close(self) -> None: ...
 

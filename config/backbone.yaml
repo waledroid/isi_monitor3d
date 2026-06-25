@@ -57,4 +57,10 @@ metadata:
     port: 1883
     prefix: isi/monitor3d
     qos: 0
+  images:
+    enabled: false
+    out_dir: /var/lib/isi_monitor3d/snapshots
+    url_base: file:///var/lib/isi_monitor3d/snapshots
+    jpeg_quality: 85
+    on: enter
 zones_path: /home/aatanda/isi_monitor3d/config/zones.yaml

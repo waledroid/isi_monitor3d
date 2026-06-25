@@ -77,6 +77,7 @@ from backbone.homography import (
 from backbone.ingestion import FrameBus, FrameSynchronizer
 from backbone.metadata import Publisher
 from backbone.shared.camera_rig import CameraRig
+from backbone.shared.snapshot_writer import SnapshotWriter
 from backbone.shared.timestamps import LatencyMeter, elapsed_ms
 from backbone.shared.zone_transitions import ZoneTransitionDetector
 from backbone.shared.zones import ZoneRegistry
@@ -245,6 +246,26 @@ class Orchestrator:
         self._passings_enabled: bool = bool(
             meta_cfg.get("passings", {}).get("enabled", True)
         )
+
+        # Image snapshots on zone-passing events (Phase C). Opt-in via
+        # ``metadata.images.enabled: true`` in backbone.yaml. JPEG bytes go to
+        # disk only; the published message carries the URL, never raw bytes.
+        images_cfg = meta_cfg.get("images", {})
+        if images_cfg.get("enabled", False):
+            self._snapshot_writer: SnapshotWriter | None = SnapshotWriter(
+                out_dir=str(images_cfg["out_dir"]),
+                url_base=str(images_cfg.get("url_base", "file://")),
+                jpeg_quality=int(images_cfg.get("jpeg_quality", 85)),
+            )
+            self._images_on: str = str(images_cfg.get("on", "enter"))
+            logger.info(
+                "orchestrator: snapshot-writer enabled → out_dir=%s, on=%s",
+                images_cfg["out_dir"],
+                self._images_on,
+            )
+        else:
+            self._snapshot_writer = None
+            self._images_on = "enter"
 
         # Diagnostics.
         self._latency_total = LatencyMeter("capture_to_publish", window=2048)
@@ -420,6 +441,21 @@ class Orchestrator:
                     track.track_id, track.cls, track.xy_m, pair.capture_ts
                 ):
                     self._publisher.publish_event(ev)
+                    # Snapshot on enter/leave/both — JPEG written to disk only;
+                    # bus message carries the URL, never raw bytes.
+                    if self._snapshot_writer is not None and (
+                        self._images_on == "both"
+                        or self._images_on == ev.direction
+                    ):
+                        cam_id = next(iter(pair.frames))
+                        image = pair.frames[cam_id].image
+                        url = self._snapshot_writer.write(
+                            image, ev.track_id, ev.zone, ev.ts
+                        )
+                        if url is not None:
+                            self._publisher.publish_image_ref(
+                                ev.track_id, ev.cls, ev.zone, ev.ts, url
+                            )
         if self._passings_enabled:
             self._transitions.forget({t.track_id for t in tracks_2d})
 

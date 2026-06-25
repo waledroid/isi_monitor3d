@@ -208,6 +208,45 @@ def test_publish_event_sanitises_zone_name() -> None:
         sink.close()
 
 
+def test_publish_image_ref_correct_topic_and_payload() -> None:
+    """publish_image_ref sends an ImageRefMessage with the URL but no image bytes."""
+    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.metadata.mqtt_sink import MqttSink
+        from backbone.metadata.schemas import MessageType
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
+        sink.publish_image_ref(
+            track_id=42,
+            cls="palette",
+            zone="B3D",
+            ts=5.0,
+            url="file:///var/lib/isi_monitor3d/snapshots/5000_B3D_42.jpg",
+        )
+
+        mock_instance.publish.assert_called_once()
+        call_args = mock_instance.publish.call_args
+        topic = call_args[0][0]
+        payload_bytes = call_args[0][1]
+
+        # Topic must embed zone + track_id
+        assert topic == "isi/monitor3d/images/B3D/42"
+
+        msg = json.loads(payload_bytes.decode("utf-8"))
+        assert msg["type"] == MessageType.IMAGE_REF.value
+        assert msg["schema_version"] == SCHEMA_VERSION
+        assert msg["track_id"] == 42
+        assert msg["zone"] == "B3D"
+        assert msg["url"] == "file:///var/lib/isi_monitor3d/snapshots/5000_B3D_42.jpg"
+        # Crucially: no raw image bytes field
+        assert "image" not in msg
+        assert "image_bytes" not in msg
+        assert "data" not in msg
+
+        sink.close()
+
+
 def test_close_is_idempotent() -> None:
     """Calling close() twice must not raise and must call loop_stop + disconnect."""
     with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
