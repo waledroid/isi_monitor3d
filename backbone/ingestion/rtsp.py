@@ -117,18 +117,18 @@ class RtspFrameSource(GstAppsinkFrameSource):
     ) -> None:
         if not url.startswith(("rtsp://", "rtsps://")):
             raise ValueError(f"RtspFrameSource: bad URL {url!r}, expected rtsp:// or rtsps://")
-        super().__init__(camera_id, startup_timeout_s=startup_timeout_s)
+        # The frame-rate cap is enforced in the appsink callback (the base class),
+        # NOT a GStreamer `videorate` element: `videorate` stalls on cameras that
+        # report no valid frame rate / broken buffer timestamps (e.g. some
+        # Hikvision-clone H.264 streams, avg_frame_rate=0/0 — the pipeline froze
+        # after a few frames). Capping in the callback is timestamp-independent and
+        # still throttles the BGR copy + every downstream consumer. The decoder
+        # still decodes every frame (H.264/H.265 are inter-coded); to cut decode
+        # too, lower the camera's sub-stream FPS in its own web UI.
+        super().__init__(camera_id, startup_timeout_s=startup_timeout_s,
+                         capture_fps=capture_fps)
         self._url = url
         self._latency_ms = int(latency_ms)
-        # Optional input frame-rate cap. When set, a `videorate drop-only` element
-        # throttles the stream to `capture_fps` right after decode — so the BGR
-        # convert + appsink copy (and every downstream consumer: the Backbone's own
-        # detector AND the dashboard preview) run at `capture_fps` instead of the
-        # camera's native rate. The decoder still decodes every frame (H.264/H.265
-        # are inter-coded — you can't skip a P/B frame without decoding it), so
-        # this cuts per-frame CPU + inference frequency, not decode. The best way to cut
-        # decode too is to lower the camera's sub-stream FPS in its own web UI.
-        self._capture_fps = float(capture_fps) if capture_fps else None
         self._codec: str | None = None  # resolved lazily on first _build_pipeline_str
 
     def _depay_decoder(self) -> tuple[str, str]:
@@ -145,13 +145,25 @@ class RtspFrameSource(GstAppsinkFrameSource):
 
     def _build_pipeline_str(self) -> str:
         depay, decoder = self._depay_decoder()
-        template = PIPELINE_TEMPLATE
-        if self._capture_fps:
-            rate = (
-                f"! videorate drop-only=true "
-                f"! video/x-raw,framerate={round(self._capture_fps)}/1 "
-            )
-            template = template.replace("! videoconvert ", rate + "! videoconvert ", 1)
-        return template.format(
+        return PIPELINE_TEMPLATE.format(
             url=self._url, latency_ms=self._latency_ms, depay=depay, decoder=decoder
         )
+
+    def _configure_pipeline(self, pipeline) -> None:
+        # Reject the camera's audio stream at the rtspsrc level. With an explicit
+        # video depayloader, a camera that carries audio (e.g. cam_a's PCM A-law
+        # track) leaves its audio RTP pad unlinked, and rtspsrc intermittently
+        # aborts with "streaming stopped, reason not-linked (-1)" (~1-in-3 starts).
+        # `select-stream` tells rtspsrc to never set up the audio stream at all.
+        src = pipeline.get_by_name("src")
+        if src is not None:
+            src.connect("select-stream", self._select_stream)
+
+    @staticmethod
+    def _select_stream(rtspsrc, num: int, caps) -> bool:
+        """rtspsrc ``select-stream``: return False to skip the audio stream."""
+        try:
+            media = caps.get_structure(0).get_string("media")
+        except Exception:
+            return True
+        return media != "audio"

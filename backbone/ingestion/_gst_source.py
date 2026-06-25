@@ -65,9 +65,23 @@ class GstAppsinkFrameSource(FrameSource):
     constructor arguments before calling ``super().__init__``.
     """
 
-    def __init__(self, camera_id: str, *, startup_timeout_s: float = 10.0) -> None:
+    def __init__(
+        self,
+        camera_id: str,
+        *,
+        startup_timeout_s: float = 10.0,
+        capture_fps: float | None = None,
+    ) -> None:
         self._camera_id = camera_id
         self._startup_timeout_s = startup_timeout_s
+
+        # Optional frame-rate cap, enforced in `_on_sample` by wall-clock interval
+        # (NOT a GStreamer `videorate` element — that stalls on cameras which give
+        # no valid buffer timestamps, e.g. some Hikvision-clone H.264 streams that
+        # report avg_frame_rate=0/0). Dropping here, before the BGR copy + queue,
+        # still caps every downstream consumer's load at `capture_fps`.
+        self._min_interval: float | None = (1.0 / capture_fps) if capture_fps else None
+        self._next_keep_ts: float = 0.0   # schedule-anchored deadline for the next kept frame
 
         self._queue: queue.Queue[Frame] = queue.Queue(maxsize=1)
         self._dropped: int = 0
@@ -85,6 +99,11 @@ class GstAppsinkFrameSource(FrameSource):
     @abstractmethod
     def _build_pipeline_str(self) -> str:
         """Return the GStreamer pipeline string (must contain ``appsink name=sink``)."""
+
+    def _configure_pipeline(self, pipeline) -> None:
+        """Optional hook: wire signals on the parsed pipeline BEFORE it goes
+        PLAYING (e.g. an rtspsrc ``select-stream`` to drop an unwanted audio
+        stream). Default no-op."""
 
     # ---- public API ----
 
@@ -158,6 +177,10 @@ class GstAppsinkFrameSource(FrameSource):
             return
         sink.connect("new-sample", self._on_sample)
 
+        # Wire any pre-PLAYING signals (select-stream etc.) — must happen before
+        # set_state(PLAYING) so rtspsrc never sets up the rejected streams.
+        self._configure_pipeline(self._pipeline)
+
         bus = self._pipeline.get_bus()
         bus.add_signal_watch()
         bus.connect("message::error", self._on_bus_error)
@@ -182,6 +205,18 @@ class GstAppsinkFrameSource(FrameSource):
         # callback fires immediately after the decoder emits the buffer. This is
         # what propagates through every downstream stage as the capture clock.
         capture_ts = time.time()
+
+        # Frame-rate cap (timestamp-independent — see __init__). Keep a frame only
+        # once we pass the next scheduled deadline, then advance the deadline by
+        # exactly one interval (anchored to a fixed schedule, not to each kept
+        # frame's jittery arrival — the latter over-drops to native/2). Re-anchor
+        # if we've fallen behind (e.g. after a stall) to avoid a catch-up burst.
+        if self._min_interval is not None:
+            if capture_ts < self._next_keep_ts:
+                return Gst.FlowReturn.OK
+            self._next_keep_ts += self._min_interval
+            if self._next_keep_ts < capture_ts:
+                self._next_keep_ts = capture_ts + self._min_interval
 
         buf = sample.get_buffer()
         caps = sample.get_caps()

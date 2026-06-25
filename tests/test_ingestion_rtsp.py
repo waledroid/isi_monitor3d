@@ -75,3 +75,27 @@ def test_no_thread_started_at_construction() -> None:
     """Construction must be cheap; only start() launches the GLib loop."""
     src = RtspFrameSource(camera_id="cam_a", url="rtsp://example/stream")
     assert src.dropped_count == 0
+
+
+def test_capture_fps_caps_in_callback_not_videorate() -> None:
+    """`capture_fps` must NOT add a GStreamer `videorate` element (it stalls on
+    cameras with no valid frame rate); the cap is enforced in the appsink
+    callback via a wall-clock interval instead."""
+    src = RtspFrameSource(camera_id="cam_a", url="rtsp://example/stream", capture_fps=12)
+    assert "videorate" not in src._build_pipeline_str()
+    assert abs(src._min_interval - 1.0 / 12) < 1e-9
+    # No cap → no interval.
+    plain = RtspFrameSource(camera_id="cam_a", url="rtsp://example/stream")
+    assert plain._min_interval is None
+
+
+@pytest.mark.parametrize(
+    "media,keep",
+    [("audio", False), ("video", True)],
+)
+def test_select_stream_rejects_audio(media: str, keep: bool) -> None:
+    """rtspsrc `select-stream` must skip audio (an unlinked audio pad makes
+    rtspsrc abort with 'streaming stopped, reason not-linked')."""
+    _ensure_gst_initialized()
+    caps = Gst.Caps.from_string(f"application/x-rtp, media=(string){media}")
+    assert RtspFrameSource._select_stream(None, 0, caps) is keep
