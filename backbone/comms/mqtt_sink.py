@@ -148,6 +148,14 @@ class MqttSink(MetadataSink):
         self._ca_cert = ca_cert
         self._tls_insecure = tls_insecure
         self._closed = False
+        # Last retained config advert (topic, payload). Cached so it can be
+        # re-published from ``_on_connect``: ``publish_config`` is called once
+        # at orchestrator startup, which races the async CONNACK — a QoS-0
+        # publish issued before the socket connects is silently dropped, so the
+        # retained advert would never reach the broker. Re-publishing on every
+        # (re)connect also restores the advert after a broker restart wipes
+        # retained state.
+        self._retained_config: tuple[str, bytes] | None = None
 
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION1,
@@ -248,21 +256,31 @@ class MqttSink(MetadataSink):
         """
         assert isinstance(msg, ConfigMessage)
         topic = self._config_topic.format(prefix=self._prefix)
-        self._publish_retained(topic, msg.model_dump_json().encode("utf-8"))
+        payload = msg.model_dump_json().encode("utf-8")
+        # Cache for re-publish on (re)connect — see _on_connect.
+        self._retained_config = (topic, payload)
+        self._publish_retained(topic, payload)
 
     def close(self) -> None:
-        """Stop the MQTT loop and disconnect. Idempotent."""
+        """Disconnect then stop the MQTT loop. Idempotent.
+
+        ``disconnect()`` is issued *before* ``loop_stop()`` so the DISCONNECT
+        packet is handed to a still-running network loop and actually goes out
+        on the wire (or is cleanly abandoned against a dead broker) before the
+        loop thread is torn down. This mirrors
+        ``isi_gateway.mqtt_subscriber.MqttSubscriber.stop``.
+        """
         if self._closed:
             return
         self._closed = True
         try:
-            self._client.loop_stop()
-        except Exception:
-            logger.warning("MqttSink.close: loop_stop failed", exc_info=True)
-        try:
             self._client.disconnect()
         except Exception:
             logger.warning("MqttSink.close: disconnect failed", exc_info=True)
+        try:
+            self._client.loop_stop()
+        except Exception:
+            logger.warning("MqttSink.close: loop_stop failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -289,6 +307,12 @@ class MqttSink(MetadataSink):
     def _on_connect(self, client: mqtt.Client, userdata: object, flags: dict, rc: int) -> None:
         if rc == 0:
             logger.info("MqttSink: connected to %s:%s", self._host, self._port)
+            # Re-publish the retained config advert now that the socket is up.
+            # The startup publish_config() raced the async CONNACK and may have
+            # been dropped; this guarantees a late-joining gateway sees it.
+            if self._retained_config is not None:
+                topic, payload = self._retained_config
+                self._publish_retained(topic, payload)
         else:
             logger.warning(
                 "MqttSink: connection refused by %s:%s (rc=%s)",

@@ -270,6 +270,24 @@ def test_close_is_idempotent() -> None:
         mock_instance.disconnect.assert_called_once()
 
 
+def test_close_disconnects_before_loop_stop() -> None:
+    """close() must issue disconnect() BEFORE loop_stop() so the DISCONNECT
+    packet is handed to a still-running loop (mirrors the gateway's stop())."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883)
+        sink.close()
+
+        # Inspect the shared mock_calls ledger and assert ordering: the
+        # disconnect() call must appear before the loop_stop() call.
+        names = [c[0] for c in mock_instance.mock_calls]
+        assert "disconnect" in names and "loop_stop" in names
+        assert names.index("disconnect") < names.index("loop_stop"), names
+
+
 # ---------------------------------------------------------------------------
 # Diagnostics heartbeat topic
 # ---------------------------------------------------------------------------
@@ -403,6 +421,48 @@ def test_publish_config_retain_true_even_when_instance_retain_is_false() -> None
 
         call_args = mock_instance.publish.call_args
         assert call_args[1].get("retain") is True
+        sink.close()
+
+
+def test_config_advert_republished_on_connect() -> None:
+    """The retained config advert must be re-published from on_connect.
+
+    publish_config() at orchestrator startup races the async CONNACK; a QoS-0
+    publish issued before the socket connects is dropped. The sink caches the
+    advert and re-emits it when on_connect fires (rc=0), so a late-joining
+    gateway always sees it (and it survives a broker restart that wipes
+    retained state)."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/zone_a")
+        sink.publish_config(_make_config())
+        publishes_after_first = mock_instance.publish.call_count
+
+        # Simulate the broker connection completing (CONNACK rc=0).
+        sink._on_connect(mock_instance, None, {}, 0)
+
+        # A second retained publish to the config topic must have happened.
+        assert mock_instance.publish.call_count == publishes_after_first + 1
+        topic, *_ = mock_instance.publish.call_args[0]
+        assert topic == "isi/zone_a/config"
+        assert mock_instance.publish.call_args[1].get("retain") is True
+        sink.close()
+
+
+def test_on_connect_without_config_does_not_publish() -> None:
+    """on_connect must not publish anything if no config advert was cached."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883)
+        sink._on_connect(mock_instance, None, {}, 0)
+
+        assert mock_instance.publish.call_count == 0
         sink.close()
 
 

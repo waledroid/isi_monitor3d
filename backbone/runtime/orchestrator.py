@@ -261,9 +261,12 @@ class Orchestrator:
                 url_base=str(images_cfg.get("url_base", "file://")),
                 jpeg_quality=int(images_cfg.get("jpeg_quality", 85)),
             )
-            self._images_on: str = str(images_cfg.get("on", "enter"))
+            # ``on_event`` (not ``on``): PyYAML 1.1 parses a bare ``on`` key as
+            # the boolean True, which round-trips to a ``true:`` key and corrupts
+            # the config. The trigger value is one of "enter" / "leave" / "both".
+            self._images_on: str = str(images_cfg.get("on_event", "enter"))
             logger.info(
-                "orchestrator: snapshot-writer enabled → out_dir=%s, on=%s",
+                "orchestrator: snapshot-writer enabled → out_dir=%s, on_event=%s",
                 images_cfg["out_dir"],
                 self._images_on,
             )
