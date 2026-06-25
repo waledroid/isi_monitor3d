@@ -311,6 +311,12 @@ def phase_status(project_dir: Path) -> dict:
     t_extr = cfg.capture.extrinsic_target
     intrinsic_captured = bool(cams) and all(intr.get(c, 0) >= t_intr for c in cams)
     extrinsic_captured = bool(cams) and all(extr.get(c, 0) >= t_extr for c in cams)
+    # Floor anchor shots are required before the extrinsic solve (run_extrinsic
+    # raises without them). Solve-ready ⇒ pairs at target AND both floors present,
+    # so the board never offers a green "Solve now" that will fail downstream.
+    floor_done = bool(cams) and all(floors.get(c, False) for c in cams)
+    missing_floor = [c for c in cams if not floors.get(c, False)]
+    extrinsic_solve_ready = extrinsic_captured and floor_done
     return {
         "cameras": cams, "mode2": cfg.is_mode2(),
         "intrinsic_counts": intr, "extrinsic_counts": extr, "floor": floors,
@@ -320,5 +326,8 @@ def phase_status(project_dir: Path) -> dict:
         "installed": installed,
         "intrinsic_captured": intrinsic_captured,
         "extrinsic_captured": extrinsic_captured,
+        "extrinsic_floor_done": floor_done,
+        "extrinsic_missing_floor": missing_floor,
+        "extrinsic_solve_ready": extrinsic_solve_ready,
         "targets": {"intrinsic": t_intr, "extrinsic": t_extr},
     }

@@ -28,6 +28,11 @@
     <span id="cap-msg" class="msg"></span>
   </div>
   {% if phase == "extrinsic" %}
+  <div id="floor-prompt" class="floor-prompt" hidden>
+    <p class="floor-prompt-head">Captures complete — lay the ChArUco board flat on the floor
+      and capture one shot per camera (the world anchor for extrinsics).</p>
+    <p id="floor-prompt-done" class="msg ok" hidden>Floor shots ready — go to the board and Solve.</p>
+  </div>
   <div class="toolbar" id="floor-tools">
     <span class="msg">Floor anchor (one ChArUco-on-floor shot per camera, capture stopped):</span>
     {% for c in cameras %}

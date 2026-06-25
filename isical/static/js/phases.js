@@ -21,10 +21,16 @@ const PHASES = [
       const floors = Object.entries(s.floor || {}).filter(([, v]) => v).map(([c]) => c).join(",");
       return `${pairs || "no pairs"}${floors ? " · floor: " + floors : ""}`;
     },
+    // "captured" (blue Solve-now) requires BOTH pairs at target AND floor shots —
+    // run_extrinsic fails without floor anchors, so don't offer Solve until ready.
     state: (s) => s.extrinsic_done ? "done"
-      : s.extrinsic_captured ? "captured"
+      : s.extrinsic_solve_ready ? "captured"
+      : s.extrinsic_captured ? "needs_floor"
       : Object.values(s.extrinsic_counts || {}).some((n) => n > 0) ? "partial" : "todo",
-    extra: (s) => rmsLine(s.extrinsic_done ? s.rms : null) },
+    extra: (s) => s.extrinsic_done ? rmsLine(s.rms)
+      : (s.extrinsic_captured && !s.extrinsic_floor_done)
+        ? `Captures done · needs floor shots: ${(s.extrinsic_missing_floor || []).join(", ")}`
+        : "" },
   { key: "export", n: 3, title: "Export", capture: false,
     counts: (s) => s.extrinsic_done
       ? (s.installed ? "calibration.json · installed ✓" : "calibration.json ready") : "—",
@@ -48,12 +54,13 @@ async function render() {
     const st = ph.state(s);
     const locked = !prevDone && st !== "done";
     const glyph = locked ? "🔒" : (st === "done" || st === "captured") ? "✓"
-      : st === "partial" ? "◐" : "";
+      : (st === "partial" || st === "needs_floor") ? "◐" : "";
     const card = document.createElement("div");
     card.className = "phase-card" + (locked ? " locked" : "") +
       (st === "done" ? " done" : st === "captured" ? " captured"
-        : st === "partial" ? " partial" : "");
-    const hint = st === "captured" ? `<div class="counts solve-hint">captured ✓ — Solve now ↓</div>` : "";
+        : (st === "partial" || st === "needs_floor") ? " partial" : "");
+    const hint = st === "captured" ? `<div class="counts solve-hint">captured ✓ — Solve now ↓</div>`
+      : st === "needs_floor" ? `<div class="counts solve-hint">pairs done — capture floor shots first ↗</div>` : "";
     card.innerHTML =
       `<div class="phase-head"><span class="phase-num">${ph.n}</span>
          <span class="phase-title">${ph.title}</span>
@@ -83,6 +90,10 @@ async function render() {
     b.textContent = ph.key === "export" ? "Export"
       : st === "done" ? "Re-solve" : "Solve";
     if (locked) { b.disabled = true; b.title = "complete the previous phase first"; }
+    else if (st === "needs_floor") {
+      b.disabled = true;
+      b.title = "capture a ChArUco floor shot for each camera (the world anchor) before solving";
+    }
     b.onclick = async () => {
       const body = ph.key === "export" && installCb ? { install: installCb.checked } : {};
       try {

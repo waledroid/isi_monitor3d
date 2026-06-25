@@ -10,6 +10,7 @@ const restartBtn = document.getElementById("cap-restart");
 const camSelect = document.getElementById("cam-select");    // intrinsic only
 let statusTimer = null;
 const shownGallery = new Set();   // cams already swapped from live → gallery (one-shot)
+let floorPromptShown = false;     // extrinsic: prompt revealed once captures complete (one-shot)
 
 // ---- ingested-shot gallery (intrinsic only) ----
 function coverageSVG(shots) {
@@ -102,7 +103,52 @@ async function pollStatus() {
         showGallery(cam);
       }
     }
+    // Extrinsic: once EVERY camera reached the pair target, stop and prompt the
+    // operator for the floor-anchor shots (run_extrinsic needs them to solve).
+    if (phase === "extrinsic" && !floorPromptShown) {
+      const cams = Object.values(s.cameras || {});
+      const allDone = cams.length > 0 && cams.every((c) => c.count >= c.target);
+      if (allDone) {
+        floorPromptShown = true;
+        await stopCapture();
+        await revealFloorPrompt();
+      }
+    }
   } catch { /* studio busy */ }
+}
+
+// ---- floor-prompt state (extrinsic) ----
+async function refreshFloorState() {
+  // Mark each floor button ✓ from the on-disk floor booleans (phase_status);
+  // when both shots exist, show the "ready to Solve" confirmation.
+  const prompt = document.getElementById("floor-prompt");
+  if (!prompt) return;
+  let floors = {};
+  try {
+    const st = await getJSON(`/api/p/${project}/status`);
+    floors = st.floor || {};
+  } catch { return; }
+  document.querySelectorAll(".floor-btn").forEach((btn) => {
+    const cam = btn.dataset.cam;
+    const stEl = document.querySelector(`.floor-status[data-cam="${cam}"]`);
+    if (floors[cam] && stEl && !stEl.textContent.includes("corners")) {
+      stEl.textContent = "✓ captured";
+      stEl.className = "msg floor-status ok";
+    }
+  });
+  const cams = Object.keys(floors);
+  const allFloor = cams.length > 0 && cams.every((c) => floors[c]);
+  const doneEl = document.getElementById("floor-prompt-done");
+  if (doneEl) doneEl.hidden = !allFloor;
+}
+
+async function revealFloorPrompt() {
+  const prompt = document.getElementById("floor-prompt");
+  if (!prompt) return;
+  prompt.hidden = false;
+  await refreshFloorState();
+  const motionOk = !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  prompt.scrollIntoView({ behavior: motionOk ? "smooth" : "auto", block: "center" });
 }
 
 function running(on) {
@@ -166,8 +212,12 @@ document.querySelectorAll(".floor-btn").forEach((btn) => {
     try {
       const r = await sendJSON(`/api/p/${project}/floor/${cam}`, "POST", {});
       if (st) { st.textContent = `✓ ${r.corners} corners`; st.className = "msg floor-status ok"; }
+      await refreshFloorState();
     } catch (e) {
       if (st) { st.textContent = e.message; st.className = "msg floor-status bad"; }
     } finally { btn.disabled = false; }
   };
 });
+
+// On load (extrinsic), reflect any floor shots already on disk.
+if (phase === "extrinsic") refreshFloorState();

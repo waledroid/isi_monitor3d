@@ -104,6 +104,58 @@ def test_phase_status(tmp_path):
     assert st["intrinsic_done"] is False and st["extrinsic_done"] is False
 
 
+def _floor(pdir, cid):
+    (pdir / "floor").mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(pdir / "floor" / f"{cid}.jpg"), np.full((40, 60, 3), 100, np.uint8))
+
+
+def test_extrinsic_not_solve_ready_without_floor(tmp_path):
+    """Pairs at target but no floor shots ⇒ NOT solve-ready (would fail in run_extrinsic)."""
+    pdir = _proj(tmp_path)
+    t_extr = 20
+    for cid in ("cam_a", "cam_b"):
+        _jpgs(pdir / "extrinsic" / cid, t_extr)
+    st = runners.phase_status(pdir)
+    assert st["extrinsic_captured"] is True          # count semantics preserved
+    assert st["extrinsic_floor_done"] is False
+    assert st["extrinsic_solve_ready"] is False
+    assert set(st["extrinsic_missing_floor"]) == {"cam_a", "cam_b"}
+
+
+def test_extrinsic_needs_floor_lists_only_missing_cam(tmp_path):
+    pdir = _proj(tmp_path)
+    for cid in ("cam_a", "cam_b"):
+        _jpgs(pdir / "extrinsic" / cid, 20)
+    _floor(pdir, "cam_a")                            # only cam_a has a floor shot
+    st = runners.phase_status(pdir)
+    assert st["extrinsic_solve_ready"] is False
+    assert st["extrinsic_missing_floor"] == ["cam_b"]
+
+
+def test_extrinsic_solve_ready_with_pairs_and_floor(tmp_path):
+    pdir = _proj(tmp_path)
+    for cid in ("cam_a", "cam_b"):
+        _jpgs(pdir / "extrinsic" / cid, 20)
+        _floor(pdir, cid)
+    st = runners.phase_status(pdir)
+    assert st["extrinsic_captured"] is True
+    assert st["extrinsic_floor_done"] is True
+    assert st["extrinsic_solve_ready"] is True
+    assert st["extrinsic_missing_floor"] == []
+
+
+def test_extrinsic_not_solve_ready_below_pair_target(tmp_path):
+    """Floor shots present but pairs below target ⇒ still not solve-ready."""
+    pdir = _proj(tmp_path)
+    for cid in ("cam_a", "cam_b"):
+        _jpgs(pdir / "extrinsic" / cid, 5)           # below target
+        _floor(pdir, cid)
+    st = runners.phase_status(pdir)
+    assert st["extrinsic_captured"] is False
+    assert st["extrinsic_floor_done"] is True
+    assert st["extrinsic_solve_ready"] is False
+
+
 def test_calibration_summary(tmp_path):
     pdir = _proj(tmp_path)
     (pdir / "calibration.json").write_text(json.dumps({

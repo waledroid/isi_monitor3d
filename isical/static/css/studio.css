@@ -740,6 +740,30 @@ button:disabled:hover {
   color: #0f2a4a;
 }
 
+/* Extrinsic floor-anchor prompt (revealed once pair captures complete). */
+.floor-prompt {
+  margin: 10px 0 6px;
+  padding: 12px 14px;
+  border: 1px solid #bcd6f2;
+  border-left: 4px solid #1858a8;
+  border-radius: 8px;
+  background: #e8f1fc;
+  animation: floor-prompt-in 0.18s ease-out;
+}
+.floor-prompt-head {
+  margin: 0;
+  font-weight: 600;
+  color: #0f2a4a;
+}
+.floor-prompt #floor-prompt-done { margin: 6px 0 0; font-weight: 600; }
+@keyframes floor-prompt-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .floor-prompt { animation: none; }
+}
+
 .job-log {
   background: rgba(7, 8, 12, 0.85);
   backdrop-filter: blur(10px);
