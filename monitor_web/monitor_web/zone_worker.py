@@ -37,13 +37,17 @@ from .api.routes_zone_patches import load_patches, patch_pixel_box, patch_rect
 from .camera_hub import get_hub
 from .detection_overlay import (
     ZoneModelUnavailable,
+    display_fps,
     get_pose_detector,
     get_zone_detector,
     read_backbone,
     resolve_model,
 )
 
-# Fixed loop cadence — every zone runs every pass (zones are sequential; a
+# Default loop cadence when the UI "Zones FPS" preference is absent. The worker
+# paces its loop at the editable ``display_fps(cfg)`` value (Zones-FPS field in
+# the Settings ▸ Zones tab); this is just the fallback ``display_fps`` returns
+# when the key is unset. Every zone runs every pass (zones are sequential; a
 # per-zone cadence cap cannot reduce total load, it only defers one zone's work
 # to the next iteration while still occupying the same loop time).
 DEFAULT_DETECTION_FPS: float = 10.0
@@ -292,7 +296,7 @@ class ZoneDetectionWorker:
                 except Exception:
                     logger.warning("zone worker[%s]: detect pass failed", self.camera_id,
                                    exc_info=True)
-                self._stop.wait(1.0 / DEFAULT_DETECTION_FPS)
+                self._stop.wait(1.0 / max(1.0, float(display_fps(self._cfg))))
         finally:
             if stream is not None:
                 hub.release(stream)

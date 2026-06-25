@@ -114,5 +114,6 @@
   "latency_p50": "Latence p50",
   "reproj_label": "Reproj",
   "display_fps": "FPS détection (zones & superpositions)",
-  "camera_fps": "FPS caméra"
+  "camera_fps": "FPS caméra",
+  "zones_fps": "FPS zones"
 }

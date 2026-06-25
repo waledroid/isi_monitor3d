@@ -397,6 +397,15 @@
              ZONE panels), synced here from /api/zone-patches. The old metric
              "Zones (up to 6)" map-click editor was retired. -->
         <div class="settings-tab-content" id="tab-zones">
+          <!-- Zones FPS: the rate the background zone workers run object detection
+               (drives zone-patch video too). Editable; persisted to the UI-settings
+               display_fps key, read live per loop by the worker. -->
+          <section class="config-section">
+            <div class="config-general-fps">
+              <label for="zm-zones-fps" data-i18n="zones_fps">{{ t.zones_fps or 'Zones FPS' }}</label>
+              <input id="zm-zones-fps" type="number" min="1" max="30" step="1" class="zm-input" placeholder="10" />
+            </div>
+          </section>
           <!-- Camera zones (the red polygons drawn on a cam → ZONE panels). Synced
                here from /api/zone-patches; name + model + detect size + colour editable. -->
           <section class="config-section">

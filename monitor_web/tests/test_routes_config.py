@@ -375,6 +375,28 @@ def test_ui_settings_round_trips(tmp_path: Path) -> None:
         assert got["mp4_selected"] == "video/p/clip.mp4" and got["lang"] == "fr"
 
 
+def test_zones_fps_round_trips_via_ui_settings(tmp_path: Path) -> None:
+    """The Zones-FPS field (Zones settings tab) persists the same ``display_fps``
+    UI-settings key it always used — POST a value → GET reads it back. It moved
+    tabs (Detection → Zones) but the endpoint + key are unchanged, and the zone
+    worker reads it via ``display_fps(cfg)``."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({"cameras": {}}))
+    cfg = Settings(
+        backbone_config_path=backbone_yaml,
+        ui_settings_path=tmp_path / "ui.yaml",
+        udp_port=0, port=0,
+    )
+    app = create_app(cfg)
+    with TestClient(app) as client:
+        r = client.post("/api/ui-settings", json={"display_fps": 7})
+        assert r.status_code == 200 and r.json()["ok"] is True
+        assert client.get("/api/ui-settings").json()["display_fps"] == 7
+        # display_fps(cfg) reflects the saved value (zone worker reads this).
+        from monitor_web.detection_overlay import display_fps
+        assert display_fps(cfg) == 7.0
+
+
 # ---- S13.1: detection model — backend auto-selected from hardware ----
 
 import monitor_web.api.routes_config as routes_config  # noqa: E402

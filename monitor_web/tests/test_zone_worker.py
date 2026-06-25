@@ -237,6 +237,34 @@ def test_worker_detects_when_running():
     assert hub.released == 1                  # stream released on stop
 
 
+def test_loop_pace_reads_display_fps(monkeypatch):
+    """The detect loop paces itself at the EDITABLE Zones-FPS (display_fps(cfg)),
+    not a hardcoded constant. Patch display_fps → assert the post-detect
+    self._stop.wait() interval is 1/display_fps."""
+    import monitor_web.zone_worker as zw
+
+    monkeypatch.setattr(zw, "display_fps", lambda cfg: 5.0)   # → 0.2 s loop wait
+
+    patches = [_patch("z1", 0, 0, 100, 100)]
+    w, _hub, _factory = _worker(patches, [_det(bbox=(40.0, 40.0, 60.0, 60.0))])
+
+    waits: list[float] = []
+    real_wait = w._stop.wait
+
+    def spy_wait(timeout=None):
+        waits.append(timeout)
+        # Stop after we observe the post-detect pace wait so the test is quick.
+        if timeout is not None and abs(timeout - 0.2) < 1e-6:
+            w._stop.set()
+        return real_wait(0)
+
+    monkeypatch.setattr(w._stop, "wait", spy_wait)
+    w._run()
+
+    assert any(timeout is not None and abs(timeout - 0.2) < 1e-6 for timeout in waits), (
+        f"loop pace must be 1/display_fps = 0.2 s; observed waits: {waits}")
+
+
 # ---- cross-zone overlap resolution ------------------------------------------
 
 def test_overlap_resolved_to_deepest_zone():

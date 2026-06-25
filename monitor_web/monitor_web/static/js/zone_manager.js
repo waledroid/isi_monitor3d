@@ -359,9 +359,12 @@ function syncUiPref(patch) {
 
 // Wire the change → POST hooks once (the modal markup is static).
 function wireUiPrefSync() {
-  // NOTE: global Detection FPS (zm-general-fps) was removed — the zone worker
-  // runs at a fixed DEFAULT_DETECTION_FPS (10). The pose overlay uses the same floor.
+  // Zones FPS (Zones tab): the editable zone-worker / zone-patch rate. Persisted
+  // to the same display_fps UI-settings key; read live per loop by the worker.
+  // (Cam-view pose now inherits the Camera FPS, so it ignores this value.)
   const hooks = [
+    ["zm-zones-fps",
+      (e) => ({ display_fps: Math.max(1, Math.min(30, parseInt(e.value, 10) || 10)) })],
     ["zm-model-show-nodes", (e) => ({ show_nodes: !!e.checked })],
     ["zm-model-show-masks", (e) => ({ show_masks: !!e.checked })],
     ["zm-model-show-boxes", (e) => ({ show_boxes: !!e.checked })],
@@ -473,6 +476,9 @@ async function open() {
   } catch (err) {
     console.warn("zone_manager: failed to load config", err);
   }
+  // Zones FPS field (Zones tab, UI-settings display_fps). Default 10.
+  const zonesFpsEl = el("zm-zones-fps");
+  if (zonesFpsEl) zonesFpsEl.value = (uiSettings && uiSettings.display_fps) ?? 10;
   if (configData) {
     buildCameraInputs(configData.cameras || {});
     // Camera FPS field (Cameras tab, backbone.yaml capture_fps).

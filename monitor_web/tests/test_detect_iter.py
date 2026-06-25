@@ -4,9 +4,9 @@ Pins the STRICT rule: the cam view never runs a full-frame object detector —
 pose is the only model that runs on the full frame; object detections come
 exclusively from the zone-worker snapshot (empty when no zones).
 
-Also tests the pose carry-forward time gate: the pose model must run at most
-``display_fps`` times/second while video frames are yielded at the (higher)
-source rate (Camera FPS).
+Also pins that the pose model INHERITS the Camera FPS: it runs on EVERY cam-view
+frame (the frames already arrive at the source ``capture_fps`` = Camera FPS), and
+is independent of the zones-only ``display_fps`` ("Zones FPS") preference.
 """
 
 from __future__ import annotations
@@ -104,12 +104,12 @@ def test_stop_releases_pose_ref_in_suspended_generator(monkeypatch) -> None:
     gen.close()
 
 
-# ---- pose carry-forward time gate ----
+# ---- pose inherits the Camera FPS (runs every cam-view frame) ----
 
 
-def _patch_for_carry_forward(monkeypatch, pose_call_log: list) -> None:
-    """Stubs for the carry-forward tests. Records each call to the pose detector
-    factory so we can assert how many times it ran the (expensive) inference."""
+def _patch_for_pose_rate(monkeypatch, pose_call_log: list) -> None:
+    """Stubs for the pose-rate tests. Records each call to the pose detector
+    factory so we can assert it runs once per cam-view frame."""
     monkeypatch.setattr(routes_video, "distances_enabled", lambda cfg: False)
     monkeypatch.setattr(routes_video, "distance_line_style", lambda cfg: {})
     monkeypatch.setattr(routes_video, "occupancy_enabled", lambda cfg: False)
@@ -119,78 +119,57 @@ def _patch_for_carry_forward(monkeypatch, pose_call_log: list) -> None:
     monkeypatch.setattr(routes_video, "person_pallet_max_m", lambda cfg: 6.0)
 
     def counting_pose(cfg):
-        pose_call_log.append(len(pose_call_log))   # append a counter, not monotonic
-        return object()   # new sentinel each call — distinct objects prove carry-forward
+        pose_call_log.append(len(pose_call_log))
+        return object()
 
     monkeypatch.setattr(routes_video, "get_pose_detector", counting_pose)
     monkeypatch.setattr(routes_video, "annotate_frame",
                         lambda image, detector, **kw: image)
 
 
-def test_pose_carry_forward_helper_runs_less_often_than_frames(monkeypatch) -> None:
-    """The time-gate: given N frames in rapid succession and display_fps < N,
-    get_pose_detector must be called fewer times than frames are yielded.
-
-    We drive the iterator with 10 frames and set display_fps to 2 so the gate
-    period is 0.5 s. Since all frames arrive within a few ms (no real sleep),
-    the gate should fire exactly ONCE (on the first frame), then carry the last
-    skeleton forward for the remaining 9 frames.
-    """
+def test_pose_runs_every_frame_inherits_camera_fps(monkeypatch) -> None:
+    """Pose inherits the Camera FPS: the cam-view frames arrive at the source
+    capture_fps, and pose runs on EVERY one of them — N frames ⇒ N pose calls.
+    No time-gate / carry-forward throttle on the cam view."""
     pose_calls: list = []
-    _patch_for_carry_forward(monkeypatch, pose_calls)
-    # display_fps(cfg) reads the UI-settings YAML; stub it to a fixed low value.
-    monkeypatch.setattr(routes_video, "display_fps", lambda cfg: 2.0)
+    _patch_for_pose_rate(monkeypatch, pose_calls)
 
     frames_in = [_frame() for _ in range(10)]
     frames_out = list(routes_video._detect_iter(
         iter(frames_in), Settings(), "cam_a",
         is_running=lambda: True, get_zone_dets=lambda: []))
 
-    # All 10 frames must be yielded (video stays fluid).
-    assert len(frames_out) == 10
-    # But the pose model ran only ONCE (the gate prevents re-inference within 0.5 s).
-    assert len(pose_calls) == 1, (
-        f"Expected 1 pose call for 10 rapid frames at 2 fps gate, got {len(pose_calls)}")
+    assert len(frames_out) == 10           # all frames yielded (fluid)
+    assert len(pose_calls) == 10, (
+        f"Expected 10 pose calls (one per frame), got {len(pose_calls)}")
 
 
-def test_pose_carry_forward_reruns_after_interval(monkeypatch) -> None:
-    """After the gate interval elapses, the pose model is called again.
-
-    We fake time.monotonic to advance manually so the test is instant (no real sleep).
-    Three frames: t=0 (first, fires), t=0.05 (within gate, carry), t=1.0 (due again, fires).
-    With display_fps=2 the gate period is 0.5 s, so frame 3 at t=1.0 should trigger again.
-    """
+def test_pose_rate_independent_of_display_fps(monkeypatch) -> None:
+    """The zones-only ``display_fps`` ("Zones FPS") must NOT throttle cam-view
+    pose: even with a tiny display_fps, pose still runs once per frame."""
     pose_calls: list = []
-    _patch_for_carry_forward(monkeypatch, pose_calls)
-    monkeypatch.setattr(routes_video, "display_fps", lambda cfg: 2.0)
-
-    # We intercept the `import time as _time` inside _detect_iter by patching the
-    # `time` module referenced in routes_video. The local `import time as _time`
-    # at function entry uses the module object already in sys.modules, so patching
-    # routes_video's module-level `time` (via monkeypatch.setattr on the module) is
-    # the right seam. However since _detect_iter does `import time as _time` inside
-    # itself, we need to patch `time.monotonic` in the global `time` module.
-    fake_times = [0.0, 0.05, 1.0]
-    call_idx = [0]
-
-    import time as real_time
-    original_monotonic = real_time.monotonic
-
-    def fake_monotonic():
-        if call_idx[0] < len(fake_times):
-            t = fake_times[call_idx[0]]
-            call_idx[0] += 1
-            return t
-        return original_monotonic()
-
-    monkeypatch.setattr(real_time, "monotonic", fake_monotonic)
+    _patch_for_pose_rate(monkeypatch, pose_calls)
+    # A low Zones-FPS must have zero effect on the cam-view pose rate.
+    monkeypatch.setattr(routes_video, "display_fps", lambda cfg: 1.0)
 
     frames_out = list(routes_video._detect_iter(
-        iter([_frame(), _frame(), _frame()]), Settings(), "cam_a",
+        iter([_frame() for _ in range(6)]), Settings(), "cam_a",
         is_running=lambda: True, get_zone_dets=lambda: []))
 
-    assert len(frames_out) == 3
-    # Frame 1 (t=0.0): gate fires (0 >= 0.0). Frame 2 (t=0.05): 0.05 < 0.5, carry.
-    # Frame 3 (t=1.0): 1.0 >= 0.5, gate fires again.
-    assert len(pose_calls) == 2, (
-        f"Expected 2 pose calls (frame1 + frame3), got {len(pose_calls)}")
+    assert len(frames_out) == 6
+    assert len(pose_calls) == 6, (
+        f"display_fps must not gate pose; expected 6 calls, got {len(pose_calls)}")
+
+
+def test_pose_runs_every_frame_for_cam_b(monkeypatch) -> None:
+    """Both cam views get per-frame pose — the detect path runs per visible
+    camera, so cam_b behaves identically to cam_a (no cam_a-only special case)."""
+    pose_calls: list = []
+    _patch_for_pose_rate(monkeypatch, pose_calls)
+
+    frames_out = list(routes_video._detect_iter(
+        iter([_frame() for _ in range(5)]), Settings(), "cam_b",
+        is_running=lambda: True, get_zone_dets=lambda: []))
+
+    assert len(frames_out) == 5
+    assert len(pose_calls) == 5
