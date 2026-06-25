@@ -52,4 +52,9 @@ metadata:
   - plugin: udp
     host: 127.0.0.1
     port: 9001
+  - plugin: mqtt
+    host: 127.0.0.1
+    port: 1883
+    prefix: isi/monitor3d
+    qos: 0
 zones_path: /home/aatanda/isi_monitor3d/config/zones.yaml

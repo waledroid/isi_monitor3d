@@ -103,3 +103,4 @@ dependencies:
   # in that extra would collide with conda's `opencv`.
   - pip:
     - --editable .
+    - paho-mqtt>=1.6,<3
