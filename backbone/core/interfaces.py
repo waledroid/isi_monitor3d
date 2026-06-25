@@ -117,6 +117,23 @@ class MetadataSink(ABC):
         """
         return None
 
+    def publish_diagnostics(self, msg: object) -> None:
+        """Publish a ``DiagnosticsMessage`` heartbeat (Phase 1 distributed).
+
+        Non-abstract default no-op: existing sink implementations and test
+        mocks that don't override this still satisfy the ABC, and the
+        five-seam count is unchanged.  Override in sink plugins.
+        """
+        return None
+
+    def publish_config(self, msg: object) -> None:
+        """Publish a retained ``ConfigMessage`` advertisement (Phase 1 distributed).
+
+        Non-abstract default no-op so existing implementations remain valid.
+        MQTT sinks override this to publish with ``retain=True``.
+        """
+        return None
+
     @abstractmethod
     def close(self) -> None: ...
 

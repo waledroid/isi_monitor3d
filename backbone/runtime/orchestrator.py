@@ -76,9 +76,11 @@ from backbone.homography import (
 )
 from backbone.ingestion import FrameBus, FrameSynchronizer
 from backbone.metadata import Publisher
+from backbone.metadata.schemas import CalibrationFactCheck, ConfigMessage, ZoneSpec
+from backbone.runtime.diagnostics_publisher import DiagnosticsPublisher
 from backbone.shared.camera_rig import CameraRig
 from backbone.shared.snapshot_writer import SnapshotWriter
-from backbone.shared.timestamps import LatencyMeter, elapsed_ms
+from backbone.shared.timestamps import LatencyMeter, elapsed_ms, now
 from backbone.shared.zone_transitions import ZoneTransitionDetector
 from backbone.shared.zones import ZoneRegistry
 from backbone.triangulation import (
@@ -105,6 +107,7 @@ class Orchestrator:
 
     def _build(self) -> None:
         cfg = self._config
+        self._node_id: str = cfg.get("node_id", "node")
         self._rig = CameraRig.from_file(cfg["calibration_path"])
 
         # Frame sources.
@@ -229,6 +232,7 @@ class Orchestrator:
 
         # Metadata.
         meta_cfg = cfg.get("metadata", {})
+        self._area: str = meta_cfg.get("area", "")
         sinks = []
         for sink_cfg in meta_cfg.get("sinks", []):
             sink_cfg = dict(sink_cfg)
@@ -267,9 +271,25 @@ class Orchestrator:
             self._snapshot_writer = None
             self._images_on = "enter"
 
-        # Diagnostics.
+        # Latency / frame counter.
         self._latency_total = LatencyMeter("capture_to_publish", window=2048)
         self._frame_count = 0
+
+        # DiagnosticsPublisher — optional, enabled by default.
+        diag_cfg = meta_cfg.get("diagnostics", {})
+        # Store the gate threshold so _build_config_message uses the SAME value as
+        # the heartbeat; both must agree on what "rms_ok" means.
+        self._rms_gate_px: float = float(diag_cfg.get("rms_gate_px", 2.0))
+        if diag_cfg.get("enabled", True):
+            self._diagnostics: DiagnosticsPublisher | None = DiagnosticsPublisher(
+                self,
+                self._publisher,
+                node_id=self._node_id,
+                interval_sec=float(diag_cfg.get("interval_sec", 5.0)),
+                rms_gate_px=self._rms_gate_px,
+            )
+        else:
+            self._diagnostics = None
 
         # Threads (created lazily in run).
         self._ingestion_threads: list[threading.Thread] = []
@@ -304,8 +324,51 @@ class Orchestrator:
         return self._frame_count
 
     @property
+    def zone_count(self) -> int:
+        """Number of zones loaded from ``zones_path``."""
+        return len(self._zones)
+
+    @property
+    def subscription_count(self) -> int:
+        """Number of active triangulation subscription rules."""
+        return len(self._subscriptions.rules)
+
+    @property
     def stop_event(self) -> threading.Event:
         return self._stop_event
+
+    def _build_config_message(self) -> ConfigMessage:
+        """Build a ``ConfigMessage`` from current orchestrator state for the retained MQTT advert."""
+        cam_views = self._rig.items()
+        if cam_views:
+            rms_ok = all(v.reprojection_rms_px <= self._rms_gate_px for v in cam_views.values())
+        else:
+            rms_ok = False
+        cal_mode = 1 if self._mode == "single_cam_homography" else 2
+        calibration = CalibrationFactCheck(loaded=True, rms_ok=rms_ok, mode=cal_mode)
+
+        zone_specs = []
+        for name in self._zones.names:
+            z = self._zones[name]
+            zone_specs.append(
+                ZoneSpec(
+                    name=z.name,
+                    kind=z.kind,
+                    type=z.type,
+                    severity=z.severity,
+                    polygon=z.polygon.tolist(),
+                )
+            )
+
+        return ConfigMessage(
+            ts=now(),
+            node_id=self._node_id,
+            area=self._area,
+            mode=self._mode,
+            cameras=list(self._rig.camera_ids),
+            zones=zone_specs,
+            calibration=calibration,
+        )
 
     # ---- run / shutdown ----
 
@@ -330,6 +393,14 @@ class Orchestrator:
         )
         self._pipeline_thread.start()
 
+        # Publish the retained config advertisement and start the heartbeat.
+        try:
+            self._publisher.publish_config(self._build_config_message())
+        except Exception:
+            logger.warning("orchestrator: failed to publish config advertisement", exc_info=True)
+        if self._diagnostics is not None:
+            self._diagnostics.start()
+
         # Wait for shutdown.
         self._stop_event.wait()
         self._shutdown()
@@ -352,6 +423,8 @@ class Orchestrator:
                 logger.warning("source %s failed to stop cleanly", src.camera_id, exc_info=True)
         if self._pipeline_thread is not None:
             self._pipeline_thread.join(timeout=5.0)
+        if self._diagnostics is not None:
+            self._diagnostics.stop()
         self._publisher.close()
         logger.info("orchestrator: shutdown complete; %d frames processed", self._frame_count)
 

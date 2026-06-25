@@ -8,7 +8,8 @@ Public API:
     * ``Publisher`` — fan-out from the pipeline to any number of sinks.
     * ``UdpSink`` — concrete UDP/JSON emitter plugin.
     * ``MqttSink`` — concrete MQTT emitter plugin.
-    * ``Track2DMessage`` / ``Track3DMessage`` / ``PassingEventMessage`` —
+    * ``Track2DMessage`` / ``Track3DMessage`` / ``PassingEventMessage`` /
+      ``ImageRefMessage`` / ``DiagnosticsMessage`` / ``ConfigMessage`` —
       the on-wire schema, also usable by module-side consumers for typed decode.
     * ``parse_envelope`` — discriminating parser for consumer code.
 """
@@ -19,17 +20,28 @@ from .mqtt_sink import MqttSink
 from .publisher import Publisher
 from .schemas import (
     SCHEMA_VERSION,
+    CalibrationFactCheck,
+    ConfigMessage,
+    DiagnosticsMessage,
+    ImageRefMessage,
+    LatencyStats,
     MessageType,
     PassingEventMessage,
     SchemaVersionError,
     Track2DMessage,
     Track3DMessage,
+    ZoneSpec,
     parse_envelope,
 )
 from .udp_sink import UdpSink
 
 __all__ = [
     "SCHEMA_VERSION",
+    "CalibrationFactCheck",
+    "ConfigMessage",
+    "DiagnosticsMessage",
+    "ImageRefMessage",
+    "LatencyStats",
     "MessageType",
     "MqttSink",
     "PassingEventMessage",
@@ -38,5 +50,6 @@ __all__ = [
     "Track2DMessage",
     "Track3DMessage",
     "UdpSink",
+    "ZoneSpec",
     "parse_envelope",
 ]

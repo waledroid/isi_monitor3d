@@ -9,7 +9,14 @@ import pytest
 
 from backbone.core.interfaces import metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
-from backbone.metadata.schemas import SCHEMA_VERSION, MessageType  # IMAGE_REF added in Phase C
+from backbone.metadata.schemas import (
+    SCHEMA_VERSION,
+    CalibrationFactCheck,
+    ConfigMessage,
+    DiagnosticsMessage,
+    LatencyStats,
+    MessageType,
+)
 from backbone.metadata.udp_sink import UdpSink
 from backbone.shared.zone_transitions import PassingEvent
 
@@ -147,5 +154,70 @@ def test_close_is_idempotent() -> None:
     sink = UdpSink(host="127.0.0.1", port=12345)
     sink.close()
     sink.close()   # must not raise
+
+
+# ---------------------------------------------------------------------------
+# publish_diagnostics
+# ---------------------------------------------------------------------------
+
+def _make_diag_msg() -> DiagnosticsMessage:
+    return DiagnosticsMessage(
+        ts=1_700_000_000.0,
+        node_id="zone_a",
+        mode="single_cam_homography",
+        sources={"cam_a": "alive"},
+        frame_count=10,
+        fps=5.0,
+        latency_ms=LatencyStats(p50=8.0, p95=15.0, p99=20.0, n=50),
+        zones=2,
+        subscriptions=0,
+        calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=1),
+    )
+
+
+def _make_config_msg() -> ConfigMessage:
+    return ConfigMessage(
+        ts=1_700_000_000.0,
+        node_id="zone_a",
+        area="Zone A",
+        mode="single_cam_homography",
+        cameras=["cam_a"],
+        zones=[],
+        calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=1),
+    )
+
+
+def test_publish_diagnostics_arrives_with_correct_type() -> None:
+    sock, port = _bind_receiver()
+    try:
+        sink = UdpSink(host="127.0.0.1", port=port)
+        sink.publish_diagnostics(_make_diag_msg())
+        payload, _ = sock.recvfrom(16384)
+        msg = json.loads(payload.decode("utf-8"))
+        assert msg["type"] == MessageType.DIAGNOSTICS.value
+        assert msg["schema_version"] == SCHEMA_VERSION
+        assert msg["node_id"] == "zone_a"
+        assert msg["fps"] == pytest.approx(5.0)
+        assert msg["latency_ms"]["p95"] == pytest.approx(15.0)
+        sink.close()
+    finally:
+        sock.close()
+
+
+def test_publish_config_arrives_with_correct_type() -> None:
+    sock, port = _bind_receiver()
+    try:
+        sink = UdpSink(host="127.0.0.1", port=port)
+        sink.publish_config(_make_config_msg())
+        payload, _ = sock.recvfrom(16384)
+        msg = json.loads(payload.decode("utf-8"))
+        assert msg["type"] == MessageType.CONFIG.value
+        assert msg["schema_version"] == SCHEMA_VERSION
+        assert msg["node_id"] == "zone_a"
+        assert msg["area"] == "Zone A"
+        assert msg["cameras"] == ["cam_a"]
+        sink.close()
+    finally:
+        sock.close()
 
 

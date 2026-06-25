@@ -33,7 +33,14 @@ import paho.mqtt.client as mqtt
 from backbone.core.interfaces import MetadataSink, metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
 
-from .schemas import ImageRefMessage, PassingEventMessage, Track2DMessage, Track3DMessage
+from .schemas import (
+    ConfigMessage,
+    DiagnosticsMessage,
+    ImageRefMessage,
+    PassingEventMessage,
+    Track2DMessage,
+    Track3DMessage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +72,8 @@ class MqttSink(MetadataSink):
         track3d_topic: str = "{prefix}/track3d/{cls}",
         event_topic: str = "{prefix}/zones/{zone}/passings",
         image_topic: str = "{prefix}/images/{zone}/{track_id}",
+        diag_topic: str = "{prefix}/diagnostics/heartbeat",
+        config_topic: str = "{prefix}/config",
     ) -> None:
         """Initialise and start the MQTT client background thread.
 
@@ -97,6 +106,13 @@ class MqttSink(MetadataSink):
                            ``{prefix}``, ``{zone}``, and ``{track_id}`` tokens.
                            Zone is sanitised the same way as ``event_topic``.
                            Default: ``"{prefix}/images/{zone}/{track_id}"``.
+            diag_topic:    Topic for ``DiagnosticsMessage`` heartbeats; supports
+                           ``{prefix}``.  Published at the instance qos/retain.
+                           Default: ``"{prefix}/diagnostics/heartbeat"``.
+            config_topic:  Topic for the retained ``ConfigMessage`` advertisement;
+                           supports ``{prefix}``.  Always published with
+                           ``retain=True`` regardless of the instance ``retain``
+                           flag.  Default: ``"{prefix}/config"``.
 
         Raises:
             ValueError: If ``port`` is outside (0, 65536) or ``qos`` is not
@@ -116,6 +132,8 @@ class MqttSink(MetadataSink):
         self._track3d_topic = track3d_topic
         self._event_topic = event_topic
         self._image_topic = image_topic
+        self._diag_topic = diag_topic
+        self._config_topic = config_topic
         self._closed = False
 
         self._client = mqtt.Client(
@@ -200,6 +218,23 @@ class MqttSink(MetadataSink):
         )
         self._publish(topic, msg.model_dump_json().encode("utf-8"))
 
+    def publish_diagnostics(self, msg: object) -> None:
+        """Publish a ``DiagnosticsMessage`` to the diagnostics heartbeat topic."""
+        assert isinstance(msg, DiagnosticsMessage)
+        topic = self._diag_topic.format(prefix=self._prefix)
+        self._publish(topic, msg.model_dump_json().encode("utf-8"))
+
+    def publish_config(self, msg: object) -> None:
+        """Publish a ``ConfigMessage`` with ``retain=True`` to the config topic.
+
+        The retain flag is forced unconditionally here (overriding the instance
+        ``retain`` setting) so that new subscribers always receive the most
+        recent node config immediately on connection.
+        """
+        assert isinstance(msg, ConfigMessage)
+        topic = self._config_topic.format(prefix=self._prefix)
+        self._publish_retained(topic, msg.model_dump_json().encode("utf-8"))
+
     def close(self) -> None:
         """Stop the MQTT loop and disconnect. Idempotent."""
         if self._closed:
@@ -225,6 +260,15 @@ class MqttSink(MetadataSink):
         except Exception:
             logger.warning(
                 "MqttSink._publish failed on topic %r", topic, exc_info=True
+            )
+
+    def _publish_retained(self, topic: str, payload: bytes) -> None:
+        """Publish with ``retain=True`` unconditionally (for config advertisements)."""
+        try:
+            self._client.publish(topic, payload, qos=self._qos, retain=True)
+        except Exception:
+            logger.warning(
+                "MqttSink._publish_retained failed on topic %r", topic, exc_info=True
             )
 
     def _on_connect(self, client: mqtt.Client, userdata: object, flags: dict, rc: int) -> None:

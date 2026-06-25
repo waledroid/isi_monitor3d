@@ -1,6 +1,6 @@
 """UDP/JSON envelopes — the **public contract** between the Backbone and modules.
 
-Four envelope types:
+Six envelope types:
 
 * ``Track2DMessage`` — always-on output from the homography layer (S4).
 * ``Track3DMessage`` — subscription-driven output from the triangulation
@@ -12,6 +12,13 @@ Four envelope types:
 * ``ImageRefMessage`` — image reference (Phase C). Emitted alongside a
   ``PassingEventMessage`` when snapshot-writing is enabled. Carries a URL
   (``file://`` or HTTP) to the saved JPEG; **never** raw image bytes.
+* ``DiagnosticsMessage`` — periodic heartbeat (Phase 1). Published by the
+  ``DiagnosticsPublisher`` every ``interval_sec`` seconds.  Carries node
+  identity, mode, source liveness, fps, latency stats, and a calibration
+  fact-check. Additive within v4.
+* ``ConfigMessage`` — retained config advertisement (Phase 1). Published once
+  at startup with ``retain=True`` on MQTT so new subscribers immediately know
+  the node's zones/cameras/mode.  Additive within v4.
 
 These are **on-wire** types, validated and serialized by pydantic. The
 in-process types (``backbone.core.types.Track2D``, ``.Track3D``) are
@@ -47,6 +54,8 @@ class MessageType(str, Enum):
     TRACK_3D = "track_3d"
     PASSING = "passing"
     IMAGE_REF = "image_ref"
+    DIAGNOSTICS = "diagnostics"
+    CONFIG = "config"
 
 
 class Track2DMessage(BaseModel):
@@ -176,20 +185,105 @@ class ImageRefMessage(BaseModel):
     url: str = Field(..., description="URL of the saved JPEG snapshot (no image bytes)")
 
 
+class LatencyStats(BaseModel):
+    """Latency percentiles from ``LatencyMeter.percentiles()`` (in milliseconds)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    p50: float = 0.0
+    p95: float = 0.0
+    p99: float = 0.0
+    n: int = 0
+
+
+class CalibrationFactCheck(BaseModel):
+    """Quick sanity-check on the loaded calibration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    loaded: bool
+    rms_ok: bool
+    mode: int = Field(..., ge=1, le=2)
+
+
+class DiagnosticsMessage(BaseModel):
+    """Periodic heartbeat emitted by ``DiagnosticsPublisher`` (Phase 1 distributed).
+
+    Carries node identity, operational mode, per-source liveness, frame-rate,
+    latency stats (p50/p95/p99 ms), zone/subscription counts, and a quick
+    calibration fact-check.  Additive within schema_version 4.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.DIAGNOSTICS] = MessageType.DIAGNOSTICS
+    ts: float = Field(..., description="wall-clock Unix seconds at emit time")
+    node_id: str
+    mode: str
+    sources: dict[str, str]   # camera_id → "alive" | "exited" | "crashed"
+    frame_count: int = Field(..., ge=0)
+    fps: float = Field(..., ge=0.0)
+    latency_ms: LatencyStats
+    zones: int = Field(..., ge=0)
+    subscriptions: int = Field(..., ge=0)
+    calibration: CalibrationFactCheck
+
+
+class ZoneSpec(BaseModel):
+    """Serialisable description of one zone for the config advertisement."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    kind: str
+    type: str
+    severity: str
+    polygon: list[list[float]]   # [[x, y], ...] in meters
+
+
+class ConfigMessage(BaseModel):
+    """Retained config advertisement published once at node startup (Phase 1 distributed).
+
+    Consumers that subscribe after startup still receive this immediately
+    via the broker's retained-message mechanism.  Additive within schema_version 4.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.CONFIG] = MessageType.CONFIG
+    ts: float = Field(..., description="wall-clock Unix seconds at emit time")
+    node_id: str
+    area: str
+    mode: str
+    cameras: list[str]
+    zones: list[ZoneSpec]
+    calibration: CalibrationFactCheck
+
+
 class SchemaVersionError(ValueError):
     """Raised when a received message has an incompatible schema_version."""
 
 
 def parse_envelope(
     data: dict,
-) -> Track2DMessage | Track3DMessage | PassingEventMessage | ImageRefMessage:
+) -> (
+    Track2DMessage
+    | Track3DMessage
+    | PassingEventMessage
+    | ImageRefMessage
+    | DiagnosticsMessage
+    | ConfigMessage
+):
     """Discriminate by ``type`` field and parse with the right model.
 
     Consumer-side helper — modules will use this to decode UDP payloads.
 
     Accepts both schema_version 3 (pre-Phase-B) and 4 (current). Version 3
-    messages never carry the ``PASSING`` type, so consumers can parse mixed
-    streams produced by older Backbone builds without rejecting old packets.
+    messages never carry the ``PASSING``, ``DIAGNOSTICS``, or ``CONFIG`` types,
+    so consumers can parse mixed streams produced by older Backbone builds
+    without rejecting old packets.
     Any version outside {3, 4} raises ``SchemaVersionError``.
     """
     version = int(data.get("schema_version", 0))
@@ -207,4 +301,8 @@ def parse_envelope(
         return PassingEventMessage.model_validate(data)
     if msg_type == MessageType.IMAGE_REF.value:
         return ImageRefMessage.model_validate(data)
+    if msg_type == MessageType.DIAGNOSTICS.value:
+        return DiagnosticsMessage.model_validate(data)
+    if msg_type == MessageType.CONFIG.value:
+        return ConfigMessage.model_validate(data)
     raise ValueError(f"unknown message type: {msg_type!r}")

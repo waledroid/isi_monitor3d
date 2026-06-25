@@ -1,3 +1,4 @@
+node_id: zone_a
 calibration_path: /home/aatanda/isi_monitor3d/config/mode1/calibration.json
 cameras:
   cam_a:
@@ -48,6 +49,11 @@ homography:
   stabilizer:
     min_frames_confirmed: 1
 metadata:
+  area: "Zone A"
+  diagnostics:
+    enabled: true
+    interval_sec: 5.0
+    rms_gate_px: 2.0
   sinks:
   - plugin: udp
     host: 127.0.0.1
@@ -55,7 +61,8 @@ metadata:
   - plugin: mqtt
     host: 127.0.0.1
     port: 1883
-    prefix: isi/monitor3d
+    # prefix is the per-node namespace: isi/<node_id>
+    prefix: isi/zone_a
     qos: 0
   images:
     enabled: false

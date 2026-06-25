@@ -77,6 +77,30 @@ class Publisher:
                     "sink %s failed on publish_image_ref", type(sink).__name__, exc_info=True
                 )
 
+    def publish_diagnostics(self, msg: object) -> None:
+        """Fan-out a ``DiagnosticsMessage`` to all sinks."""
+        if self._closed:
+            return
+        for sink in self._sinks:
+            try:
+                sink.publish_diagnostics(msg)
+            except Exception:
+                logger.warning(
+                    "sink %s failed on publish_diagnostics", type(sink).__name__, exc_info=True
+                )
+
+    def publish_config(self, msg: object) -> None:
+        """Fan-out a ``ConfigMessage`` to all sinks (MQTT sinks publish with retain=True)."""
+        if self._closed:
+            return
+        for sink in self._sinks:
+            try:
+                sink.publish_config(msg)
+            except Exception:
+                logger.warning(
+                    "sink %s failed on publish_config", type(sink).__name__, exc_info=True
+                )
+
     def close(self) -> None:
         if self._closed:
             return

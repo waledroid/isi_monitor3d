@@ -5,15 +5,32 @@ from __future__ import annotations
 from backbone.core.interfaces import MetadataSink
 from backbone.core.types import Track2D, Track3D
 from backbone.metadata.publisher import Publisher
+from backbone.metadata.schemas import (
+    CalibrationFactCheck,
+    ConfigMessage,
+    DiagnosticsMessage,
+    LatencyStats,
+)
 
 
 class _RecordingSink(MetadataSink):
-    def __init__(self, *, raise_on_2d: bool = False, raise_on_3d: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        raise_on_2d: bool = False,
+        raise_on_3d: bool = False,
+        raise_on_diag: bool = False,
+        raise_on_config: bool = False,
+    ) -> None:
         self.track_2d: list[Track2D] = []
         self.track_3d: list[Track3D] = []
+        self.diagnostics: list[object] = []
+        self.configs: list[object] = []
         self.closed = False
         self._raise_on_2d = raise_on_2d
         self._raise_on_3d = raise_on_3d
+        self._raise_on_diag = raise_on_diag
+        self._raise_on_config = raise_on_config
 
     def publish_track_2d(self, track: Track2D) -> None:
         if self._raise_on_2d:
@@ -24,6 +41,16 @@ class _RecordingSink(MetadataSink):
         if self._raise_on_3d:
             raise RuntimeError("simulated sink failure")
         self.track_3d.append(track)
+
+    def publish_diagnostics(self, msg: object) -> None:
+        if self._raise_on_diag:
+            raise RuntimeError("simulated diag failure")
+        self.diagnostics.append(msg)
+
+    def publish_config(self, msg: object) -> None:
+        if self._raise_on_config:
+            raise RuntimeError("simulated config failure")
+        self.configs.append(msg)
 
     def close(self) -> None:
         self.closed = True
@@ -99,3 +126,86 @@ def test_track_3d_fan_out() -> None:
     pub.publish_track_3d(_t3())
     assert len(a.track_3d) == 1
     assert len(b.track_3d) == 1
+
+
+# ---------------------------------------------------------------------------
+# publish_diagnostics fan-out
+# ---------------------------------------------------------------------------
+
+def _make_diag() -> DiagnosticsMessage:
+    return DiagnosticsMessage(
+        ts=1.0,
+        node_id="z",
+        mode="single_cam_homography",
+        sources={"cam_a": "alive"},
+        frame_count=0,
+        fps=0.0,
+        latency_ms=LatencyStats(),
+        zones=0,
+        subscriptions=0,
+        calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=1),
+    )
+
+
+def _make_cfg() -> ConfigMessage:
+    return ConfigMessage(
+        ts=1.0,
+        node_id="z",
+        area="Zone A",
+        mode="single_cam_homography",
+        cameras=["cam_a"],
+        zones=[],
+        calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=1),
+    )
+
+
+def test_publish_diagnostics_fan_out() -> None:
+    a, b = _RecordingSink(), _RecordingSink()
+    pub = Publisher([a, b])
+    pub.publish_diagnostics(_make_diag())
+    assert len(a.diagnostics) == 1
+    assert len(b.diagnostics) == 1
+
+
+def test_publish_diagnostics_raising_sink_swallowed() -> None:
+    bad = _RecordingSink(raise_on_diag=True)
+    good = _RecordingSink()
+    pub = Publisher([bad, good])
+    pub.publish_diagnostics(_make_diag())   # must not raise
+    assert len(good.diagnostics) == 1
+
+
+def test_publish_diagnostics_noop_after_close() -> None:
+    sink = _RecordingSink()
+    pub = Publisher([sink])
+    pub.close()
+    pub.publish_diagnostics(_make_diag())
+    assert sink.diagnostics == []
+
+
+# ---------------------------------------------------------------------------
+# publish_config fan-out
+# ---------------------------------------------------------------------------
+
+def test_publish_config_fan_out() -> None:
+    a, b = _RecordingSink(), _RecordingSink()
+    pub = Publisher([a, b])
+    pub.publish_config(_make_cfg())
+    assert len(a.configs) == 1
+    assert len(b.configs) == 1
+
+
+def test_publish_config_raising_sink_swallowed() -> None:
+    bad = _RecordingSink(raise_on_config=True)
+    good = _RecordingSink()
+    pub = Publisher([bad, good])
+    pub.publish_config(_make_cfg())   # must not raise
+    assert len(good.configs) == 1
+
+
+def test_publish_config_noop_after_close() -> None:
+    sink = _RecordingSink()
+    pub = Publisher([sink])
+    pub.close()
+    pub.publish_config(_make_cfg())
+    assert sink.configs == []

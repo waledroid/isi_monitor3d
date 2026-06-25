@@ -13,7 +13,14 @@ import pytest
 
 from backbone.core.interfaces import metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
-from backbone.metadata.schemas import SCHEMA_VERSION, MessageType
+from backbone.metadata.schemas import (
+    SCHEMA_VERSION,
+    CalibrationFactCheck,
+    ConfigMessage,
+    DiagnosticsMessage,
+    LatencyStats,
+    MessageType,
+)
 from backbone.shared.zone_transitions import PassingEvent
 
 # ---------------------------------------------------------------------------
@@ -261,3 +268,139 @@ def test_close_is_idempotent() -> None:
         # loop_stop and disconnect called exactly once (not twice)
         mock_instance.loop_stop.assert_called_once()
         mock_instance.disconnect.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics heartbeat topic
+# ---------------------------------------------------------------------------
+
+def _make_diag() -> DiagnosticsMessage:
+    return DiagnosticsMessage(
+        ts=1_700_000_000.0,
+        node_id="zone_a",
+        mode="single_cam_homography",
+        sources={"cam_a": "alive"},
+        frame_count=0,
+        fps=0.0,
+        latency_ms=LatencyStats(),
+        zones=0,
+        subscriptions=0,
+        calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=1),
+    )
+
+
+def _make_config() -> ConfigMessage:
+    return ConfigMessage(
+        ts=1_700_000_000.0,
+        node_id="zone_a",
+        area="Zone A",
+        mode="single_cam_homography",
+        cameras=["cam_a"],
+        zones=[],
+        calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=1),
+    )
+
+
+def test_publish_diagnostics_correct_topic_and_payload() -> None:
+    """publish_diagnostics calls client.publish with the heartbeat topic and valid JSON."""
+    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.metadata.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/zone_a")
+        sink.publish_diagnostics(_make_diag())
+
+        mock_instance.publish.assert_called_once()
+        call_args = mock_instance.publish.call_args
+        topic = call_args[0][0]
+        payload_bytes = call_args[0][1]
+
+        assert topic == "isi/zone_a/diagnostics/heartbeat"
+        msg = json.loads(payload_bytes.decode("utf-8"))
+        assert msg["type"] == MessageType.DIAGNOSTICS.value
+        assert msg["schema_version"] == SCHEMA_VERSION
+        assert msg["node_id"] == "zone_a"
+        sink.close()
+
+
+def test_publish_diagnostics_custom_topic() -> None:
+    """diag_topic parameter overrides the default heartbeat topic."""
+    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.metadata.mqtt_sink import MqttSink
+        sink = MqttSink(
+            host="127.0.0.1", port=1883, prefix="isi/z",
+            diag_topic="{prefix}/hb",
+        )
+        sink.publish_diagnostics(_make_diag())
+
+        call_args = mock_instance.publish.call_args
+        assert call_args[0][0] == "isi/z/hb"
+        sink.close()
+
+
+# ---------------------------------------------------------------------------
+# Config retained advertisement
+# ---------------------------------------------------------------------------
+
+def test_publish_config_uses_retain_true() -> None:
+    """publish_config MUST call client.publish with retain=True unconditionally."""
+    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.metadata.mqtt_sink import MqttSink
+        # Even when instance retain=False, config must be retained.
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/zone_a", retain=False)
+        sink.publish_config(_make_config())
+
+        mock_instance.publish.assert_called_once()
+        call_args = mock_instance.publish.call_args
+        topic = call_args[0][0]
+        payload_bytes = call_args[0][1]
+        kwargs = call_args[1]
+
+        assert topic == "isi/zone_a/config"
+        assert kwargs.get("retain") is True, "retain must be True for config messages"
+        msg = json.loads(payload_bytes.decode("utf-8"))
+        assert msg["type"] == MessageType.CONFIG.value
+        assert msg["node_id"] == "zone_a"
+        assert msg["area"] == "Zone A"
+        sink.close()
+
+
+def test_publish_config_custom_topic() -> None:
+    """config_topic parameter overrides the default config topic."""
+    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.metadata.mqtt_sink import MqttSink
+        sink = MqttSink(
+            host="127.0.0.1", port=1883, prefix="isi/z",
+            config_topic="{prefix}/node_config",
+        )
+        sink.publish_config(_make_config())
+
+        call_args = mock_instance.publish.call_args
+        assert call_args[0][0] == "isi/z/node_config"
+        assert call_args[1].get("retain") is True
+        sink.close()
+
+
+def test_publish_config_retain_true_even_when_instance_retain_is_false() -> None:
+    """Force-retain test: instance retain=False must not bleed into config publish."""
+    with patch("backbone.metadata.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.metadata.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, retain=False)
+        sink.publish_config(_make_config())
+
+        call_args = mock_instance.publish.call_args
+        assert call_args[1].get("retain") is True
+        sink.close()

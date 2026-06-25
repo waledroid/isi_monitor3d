@@ -21,7 +21,14 @@ import socket
 from backbone.core.interfaces import MetadataSink, metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
 
-from .schemas import ImageRefMessage, PassingEventMessage, Track2DMessage, Track3DMessage
+from .schemas import (
+    ConfigMessage,
+    DiagnosticsMessage,
+    ImageRefMessage,
+    PassingEventMessage,
+    Track2DMessage,
+    Track3DMessage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +68,14 @@ class UdpSink(MetadataSink):
         url: str,
     ) -> None:
         msg = ImageRefMessage(track_id=track_id, cls=cls, zone=zone, ts=ts, url=url)
+        self._send(msg.model_dump_json().encode("utf-8"))
+
+    def publish_diagnostics(self, msg: object) -> None:
+        assert isinstance(msg, DiagnosticsMessage)
+        self._send(msg.model_dump_json().encode("utf-8"))
+
+    def publish_config(self, msg: object) -> None:
+        assert isinstance(msg, ConfigMessage)
         self._send(msg.model_dump_json().encode("utf-8"))
 
     def close(self) -> None:

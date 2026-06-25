@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 import onnx
+import pytest
 import yaml
 from onnx import TensorProto, helper, numpy_helper
 
@@ -304,7 +305,6 @@ def test_orchestrator_rejects_config_without_sinks(tmp_path: Path) -> None:
                       "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"]},
         "metadata": {"sinks": []},
     }))
-    import pytest
 
     with pytest.raises(ValueError, match="at least one sink"):
         Orchestrator(cfg_path)
@@ -619,5 +619,148 @@ def test_mode1_pallet_occupancy_full_carton(tmp_path: Path) -> None:
                     pallet_state = (t.occupancy_state, t.occupancy_content)
         assert pallet_state == ("full", "carton"), pallet_state
         orch.publisher.close()
+    finally:
+        sock.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: DiagnosticsPublisher wiring in Orchestrator
+# ---------------------------------------------------------------------------
+
+def _write_config_with_diag(
+    tmp_path: Path,
+    *,
+    calibration_path: Path,
+    onnx_path: Path,
+    udp_port: int,
+    diag_enabled: bool = True,
+) -> Path:
+    """Write a backbone.yaml with optional diagnostics config."""
+    diag_block: dict = {"enabled": diag_enabled}
+    if diag_enabled:
+        diag_block.update({"interval_sec": 60.0, "rms_gate_px": 2.0})
+    config = {
+        "node_id": "test_node",
+        "calibration_path": str(calibration_path),
+        "cameras": {
+            "cam_a": {"source": {"name": "replay", "frames": []}},
+            "cam_b": {"source": {"name": "replay", "frames": []}},
+        },
+        "ingestion": {
+            "frame_sync": {"max_skew_ms": 33.0, "max_age_ms": 1000.0, "buffer_size": 8},
+            "frame_bus": {"default_maxsize": 8},
+        },
+        "detection": {
+            "plugin": "yolo_onnx",
+            "onnx_path": str(onnx_path),
+            "class_names": CLASS_NAMES,
+            "providers": ["CPUExecutionProvider"],
+            "confidence_threshold": 0.25,
+        },
+        "homography": {
+            "tracker": {"plugin": "bytetrack"},
+            "track_config": {"min_hits_to_confirm": 1, "max_lost_frames": 30},
+        },
+        "metadata": {
+            "area": "Test Zone",
+            "diagnostics": diag_block,
+            "sinks": [{"plugin": "udp", "host": "127.0.0.1", "port": udp_port}],
+        },
+    }
+    path = tmp_path / "backbone_diag.yaml"
+    path.write_text(yaml.safe_dump(config))
+    return path
+
+
+def test_orchestrator_diagnostics_publisher_created_when_enabled(tmp_path: Path) -> None:
+    """When metadata.diagnostics.enabled is true, _diagnostics is not None."""
+    cal_path = _write_calibration(tmp_path)
+    onnx_path = _write_stub_onnx(tmp_path)
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = _write_config_with_diag(
+            tmp_path, calibration_path=cal_path, onnx_path=onnx_path,
+            udp_port=port, diag_enabled=True,
+        )
+        orch = Orchestrator(cfg_path)
+        assert orch._diagnostics is not None
+        assert orch._diagnostics._node_id == "test_node"
+        assert orch._diagnostics._interval_sec == pytest.approx(60.0)
+        orch.publisher.close()
+    finally:
+        sock.close()
+
+
+def test_orchestrator_diagnostics_publisher_none_when_disabled(tmp_path: Path) -> None:
+    """When metadata.diagnostics.enabled is false, _diagnostics is None."""
+    cal_path = _write_calibration(tmp_path)
+    onnx_path = _write_stub_onnx(tmp_path)
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = _write_config_with_diag(
+            tmp_path, calibration_path=cal_path, onnx_path=onnx_path,
+            udp_port=port, diag_enabled=False,
+        )
+        orch = Orchestrator(cfg_path)
+        assert orch._diagnostics is None
+        orch.publisher.close()
+    finally:
+        sock.close()
+
+
+def test_orchestrator_zone_count_and_subscription_count(tmp_path: Path) -> None:
+    """zone_count and subscription_count properties reflect loaded config."""
+    cal_path = _write_calibration(tmp_path)
+    onnx_path = _write_stub_onnx(tmp_path)
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = _write_config(
+            tmp_path, calibration_path=cal_path, onnx_path=onnx_path, udp_port=port,
+        )
+        orch = Orchestrator(cfg_path)
+        # No zones_path or subscriptions_path in the default _write_config → counts are 0.
+        assert orch.zone_count == 0
+        assert orch.subscription_count == 0
+        orch.publisher.close()
+    finally:
+        sock.close()
+
+
+def test_orchestrator_shutdown_stops_diagnostics_before_publisher_close(
+    tmp_path: Path,
+) -> None:
+    """_shutdown must call _diagnostics.stop() before publisher.close()."""
+    cal_path = _write_calibration(tmp_path)
+    onnx_path = _write_stub_onnx(tmp_path)
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = _write_config_with_diag(
+            tmp_path, calibration_path=cal_path, onnx_path=onnx_path,
+            udp_port=port, diag_enabled=True,
+        )
+        orch = Orchestrator(cfg_path)
+
+        stop_order: list[str] = []
+
+        # Patch diagnostics.stop and publisher.close to record call order.
+        original_diag_stop = orch._diagnostics.stop
+        original_pub_close = orch._publisher.close
+
+        def _diag_stop():
+            stop_order.append("diag_stop")
+            original_diag_stop()
+
+        def _pub_close():
+            stop_order.append("pub_close")
+            original_pub_close()
+
+        orch._diagnostics.stop = _diag_stop
+        orch._publisher.close = _pub_close
+
+        orch._shutdown()
+
+        assert stop_order.index("diag_stop") < stop_order.index("pub_close"), (
+            f"diagnostics.stop must precede publisher.close; order was {stop_order}"
+        )
     finally:
         sock.close()

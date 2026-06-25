@@ -11,11 +11,16 @@ from pydantic import ValidationError
 from backbone.core.types import Track2D, Track3D
 from backbone.metadata.schemas import (
     SCHEMA_VERSION,
+    CalibrationFactCheck,
+    ConfigMessage,
+    DiagnosticsMessage,
+    LatencyStats,
     MessageType,
     PassingEventMessage,
     SchemaVersionError,
     Track2DMessage,
     Track3DMessage,
+    ZoneSpec,
     parse_envelope,
 )
 
@@ -251,3 +256,136 @@ def test_track3d_defaults_are_two_view() -> None:
     msg = Track3DMessage.from_track(_track_3d())   # no single_view set
     assert msg.single_view is False
     assert msg.confidence == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# DiagnosticsMessage
+# ---------------------------------------------------------------------------
+
+def _make_diagnostics() -> DiagnosticsMessage:
+    return DiagnosticsMessage(
+        ts=1_700_000_000.0,
+        node_id="zone_a",
+        mode="single_cam_homography",
+        sources={"cam_a": "alive"},
+        frame_count=42,
+        fps=12.3,
+        latency_ms=LatencyStats(p50=10.0, p95=18.0, p99=22.0, n=100),
+        zones=3,
+        subscriptions=0,
+        calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=1),
+    )
+
+
+def test_diagnostics_message_type_and_version() -> None:
+    msg = _make_diagnostics()
+    assert msg.type == MessageType.DIAGNOSTICS
+    assert msg.schema_version == SCHEMA_VERSION
+    assert msg.node_id == "zone_a"
+    assert msg.mode == "single_cam_homography"
+    assert msg.frame_count == 42
+    assert msg.fps == pytest.approx(12.3)
+    assert msg.zones == 3
+    assert msg.subscriptions == 0
+    assert msg.calibration.loaded is True
+    assert msg.calibration.rms_ok is True
+    assert msg.calibration.mode == 1
+    assert msg.latency_ms.p95 == pytest.approx(18.0)
+
+
+def test_diagnostics_message_json_roundtrip() -> None:
+    msg = _make_diagnostics()
+    data = json.loads(msg.model_dump_json())
+    back = DiagnosticsMessage.model_validate(data)
+    assert back == msg
+
+
+def test_parse_envelope_dispatches_diagnostics() -> None:
+    msg = _make_diagnostics()
+    data = json.loads(msg.model_dump_json())
+    parsed = parse_envelope(data)
+    assert isinstance(parsed, DiagnosticsMessage)
+    assert parsed.node_id == "zone_a"
+    assert parsed.fps == pytest.approx(12.3)
+
+
+def test_diagnostics_bad_version_raises() -> None:
+    data = json.loads(_make_diagnostics().model_dump_json())
+    data["schema_version"] = 0
+    with pytest.raises(SchemaVersionError):
+        parse_envelope(data)
+
+
+def test_diagnostics_extra_fields_rejected() -> None:
+    data = json.loads(_make_diagnostics().model_dump_json())
+    data["unexpected_field"] = "nope"
+    with pytest.raises(ValidationError):
+        DiagnosticsMessage.model_validate(data)
+
+
+# ---------------------------------------------------------------------------
+# ConfigMessage
+# ---------------------------------------------------------------------------
+
+def _make_config() -> ConfigMessage:
+    return ConfigMessage(
+        ts=1_700_000_000.0,
+        node_id="zone_a",
+        area="Zone A",
+        mode="single_cam_homography",
+        cameras=["cam_a"],
+        zones=[
+            ZoneSpec(
+                name="rack_b3",
+                kind="etagere",
+                type="storage",
+                severity="info",
+                polygon=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            )
+        ],
+        calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=1),
+    )
+
+
+def test_config_message_type_and_version() -> None:
+    msg = _make_config()
+    assert msg.type == MessageType.CONFIG
+    assert msg.schema_version == SCHEMA_VERSION
+    assert msg.node_id == "zone_a"
+    assert msg.area == "Zone A"
+    assert msg.mode == "single_cam_homography"
+    assert msg.cameras == ["cam_a"]
+    assert len(msg.zones) == 1
+    assert msg.zones[0].name == "rack_b3"
+    assert msg.zones[0].polygon == [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+    assert msg.calibration.mode == 1
+
+
+def test_config_message_json_roundtrip() -> None:
+    msg = _make_config()
+    data = json.loads(msg.model_dump_json())
+    back = ConfigMessage.model_validate(data)
+    assert back == msg
+
+
+def test_parse_envelope_dispatches_config() -> None:
+    msg = _make_config()
+    data = json.loads(msg.model_dump_json())
+    parsed = parse_envelope(data)
+    assert isinstance(parsed, ConfigMessage)
+    assert parsed.area == "Zone A"
+    assert len(parsed.zones) == 1
+
+
+def test_config_bad_version_raises() -> None:
+    data = json.loads(_make_config().model_dump_json())
+    data["schema_version"] = 99
+    with pytest.raises(SchemaVersionError):
+        parse_envelope(data)
+
+
+def test_config_extra_fields_rejected() -> None:
+    data = json.loads(_make_config().model_dump_json())
+    data["rogue_key"] = "surprise"
+    with pytest.raises(ValidationError):
+        ConfigMessage.model_validate(data)
