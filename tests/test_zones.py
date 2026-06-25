@@ -31,6 +31,61 @@ def test_zone_includes_boundary() -> None:
     assert z.contains((0.0, 0.0))
 
 
+def test_zone_contains_clearly_inside() -> None:
+    z = Zone("z", "danger", SQUARE)
+    assert z.contains((0.5, 0.5))
+    assert z.contains((1.9, 0.1))
+
+
+def test_zone_contains_clearly_outside() -> None:
+    z = Zone("z", "danger", SQUARE)
+    assert not z.contains((5.0, 5.0))
+    assert not z.contains((1.0, 2.5))
+
+
+def test_zone_contains_point_on_edge() -> None:
+    """A point lying on an edge (not a vertex) → True (cv2's 0 → >= 0)."""
+    z = Zone("z", "danger", SQUARE)
+    assert z.contains((1.0, 0.0))   # midpoint of bottom edge
+    assert z.contains((2.0, 1.0))   # midpoint of right edge
+
+
+def test_zone_contains_point_on_vertex() -> None:
+    """A point exactly on a vertex → True."""
+    z = Zone("z", "danger", SQUARE)
+    assert z.contains((0.0, 0.0))
+    assert z.contains((2.0, 2.0))
+
+
+def test_zone_contains_just_outside_near_edge() -> None:
+    """Just outside an edge → False."""
+    z = Zone("z", "danger", SQUARE)
+    assert not z.contains((-0.001, 1.0))
+    assert not z.contains((2.001, 1.0))
+
+
+def test_zone_contains_matches_cv2_random() -> None:
+    """The pure-numpy contains() must agree with cv2.pointPolygonTest >= 0."""
+    cv2 = pytest.importorskip("cv2")
+    rng = np.random.default_rng(20260626)
+    mismatches = 0
+    total = 0
+    for _ in range(200):
+        n_verts = int(rng.integers(3, 8))
+        poly = rng.uniform(-5.0, 5.0, size=(n_verts, 2))
+        z = Zone("z", "danger", poly)
+        contour = poly.astype(np.float32).reshape(-1, 1, 2)
+        for _ in range(40):
+            pt = (float(rng.uniform(-6.0, 6.0)), float(rng.uniform(-6.0, 6.0)))
+            ours = z.contains(pt)
+            theirs = cv2.pointPolygonTest(contour, pt, False) >= 0
+            total += 1
+            if ours != theirs:
+                mismatches += 1
+    # Allow the rare exact-boundary float tie; demand near-perfect agreement.
+    assert mismatches <= total * 0.001, f"{mismatches}/{total} mismatches vs cv2"
+
+
 def test_zone_rejects_too_few_vertices() -> None:
     with pytest.raises(ValueError, match="3 vertices"):
         Zone("bad", "danger", np.array([[0.0, 0.0], [1.0, 0.0]]))

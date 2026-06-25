@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import yaml
 
@@ -49,12 +48,42 @@ class Zone:
             )
 
     def contains(self, xy_m: tuple[float, float]) -> bool:
-        """Return True if ``xy_m`` lies inside (or on the boundary of) the polygon."""
-        # cv2.pointPolygonTest needs float32 contour points.
-        contour = self.polygon.astype(np.float32).reshape(-1, 1, 2)
-        # measureDist=False → +1 inside, 0 on edge, -1 outside.
-        signed = cv2.pointPolygonTest(contour, (float(xy_m[0]), float(xy_m[1])), False)
-        return signed >= 0
+        """Return True if ``xy_m`` lies inside (or on the boundary of) the polygon.
+
+        Pure-numpy replacement for ``cv2.pointPolygonTest(..., measureDist=False)``
+        which returns +1 inside / 0 on-edge / -1 outside; the old code returned
+        ``signed >= 0`` ⇒ inside OR on the boundary. We preserve that exactly: an
+        explicit on-edge/on-vertex check returns True, and a ray-casting (even-odd)
+        interior test handles the strictly-inside case. cv2 reads its contour as
+        float32, so we match that precision to agree on near-boundary float ties.
+        """
+        x, y = float(xy_m[0]), float(xy_m[1])
+        poly = self.polygon.astype(np.float32)
+        n = poly.shape[0]
+
+        # On-boundary check (edge or vertex) → inside, matching cv2's 0 → >= 0.
+        for i in range(n):
+            ax, ay = float(poly[i, 0]), float(poly[i, 1])
+            bx, by = float(poly[(i + 1) % n, 0]), float(poly[(i + 1) % n, 1])
+            # Collinear (cross == 0) AND within the segment's bounding box.
+            cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax)
+            if cross == 0.0:
+                if (
+                    min(ax, bx) <= x <= max(ax, bx)
+                    and min(ay, by) <= y <= max(ay, by)
+                ):
+                    return True
+
+        # Ray casting (even-odd) for the strict interior.
+        inside = False
+        for i in range(n):
+            ax, ay = float(poly[i, 0]), float(poly[i, 1])
+            bx, by = float(poly[(i + 1) % n, 0]), float(poly[(i + 1) % n, 1])
+            if (ay > y) != (by > y):
+                x_cross = (bx - ax) * (y - ay) / (by - ay) + ax
+                if x < x_cross:
+                    inside = not inside
+        return inside
 
 
 class ZoneRegistry:
