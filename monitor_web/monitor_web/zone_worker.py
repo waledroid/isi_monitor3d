@@ -37,11 +37,16 @@ from .api.routes_zone_patches import load_patches, patch_pixel_box, patch_rect
 from .camera_hub import get_hub
 from .detection_overlay import (
     ZoneModelUnavailable,
-    display_fps,
     get_pose_detector,
     get_zone_detector,
     read_backbone,
+    resolve_model,
 )
+
+# Fixed loop cadence — every zone runs every pass (zones are sequential; a
+# per-zone cadence cap cannot reduce total load, it only defers one zone's work
+# to the next iteration while still occupying the same loop time).
+DEFAULT_DETECTION_FPS: float = 10.0
 
 logger = logging.getLogger(__name__)
 
@@ -179,12 +184,8 @@ class ZoneDetectionWorker:
         self._reload = threading.Event()
         self._thread: threading.Thread | None = None
         # Per-zone isolation state (worker-thread only — no locking needed):
-        # circuit breaker {zone_id: (blocked_until_monotonic, reason)}, and the
-        # per-zone cadence budget {zone_id: next_due_monotonic} + the last good
-        # detections carried forward while a budgeted zone is not yet due.
+        # circuit breaker {zone_id: (blocked_until_monotonic, reason)}.
         self._zone_breaker: dict[str, tuple[float, str]] = {}
-        self._zone_next_due: dict[str, float] = {}
-        self._zone_last_dets: dict[str, list] = {}
 
     # ---- lifecycle ----
 
@@ -211,8 +212,6 @@ class ZoneDetectionWorker:
         if src_cfg is not None:
             self._src_cfg = dict(src_cfg)
         self._zone_breaker.clear()
-        self._zone_next_due.clear()
-        self._zone_last_dets.clear()
         self._reload.set()
 
     # ---- read API (any thread) ----
@@ -293,8 +292,7 @@ class ZoneDetectionWorker:
                 except Exception:
                     logger.warning("zone worker[%s]: detect pass failed", self.camera_id,
                                    exc_info=True)
-                # Throttle to the configured display fps.
-                self._stop.wait(1.0 / max(1.0, float(display_fps(self._cfg))))
+                self._stop.wait(1.0 / DEFAULT_DETECTION_FPS)
         finally:
             if stream is not None:
                 hub.release(stream)
@@ -306,9 +304,7 @@ class ZoneDetectionWorker:
 
         Per-zone isolation: a zone whose detector fails (VRAM admission refused,
         build error, inference error) is disabled for ZONE_RETRY_COOLDOWN_S and its
-        status published — the OTHER zones keep detecting. A zone with a ``max_fps``
-        budget only re-infers when due; in between, its last detections are carried
-        forward so the overlay stays stable without burning GPU."""
+        status published — the OTHER zones keep detecting."""
         ih, iw = frame.shape[:2]
         ts = time.time()
         now = time.monotonic()
@@ -317,40 +313,72 @@ class ZoneDetectionWorker:
         per_zone: dict[str, list] = {}
         statuses: dict[str, str] = {}
         polys: dict[str, np.ndarray | None] = {}
+        # Phase 1 — record polygons + the breaker decision for every zone, and
+        # GROUP the breaker-allowed zones by (resolved model, infer_size): zones
+        # sharing that key share one detector session (the same key
+        # `get_zone_detector` caches on), so they can be fed in ONE detect() call.
+        groups: dict[tuple, list[dict]] = {}
         for patch in patches:
             zone_id = str(patch.get("id"))
             polys[zone_id] = _scaled_polygon(patch, (iw, ih))
             blocked_until, reason = self._zone_breaker.get(zone_id, (0.0, ""))
             if now < blocked_until:
+                # Breaker open → excluded from the batch entirely (it isn't run).
                 per_zone[zone_id], statuses[zone_id] = [], reason
                 continue
-            max_fps = patch.get("max_fps")
-            if max_fps and now < self._zone_next_due.get(zone_id, 0.0):
-                # Not due yet — carry the last good result forward (no inference).
-                per_zone[zone_id] = list(self._zone_last_dets.get(zone_id, []))
-                statuses[zone_id] = "ok"
-                continue
-            try:
-                dets = self._detect_zone(frame, patch, iw, ih, global_conf)
-            except ZoneModelUnavailable as exc:
-                self._zone_breaker[zone_id] = (now + ZONE_RETRY_COOLDOWN_S, exc.reason)
-                per_zone[zone_id], statuses[zone_id] = [], exc.reason
-                logger.warning("zone worker[%s]: zone %s disabled for %.0fs (%s): %s",
-                               self.camera_id, zone_id, ZONE_RETRY_COOLDOWN_S,
-                               exc.reason, exc)
-                continue
-            except Exception:
-                self._zone_breaker[zone_id] = (now + ZONE_RETRY_COOLDOWN_S, "error")
-                per_zone[zone_id], statuses[zone_id] = [], "error"
-                logger.warning("zone worker[%s]: zone %s failed — disabled for %.0fs",
-                               self.camera_id, zone_id, ZONE_RETRY_COOLDOWN_S,
-                               exc_info=True)
-                continue
-            self._zone_breaker.pop(zone_id, None)
-            if max_fps:
-                self._zone_next_due[zone_id] = now + 1.0 / max(0.1, float(max_fps))
-            self._zone_last_dets[zone_id] = dets
-            per_zone[zone_id], statuses[zone_id] = dets, "ok"
+            model = patch.get("model")
+            resolved_model = resolve_model(model, self._cfg) if model else None
+            infer_size = int(patch.get("infer_size") or 320)
+            # Group by the RESOLVED model when it resolves (same key
+            # get_zone_detector caches its session on), else by the raw model
+            # string — so two distinct-but-unresolvable models don't collapse
+            # into one group (which would let one bad model fail its neighbours).
+            model_key = (str(resolved_model) if resolved_model
+                         else (str(model) if model else "__global__"))
+            key = (model_key, infer_size)
+            groups.setdefault(key, []).append(patch)
+
+        # Phase 2 — resolve the detector once per group, then batch (dynamic-batch
+        # model + >1 zone) or run per-zone. A batched failure degrades to the
+        # per-zone path so the per-zone circuit breaker still pinpoints the culprit.
+        for key, group in groups.items():
+            # Single-zone groups can't be batched → straight to the per-zone path
+            # (which resolves the detector itself and owns the breaker). This also
+            # keeps the per-zone path's exact resolve-once behaviour for that zone.
+            if len(group) > 1:
+                try:
+                    detector = self._detector_factory(group[0].get("model"),
+                                                      self._cfg, key[1])
+                except ZoneModelUnavailable as exc:
+                    # VRAM admission refused / build failure for a SHARED model+size
+                    # — trip the breaker for every zone in the group (they share the
+                    # one resolved model, so they'd all hit the same wall).
+                    for patch in group:
+                        zid = str(patch.get("id"))
+                        self._zone_breaker[zid] = (now + ZONE_RETRY_COOLDOWN_S,
+                                                   exc.reason)
+                        per_zone[zid], statuses[zid] = [], exc.reason
+                    logger.warning("zone worker[%s]: group %s disabled for %.0fs "
+                                   "(%s): %s", self.camera_id, key,
+                                   ZONE_RETRY_COOLDOWN_S, exc.reason, exc)
+                    continue
+                except Exception:
+                    # Any other resolution failure → degrade to per-zone, which
+                    # re-resolves each zone and isolates the culprit via the
+                    # breaker without touching its neighbours.
+                    self._detect_group_per_zone(frame, group, iw, ih, global_conf,
+                                                now, per_zone, statuses)
+                    continue
+                if getattr(detector, "supports_batch", False):
+                    ok = self._detect_group_batched(frame, group, detector, iw, ih,
+                                                    global_conf, now, per_zone,
+                                                    statuses)
+                    if ok:
+                        continue
+                    # batched detect() raised → fall through to per-zone so the
+                    # breaker can pinpoint the offending zone.
+            self._detect_group_per_zone(frame, group, iw, ih, global_conf,
+                                        now, per_zone, statuses)
         resolved = self._resolve_overlaps(per_zone, polys)
         # People (full-frame pose, foot points in source px) — best-effort.
         people: list = []
@@ -376,22 +404,23 @@ class ZoneDetectionWorker:
                           "zones": resolved, "status": statuses, "people": people,
                           "valid_s": valid_s}
 
-    def _detect_zone(self, frame, patch: dict, iw: int, ih: int,
-                     global_conf: float) -> list:
-        """One zone on one frame → full-frame-coordinate detections (person-free,
-        confidence-filtered, polygon-clipped). Detector build/inference failures
-        PROPAGATE — the caller (_detect_all_zones) owns the per-zone circuit
-        breaker, so one zone's failure never silently looks like 'no objects'."""
-        from backbone.core.types import Frame, FramePair
+    def _build_zone_crop(self, frame, patch: dict, iw: int, ih: int):
+        """ROI-crop + pre-resize one zone to its ``infer_size``. Returns
+        ``(fed, meta)`` where ``fed`` is the BGR image to feed the detector and
+        ``meta`` carries everything ``_postprocess_zone`` needs to remap detections
+        back to full-frame pixels. Returns ``None`` on a degenerate/zero-size crop
+        (the zone is then published as ``[]`` — excluded from any batch)."""
         rect = patch_rect(patch)
         if rect is None:
-            return []
+            return None
         box = patch_pixel_box(rect, patch.get("frame_wh"), (iw, ih))
         if box is None:
-            return []
+            return None
         x0, y0, x1, y1 = box
         crop = frame[y0:y1, x0:x1]
         ch, cw = crop.shape[:2]
+        if ch <= 0 or cw <= 0:
+            return None
         infer_size = int(patch.get("infer_size") or 320)
         fed = crop
         longest = max(ch, cw)
@@ -399,14 +428,21 @@ class ZoneDetectionWorker:
             s = infer_size / float(longest)
             fed = cv2.resize(crop, (max(1, round(cw * s)), max(1, round(ch * s))),
                              interpolation=cv2.INTER_AREA)
-        detector = self._detector_factory(patch.get("model"), self._cfg, infer_size)
         fh, fw = fed.shape[:2]
-        ts = time.time()
-        pair = FramePair(capture_ts=ts, frame_idx=0,
-                         frames={self.camera_id: Frame(camera_id=self.camera_id,
-                                                       capture_ts=ts, frame_idx=0,
-                                                       image=fed)})
-        dets = list(detector.detect(pair).get(self.camera_id, []))
+        meta = {"x0": x0, "y0": y0, "rect": rect, "cw": cw, "ch": ch,
+                "fw": fw, "fh": fh}
+        return fed, meta
+
+    def _postprocess_zone(self, raw_dets, patch: dict, meta: dict,
+                          iw: int, ih: int, global_conf: float) -> list:
+        """Filter + clip + remap one zone's raw detections (fed-image coords) to
+        full-frame pixels: per-zone confidence floor → drop persons → polygon clip
+        (in fed coords) → ``_remap_det``. Per-zone by construction, so a differing
+        conf/polygon within a batched group is still applied correctly."""
+        rect = meta["rect"]
+        x0, y0 = meta["x0"], meta["y0"]
+        cw, ch, fw, fh = meta["cw"], meta["ch"], meta["fw"], meta["fh"]
+        dets = list(raw_dets)
         # Per-zone confidence as a POST-FILTER (session runs at a low floor).
         conf = patch.get("confidence")
         eff_conf = float(conf) if conf is not None else global_conf
@@ -431,6 +467,100 @@ class ZoneDetectionWorker:
             ]
         rx, ry = cw / float(fw), ch / float(fh)
         return [_remap_det(d, x0, y0, rx, ry, iw, ih, ch, cw) for d in dets]
+
+    def _detect_zone(self, frame, patch: dict, iw: int, ih: int,
+                     global_conf: float) -> list:
+        """One zone on one frame → full-frame-coordinate detections (person-free,
+        confidence-filtered, polygon-clipped). Thin wrapper: build crop → resolve
+        detector → single-frame FramePair (keyed by camera_id) → detect →
+        postprocess. Detector build/inference failures PROPAGATE — the caller owns
+        the per-zone circuit breaker, so one zone's failure never silently looks
+        like 'no objects'. Byte-for-byte equivalent to the pre-batching path."""
+        from backbone.core.types import Frame, FramePair
+        built = self._build_zone_crop(frame, patch, iw, ih)
+        if built is None:
+            return []
+        fed, meta = built
+        infer_size = int(patch.get("infer_size") or 320)
+        detector = self._detector_factory(patch.get("model"), self._cfg, infer_size)
+        ts = time.time()
+        pair = FramePair(capture_ts=ts, frame_idx=0,
+                         frames={self.camera_id: Frame(camera_id=self.camera_id,
+                                                       capture_ts=ts, frame_idx=0,
+                                                       image=fed)})
+        raw = detector.detect(pair).get(self.camera_id, [])
+        return self._postprocess_zone(raw, patch, meta, iw, ih, global_conf)
+
+    def _detect_group_batched(self, frame, group: list[dict], detector,
+                              iw: int, ih: int, global_conf: float, now: float,
+                              per_zone: dict, statuses: dict) -> bool:
+        """Run a whole group in ONE ``detect()`` call, the FramePair keyed by
+        zone_id. Empty/degenerate crops are excluded from the batch (published
+        ``[]``, "ok"). On a detect() exception returns ``False`` so the caller
+        falls back to the per-zone path (which isolates the culprit via the
+        breaker); NEVER raises. On success: postprocess per zone, clear the
+        breaker, status "ok"."""
+        from backbone.core.types import Frame, FramePair
+        ts = time.time()
+        frames: dict[str, object] = {}
+        metas: dict[str, dict] = {}
+        for patch in group:
+            zid = str(patch.get("id"))
+            built = self._build_zone_crop(frame, patch, iw, ih)
+            if built is None:
+                # Degenerate crop: nothing to detect — exclude from the batch.
+                self._zone_breaker.pop(zid, None)
+                per_zone[zid], statuses[zid] = [], "ok"
+                continue
+            fed, meta = built
+            metas[zid] = meta
+            frames[zid] = Frame(camera_id=zid, capture_ts=ts, frame_idx=0, image=fed)
+        if not frames:
+            return True   # every crop was empty — handled, nothing to batch
+        pair = FramePair(capture_ts=ts, frame_idx=0, frames=frames)
+        try:
+            out = detector.detect(pair)
+        except Exception:
+            logger.warning("zone worker[%s]: batched detect failed for %d zone(s) — "
+                           "falling back per-zone", self.camera_id, len(frames),
+                           exc_info=True)
+            return False
+        for zid, meta in metas.items():
+            patch = next(p for p in group if str(p.get("id")) == zid)
+            raw = out.get(zid, [])   # missing key ⇒ no detections for that zone
+            per_zone[zid] = self._postprocess_zone(raw, patch, meta, iw, ih,
+                                                   global_conf)
+            statuses[zid] = "ok"
+            self._zone_breaker.pop(zid, None)
+        return True
+
+    def _detect_group_per_zone(self, frame, group: list[dict], iw: int, ih: int,
+                               global_conf: float, now: float,
+                               per_zone: dict, statuses: dict) -> None:
+        """Today's per-zone loop body — shared by the non-batchable path AND the
+        batched-failure fallback, so per-zone error isolation is preserved: a zone
+        whose build/inference fails trips its OWN breaker (no_vram/error) while the
+        others stay 'ok'."""
+        for patch in group:
+            zid = str(patch.get("id"))
+            try:
+                dets = self._detect_zone(frame, patch, iw, ih, global_conf)
+            except ZoneModelUnavailable as exc:
+                self._zone_breaker[zid] = (now + ZONE_RETRY_COOLDOWN_S, exc.reason)
+                per_zone[zid], statuses[zid] = [], exc.reason
+                logger.warning("zone worker[%s]: zone %s disabled for %.0fs (%s): %s",
+                               self.camera_id, zid, ZONE_RETRY_COOLDOWN_S,
+                               exc.reason, exc)
+                continue
+            except Exception:
+                self._zone_breaker[zid] = (now + ZONE_RETRY_COOLDOWN_S, "error")
+                per_zone[zid], statuses[zid] = [], "error"
+                logger.warning("zone worker[%s]: zone %s failed — disabled for %.0fs",
+                               self.camera_id, zid, ZONE_RETRY_COOLDOWN_S,
+                               exc_info=True)
+                continue
+            self._zone_breaker.pop(zid, None)
+            per_zone[zid], statuses[zid] = dets, "ok"
 
     @staticmethod
     def _resolve_overlaps(per_zone: dict[str, list],

@@ -154,8 +154,18 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
     the background :class:`~monitor_web.zone_worker.ZoneDetectionWorker`'s snapshot
     (``get_zone_dets`` closure: one coherent frame's worth, already person-free and
     cross-zone deduped at publish time) — naturally empty when the camera has no
-    zones. Pose re-fetched per frame (cached) so a model swap applies live."""
+    zones.
+
+    POSE CARRY-FORWARD: the pose model runs at most ``display_fps`` times/second
+    (the Detection FPS setting). Between pose inferences the last skeleton is
+    re-drawn on every incoming video frame (which arrives at Camera FPS, i.e. the
+    source rate). This keeps the video fluid while the GPU work is throttled.
+    Zone-worker detections and distance lines are re-drawn on every frame too
+    (cheap — the worker already ran the inference; we just draw its cached result)."""
+    import time as _time  # local import avoids shadowing outer `time` module ref
     pose = dist_view = dets = None
+    _last_pose = None          # carry-forward: last skeleton from the pose model
+    _pose_due = 0.0            # monotonic time when the next pose inference is due
     for image in frames:
         if is_running is not None and not is_running():
             # Backbone stopped → raw camera feed only. DROP the previous
@@ -163,12 +173,21 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
             # the pose engine (its CUDA session) and the dets' full-frame
             # masks after STOP, defeating reset_detector()'s memory release
             # for as long as the panel stays open.
-            pose = dist_view = dets = None
+            pose = dist_view = dets = _last_pose = None
+            _pose_due = 0.0
             yield image
             continue
         dist_view = _warp_camera(cfg, camera_id) if distances_enabled(cfg) else None
         dist_style = distance_line_style(cfg)
-        pose = get_pose_detector(cfg)
+        # Pose inference is throttled to Detection FPS; carry the last detector
+        # forward so the skeleton is re-drawn on every video frame (fluid).
+        now = _time.monotonic()
+        if now >= _pose_due:
+            pose = get_pose_detector(cfg)
+            _last_pose = pose
+            _pose_due = now + 1.0 / display_fps(cfg)
+        else:
+            pose = _last_pose
         dets = get_zone_dets() if get_zone_dets is not None else []
         yield annotate_frame(image, None, cam_id=camera_id, detections=dets,
                              show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
@@ -490,9 +509,12 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
                                    bus=getattr(state, "bus", None), mode2=mode2)
     elif detect:
         # Per-frame detector lookup (see _detect_iter) so model changes apply live.
+        # NO _cap_fps here: the source is already capped at capture_fps (Camera FPS)
+        # by the camera-hub. _detect_iter's internal time gate throttles the POSE
+        # MODEL to display_fps while yielding EVERY video frame (carry-forward).
         manager = getattr(state, "zone_manager", None)
         frames = _detect_iter(
-            _cap_fps(frames, display_fps(cfg)), cfg, camera_id,
+            frames, cfg, camera_id,
             is_running=is_running,
             get_zone_dets=(lambda: manager.camera_dets(camera_id)) if manager is not None else None,
         )

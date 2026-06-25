@@ -9,7 +9,7 @@ import { startDraw } from "/static/js/draw_mode.js";
 
 const MAX_PATCHES = 6;   // max zones the operator can create (drawn on CAM)
 
-let patches = [];   // [{id, name, camera, polygon:[[u,v]..], rect:[x0,y0,x1,y1], frame_wh:[W,H], model, infer_size}]
+let patches = [];   // [{id, name, camera, polygon:[[u,v]..], rect:[x0,y0,x1,y1], frame_wh:[W,H], model, infer_size, confidence, color}]
 let models = [];    // [{path, label}] trained detection models for the per-zone picker
 let panelStreamIds = [];   // /ws/video streams currently attached to the ZONE panels
 
@@ -189,7 +189,6 @@ function renderSettingsList() {
       `<select class="zm-model" title="Detection model (this zone)">${modelOptions(p.model || "")}</select>` +
       `<input class="zm-size" type="number" min="64" max="1280" step="32" value="${p.infer_size || 320}" title="Detect size (px)" />` +
       `<input class="zm-conf" type="number" min="0" max="1" step="0.05" value="${p.confidence ?? ""}" placeholder="conf" title="Confidence 0–1 (this zone) — blank = global" />` +
-      `<input class="zm-fps" type="number" min="0.1" max="30" step="0.5" value="${p.max_fps ?? ""}" placeholder="fps" title="Max detection FPS (this zone) — blank = global cap (10). Lower a heavy model's zone so it stops slowing the others." />` +
       `<input class="zm-color" type="color" value="${color}" title="Zone outline colour" />` +
       `<button type="button" class="glass-btn zm-iconbtn zm-delete" title="Delete this zone" aria-label="Delete zone">` +
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
@@ -207,11 +206,6 @@ function renderSettingsList() {
     row.querySelector(".zm-conf").addEventListener("change", (e) => {
       const v = parseFloat(e.target.value);
       p.confidence = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;   // blank = global
-      save();
-    });
-    row.querySelector(".zm-fps").addEventListener("change", (e) => {
-      const v = parseFloat(e.target.value);
-      p.max_fps = Number.isFinite(v) && v > 0 ? Math.max(0.1, Math.min(30, v)) : null;  // blank = global
       save();
     });
     row.querySelector(".zm-color").addEventListener("change", (e) => { p.color = e.target.value; save(); });

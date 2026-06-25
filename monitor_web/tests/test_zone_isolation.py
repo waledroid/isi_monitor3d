@@ -1,8 +1,7 @@
-"""Per-zone isolation guards — VRAM admission, circuit breaker, cadence budget.
+"""Per-zone isolation guards — VRAM admission, circuit breaker.
 
 One zone's failing/refused detector must never affect the other zones (no shared
-CUDA crash, no silent empty results), and a ``max_fps``-budgeted zone must not
-re-infer between due times (its last detections carry forward).
+CUDA crash, no silent empty results).
 """
 
 from __future__ import annotations
@@ -118,29 +117,6 @@ def test_set_patches_clears_breaker():
     assert w._zone_breaker
     w.set_patches(patches)                       # config save → fresh chance
     assert not w._zone_breaker
-
-
-# ---- per-zone cadence budget ---------------------------------------------------
-
-def test_max_fps_budget_carries_detections_forward():
-    """A budgeted zone infers once, then serves its last dets until due again;
-    an unbudgeted zone re-infers every pass."""
-    budgeted = CountingDetector([_det()])
-    free = CountingDetector([_det(bbox=(180.0, 20.0, 220.0, 60.0))])
-
-    def factory(model, cfg, size):
-        return budgeted if model == "/slow.onnx" else free
-
-    patches = [_patch("zslow", 0, 0, 100, 100, model="/slow.onnx", max_fps=0.5),
-               _patch("zfree", 150, 0, 300, 200)]
-    w = _worker(patches, factory)
-    w._detect_all_zones(FRAME, patches)
-    w._detect_all_zones(FRAME, patches)          # immediately again — zslow not due
-    assert budgeted.calls == 1
-    assert free.calls == 2
-    snap = w.snapshot()
-    assert len(snap["zones"]["zslow"]) == 1      # carried forward, not dropped
-    assert snap["status"]["zslow"] == "ok"
 
 
 # ---- snapshot freshness (anti-blink) --------------------------------------------

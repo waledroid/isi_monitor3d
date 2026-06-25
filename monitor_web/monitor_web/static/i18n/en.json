@@ -113,5 +113,6 @@
   "latency_p95": "Latency p95",
   "latency_p50": "Latency p50",
   "reproj_label": "Reproj",
-  "display_fps": "General FPS (display & zones)"
+  "display_fps": "Detection FPS (zones & overlays)",
+  "camera_fps": "Camera FPS"
 }

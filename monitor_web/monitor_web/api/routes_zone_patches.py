@@ -83,10 +83,8 @@ class PatchRect(BaseModel):
     infer_size: int = 320
     color: str | None = None    # outline colour on the cam overlay (hex); None = red
     confidence: float | None = None   # per-zone detection confidence; None = global
-    # Per-zone inference cadence budget (config-only; no Settings-UI field yet).
-    # A heavy model (e.g. RF-DETR) capped at 2-4 fps stops dragging the other
-    # zones below display_fps — in between, its last detections carry forward.
-    max_fps: float | None = None
+
+    model_config = {"extra": "ignore"}   # tolerate legacy max_fps keys in saved YAML
 
     @model_validator(mode="after")
     def _derive_and_clamp(self) -> PatchRect:
@@ -97,8 +95,6 @@ class PatchRect(BaseModel):
         if not self.rect or len(self.rect) != 4:
             raise ValueError("zone patch needs a rect or a polygon of >=3 points")
         self.infer_size = max(64, min(1280, int(self.infer_size)))
-        if self.max_fps is not None:
-            self.max_fps = max(0.1, min(30.0, float(self.max_fps)))
         return self
 
 

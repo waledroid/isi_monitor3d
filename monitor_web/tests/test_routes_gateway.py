@@ -243,3 +243,126 @@ def test_gateway_nodes_http_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert data["configured"] is True
     assert "403" in data["error"]
     assert data["nodes"] == []
+
+
+# ---------------------------------------------------------------------------
+# UI-settings resolution order
+# ---------------------------------------------------------------------------
+
+def _ui_settings_path_from_env() -> Path:
+    """Return the ui-settings path that the conftest autouse fixture installed."""
+    import os
+    return Path(os.environ["MONITOR_WEB_UI_SETTINGS_PATH"])
+
+
+def test_gateway_nodes_uses_ui_settings_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When ui-settings has gateway_url, /api/gateway/nodes uses it (not the env value)."""
+    import yaml as _yaml
+
+    # Write gateway_url into the ui-settings file BEFORE building the app so
+    # cfg.ui_settings_path (set by the conftest autouse fixture) already contains it.
+    ui_path = _ui_settings_path_from_env()
+    ui_path.write_text(_yaml.safe_dump({"gateway_url": "http://ui-gateway:8080"}))
+
+    captured: list = []
+
+    def _fake_urlopen(req, timeout=None):
+        captured.append(req.full_url)
+        return _FakeResponse(_GATEWAY_RESPONSE)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    # App configured with env gateway_url pointing to a different host.
+    app = _make_app(tmp_path, gateway_url="http://env-gateway:9999")
+
+    with TestClient(app) as client:
+        res = client.get("/api/gateway/nodes")
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["configured"] is True
+    # The URL actually hit must be the ui-settings one, not the env one.
+    assert len(captured) == 1
+    assert "ui-gateway:8080" in captured[0]
+    assert "env-gateway" not in captured[0]
+    assert data["gateway_url"] == "http://ui-gateway:8080"
+
+
+def test_gateway_nodes_falls_back_to_env_when_ui_settings_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When ui-settings has no gateway_url, the env/Settings value is used as fallback."""
+    import yaml as _yaml
+
+    # ui-settings exists but has no gateway_url key.
+    ui_path = _ui_settings_path_from_env()
+    ui_path.write_text(_yaml.safe_dump({"mp4_selected": "foo.mp4"}))
+
+    captured: list = []
+
+    def _fake_urlopen(req, timeout=None):
+        captured.append(req.full_url)
+        return _FakeResponse({"nodes": [], "count": 0})
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    app = _make_app(tmp_path, gateway_url="http://fallback-gateway:8080")
+
+    with TestClient(app) as client:
+        res = client.get("/api/gateway/nodes")
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["configured"] is True
+    assert len(captured) == 1
+    assert "fallback-gateway:8080" in captured[0]
+
+
+def test_gateway_nodes_ui_settings_token_used(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When ui-settings has gateway_token, it is sent as the Bearer header."""
+    import yaml as _yaml
+
+    ui_path = _ui_settings_path_from_env()
+    ui_path.write_text(_yaml.safe_dump({
+        "gateway_url": "http://ui-gateway:8080",
+        "gateway_token": "ui-secret",
+    }))
+
+    captured_reqs: list = []
+
+    def _fake_urlopen(req, timeout=None):
+        captured_reqs.append(req)
+        return _FakeResponse({"nodes": []})
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    app = _make_app(tmp_path)  # no env gateway_url / token
+
+    with TestClient(app) as client:
+        client.get("/api/gateway/nodes")
+
+    assert len(captured_reqs) == 1
+    assert captured_reqs[0].get_header("Authorization") == "Bearer ui-secret"
+
+
+# ---------------------------------------------------------------------------
+# ui-settings persistence: POST gateway_url then GET returns it
+# ---------------------------------------------------------------------------
+
+def test_ui_settings_persist_gateway_url(tmp_path: Path) -> None:
+    """POST gateway_url to /api/ui-settings then GET returns it."""
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        post_res = client.post(
+            "/api/ui-settings",
+            json={"gateway_url": "http://stored-gateway:8080", "gateway_token": "tok"},
+        )
+        assert post_res.status_code == 200
+
+        get_res = client.get("/api/ui-settings")
+        assert get_res.status_code == 200
+        data = get_res.json()
+        assert data.get("gateway_url") == "http://stored-gateway:8080"
+        assert data.get("gateway_token") == "tok"

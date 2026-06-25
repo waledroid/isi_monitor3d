@@ -174,8 +174,12 @@ function collectMqttSink() {
   };
 }
 
-function fillCommSection(nodeId, mqttSink) {
+function fillCommSection(nodeId, mqttSink, uiSettings) {
   const set = (id, v) => { const e = el(id); if (e != null) e.value = v ?? ""; };
+  // Gateway fields (ui-settings, top of the tab).
+  set("zm-comm-gateway-url", uiSettings?.gateway_url || "");
+  set("zm-comm-gateway-token", uiSettings?.gateway_token || "");
+  // Node identity + MQTT broker (backbone.yaml).
   set("zm-comm-node-id", nodeId || "");
   set("zm-comm-host", mqttSink?.host || "");
   set("zm-comm-port", mqttSink?.port ?? 1883);
@@ -188,6 +192,13 @@ function fillCommSection(nodeId, mqttSink) {
   // Reflect TLS state in the Mode dropdown (best-effort; operator can override).
   const modeSel = el("zm-comm-mode");
   if (modeSel) modeSel.value = mqttSink?.tls ? "cloud" : "onprem";
+}
+
+function collectGatewayFields() {
+  return {
+    gateway_url: el("zm-comm-gateway-url")?.value.trim() || "",
+    gateway_token: el("zm-comm-gateway-token")?.value || "",
+  };
 }
 
 function wireCommMode() {
@@ -219,6 +230,10 @@ function collectPayload() {
   // No `zones` key: the metric-zone editor is gone, so Save leaves zones.yaml
   // untouched (the backend treats an omitted `zones` as "no change").
   const payload = { cameras };
+  // Camera FPS — written to all cameras' source.capture_fps in backbone.yaml.
+  const camFpsRaw = parseInt(el("zm-camera-fps")?.value || "20", 10);
+  payload.camera_fps = Number.isFinite(camFpsRaw) && camFpsRaw > 0
+    ? Math.max(1, Math.min(30, camFpsRaw)) : 20;
   // Pose model only — object models live per zone; the display toggles +
   // distance-line styles auto-save on change (see wireUiPrefSync), so the Save
   // button no longer carries a `detection` block.
@@ -344,9 +359,9 @@ function syncUiPref(patch) {
 
 // Wire the change → POST hooks once (the modal markup is static).
 function wireUiPrefSync() {
+  // NOTE: global Detection FPS (zm-general-fps) was removed — the zone worker
+  // runs at a fixed DEFAULT_DETECTION_FPS (10). The pose overlay uses the same floor.
   const hooks = [
-    ["zm-general-fps",
-      (e) => ({ display_fps: Math.max(1, Math.min(30, parseInt(e.value, 10) || 10)) })],
     ["zm-model-show-nodes", (e) => ({ show_nodes: !!e.checked })],
     ["zm-model-show-masks", (e) => ({ show_masks: !!e.checked })],
     ["zm-model-show-boxes", (e) => ({ show_boxes: !!e.checked })],
@@ -385,7 +400,7 @@ function fillModelSection(det) {
   const set = (id, v) => { const e = el(id); if (e != null) e.value = v ?? ""; };
   selectModelOption("zm-model-pose-onnx", det.pose_onnx_path || "");
   set("zm-model-pose-conf", det.pose_confidence_threshold ?? 0.3);
-  set("zm-general-fps", det.display_fps ?? 10);   // Camera-tab general FPS cap
+  // NOTE: global Detection FPS removed — zones run at the fixed DEFAULT_DETECTION_FPS (10).
   const cbNodes = el("zm-model-show-nodes");
   if (cbNodes) cbNodes.checked = det.show_nodes !== false;   // default true if undefined
   const cbMasks = el("zm-model-show-masks");
@@ -445,19 +460,33 @@ async function open() {
   invalidateCalibrationCache();   // reload calibration status each time modal opens
   await loadDevices();   // populate the per-camera device dropdowns first
   await loadPoseOnnxFiles();   // populate the pose-model picker
+  // Fetch both config (backbone.yaml) and ui-settings in parallel.
+  let configData = null, uiSettings = null;
   try {
-    const res = await fetch("/api/config");
-    if (!res.ok) throw new Error(`status ${res.status}`);
-    const data = await res.json();
-    buildCameraInputs(data.cameras || {});
-    fillModelSection(data.detection);
-    buildLinkLines(data.link_lines || []);
-    fillCommSection(data.node_id, data.mqtt_sink);
+    const [configRes, uiRes] = await Promise.all([
+      fetch("/api/config"),
+      fetch("/api/ui-settings"),
+    ]);
+    if (!configRes.ok) throw new Error(`/api/config status ${configRes.status}`);
+    configData = await configRes.json();
+    uiSettings = uiRes.ok ? await uiRes.json() : null;
   } catch (err) {
-    buildCameraInputs({});
-    buildLinkLines([]);
-    fillCommSection("", null);
     console.warn("zone_manager: failed to load config", err);
+  }
+  if (configData) {
+    buildCameraInputs(configData.cameras || {});
+    // Camera FPS field (Cameras tab, backbone.yaml capture_fps).
+    const camFpsEl = el("zm-camera-fps");
+    if (camFpsEl) camFpsEl.value = configData.camera_fps ?? 20;
+    fillModelSection(configData.detection);
+    buildLinkLines(configData.link_lines || []);
+    fillCommSection(configData.node_id, configData.mqtt_sink, uiSettings);
+  } else {
+    buildCameraInputs({});
+    const camFpsEl = el("zm-camera-fps");
+    if (camFpsEl) camFpsEl.value = 20;
+    buildLinkLines([]);
+    fillCommSection("", null, uiSettings);
   }
   wireCommMode();
   await revealMp4IfUnlocked();
@@ -473,12 +502,22 @@ function close() {
 
 async function save() {
   const payload = collectPayload();
+  // Persist gateway fields to ui-settings (they are dashboard-side, not backbone.yaml).
+  const gatewayFields = collectGatewayFields();
   try {
-    const res = await fetch("/api/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    // Fire both writes; gateway fields go to ui-settings, everything else to /api/config.
+    const [res] = await Promise.all([
+      fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+      fetch("/api/ui-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(gatewayFields),
+      }),
+    ]);
     if (!res.ok) {
       const detail = await res.text();
       showToast(`${t("save_failed", "Save failed")}: ${detail}`, true);

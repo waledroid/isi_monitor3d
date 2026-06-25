@@ -260,13 +260,13 @@
            Populated by comms_nodes.js; hidden automatically when not configured. -->
       <section class="sidebar-section comms-nodes-section"
                :class="{ 'section-expanded': panel==='comms', 'section-collapsed': panel==='status' || panel==='logs' }">
-        <h2 class="sidebar-title">{{ t.warehouse_nodes or 'WAREHOUSE NODES' }}</h2>
+        <h2 class="sidebar-title">{{ t.communication or 'COMMUNICATION' }}</h2>
         <div id="comms-nodes-content" class="sidebar-content status-content">
           <!-- Filled by comms_nodes.js -->
         </div>
         <button class="glass-btn btn-icon sidebar-expand-btn"
                 @click="panel = panel==='comms' ? null : 'comms'"
-                :title="panel==='comms' ? 'Collapse' : 'Expand'" aria-label="Expand warehouse nodes">
+                :title="panel==='comms' ? 'Collapse' : 'Expand'" aria-label="Expand communication">
           <svg class="icon-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
           <svg class="icon-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
         </button>
@@ -332,12 +332,13 @@
           <section class="config-section">
             <h3 data-i18n="cameras_section">{{ t.cameras_section or 'Cameras' }}</h3>
             <div id="zm-cameras" class="config-cameras"></div>
-            <!-- Global display/inference FPS cap (auto-saves to /api/ui-settings).
-                 Caps the cam streams, the unified view, and the zone worker's
-                 tick; a per-zone fps (Settings ▸ Zones) can only go BELOW it. -->
+            <!-- Camera FPS: the source rate AND the cam-view video rate (saved to
+                 backbone.yaml source.capture_fps on Save). Both cam views run at
+                 this rate; pose overlay carry-forward uses the DEFAULT_DETECTION_FPS
+                 (10) from zone_worker — no global UI field. -->
             <div class="config-general-fps">
-              <label for="zm-general-fps" data-i18n="display_fps">{{ t.display_fps or 'General FPS (display & zones)' }}</label>
-              <input id="zm-general-fps" type="number" min="1" max="30" step="1" class="zm-input" placeholder="10" />
+              <label for="zm-camera-fps" data-i18n="camera_fps">{{ t.camera_fps or 'Camera FPS' }}</label>
+              <input id="zm-camera-fps" type="number" min="1" max="30" step="1" class="zm-input" placeholder="20" />
             </div>
           </section>
 
@@ -421,6 +422,20 @@
           <section class="config-section">
             <h3 data-i18n="communication_section">Communication</h3>
             <div class="config-model">
+              <!-- Dashboard → gateway (status panel) -->
+              <p class="config-subsection-label" style="grid-column:1/-1;margin:0 0 4px;font-size:.75rem;opacity:.65;">Dashboard → gateway (status panel)</p>
+
+              <label for="zm-comm-gateway-url" data-i18n="comm_gateway_url">Gateway URL</label>
+              <input id="zm-comm-gateway-url" type="text" class="zm-input" placeholder="http://gateway-host:8080" />
+
+              <label for="zm-comm-gateway-token" data-i18n="comm_gateway_token">Gateway token</label>
+              <input id="zm-comm-gateway-token" type="password" class="zm-input" placeholder="(optional)" />
+
+              <hr style="grid-column:1/-1;border:none;border-top:1px solid rgba(255,255,255,.12);margin:6px 0;" />
+
+              <!-- Node's own MQTT sink (backbone.yaml) -->
+              <p class="config-subsection-label" style="grid-column:1/-1;margin:0 0 4px;font-size:.75rem;opacity:.65;">Node → MQTT broker (backbone sink)</p>
+
               <!-- Mode preset — pure UI sugar; sets port/tls defaults -->
               <label for="zm-comm-mode" data-i18n="comm_mode">Mode</label>
               <select id="zm-comm-mode" class="zm-input">

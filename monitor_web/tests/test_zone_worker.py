@@ -69,6 +69,42 @@ class FakeDetector:
         return {cam: list(self._dets)}
 
 
+class FakeBatchDetector:
+    """Echoes one centred detection per frame key in the FramePair. Records the
+    number of detect() calls and the frame count of each call so tests can assert
+    batched (one call, N frames) vs per-zone (N calls, 1 frame each).
+
+    ``supports_batch`` is configurable. ``raise_on_pixel`` makes detect() raise
+    whenever ANY fed frame contains a pixel >= that value — a content marker that
+    fires in BOTH the batched call and the failing zone's per-zone fallback call
+    (which is keyed by camera_id, not zone_id), so it exercises breaker isolation."""
+
+    def __init__(self, *, supports_batch=True, raise_on_pixel=None):
+        self.supports_batch = supports_batch
+        self._raise_on_pixel = raise_on_pixel
+        self.calls = 0
+        self.frames_per_call: list[int] = []
+        self.keys_per_call: list[list[str]] = []
+
+    def detect(self, pair):
+        self.calls += 1
+        keys = list(pair.frames.keys())
+        self.frames_per_call.append(len(keys))
+        self.keys_per_call.append(keys)
+        if self._raise_on_pixel is not None and any(
+                int(pair.frames[k].image.max()) >= self._raise_on_pixel for k in keys):
+            raise RuntimeError("boom on poison pixel")
+        # Echo one det per key, centred in that key's fed image so it survives the
+        # polygon clip (crops here are square so the centre is well inside).
+        out = {}
+        for k in keys:
+            fr = pair.frames[k]
+            h, w = fr.image.shape[:2]
+            cx, cy = w / 2.0, h / 2.0
+            out[k] = [_det(bbox=(cx - 5, cy - 5, cx + 5, cy + 5))]
+        return out
+
+
 def _patch(zone_id, x0, y0, x1, y1, *, cam="cam_a", conf=None):
     """A zone patch whose polygon is its rect (drawn at the frame's own size,
     so no stored_wh rescale applies)."""
@@ -93,6 +129,40 @@ def _worker(patches, dets_by_call=None, *, frame=None, running=True):
     )
     w.set_patches(patches)
     return w, hub, detector
+
+
+def _batch_worker(patches, *, detectors_by_key=None, default_supports_batch=True,
+                  frame=None, running=True):
+    """A worker whose detector_factory returns ONE detector per (model, infer_size)
+    key — mirrors detection_overlay.get_zone_detector's shared-session cache. Tests
+    can pre-seed specific detectors per key via ``detectors_by_key``; any other key
+    gets a fresh FakeBatchDetector(supports_batch=default_supports_batch).
+
+    Returns (worker, hub, factory) where factory.made maps key→detector built."""
+    frame = frame if frame is not None else np.zeros((240, 320, 3), dtype=np.uint8)
+    hub = FakeHub(frame)
+    seed = dict(detectors_by_key or {})
+
+    class _Factory:
+        def __init__(self):
+            self.made: dict = {}
+
+        def __call__(self, model, cfg, size):
+            key = (model, int(size))
+            det = self.made.get(key)
+            if det is None:
+                det = seed.get(key) or FakeBatchDetector(
+                    supports_batch=default_supports_batch)
+                self.made[key] = det
+            return det
+
+    factory = _Factory()
+    w = ZoneDetectionWorker(
+        "cam_a", {"name": "rtsp", "url": "rtsp://x"}, _CfgStub(), lambda: running,
+        detector_factory=factory, hub_factory=lambda: hub,
+    )
+    w.set_patches(patches)
+    return w, hub, factory
 
 
 class _CfgStub:
@@ -202,6 +272,148 @@ def test_distinct_objects_kept_per_zone():
     }
     resolved = w._resolve_overlaps({"za": [d1], "zb": [d2]}, polys)
     assert len(resolved["za"]) == 1 and len(resolved["zb"]) == 1
+
+
+# ---- zone-crop batching ------------------------------------------------------
+
+def _frame():
+    return np.zeros((240, 320, 3), dtype=np.uint8)
+
+
+def test_batchable_same_model_zones_one_detect_call():
+    """Case 1: N batchable zones sharing (model, infer_size) → ONE detect() call
+    fed N frames, and each zone gets its own remapped detection."""
+    patches = [_patch(f"z{i}", 10 + 60 * i, 10, 60 + 60 * i, 80) for i in range(3)]
+    w, _hub, factory = _batch_worker(patches, default_supports_batch=True)
+    w._detect_all_zones(_frame(), patches)
+    det = factory.made[(None, 320)]
+    assert det.calls == 1, "batchable group must be a single detect() call"
+    assert det.frames_per_call == [3], "the one call must carry all 3 zone frames"
+    assert det.keys_per_call[0] == ["z0", "z1", "z2"], "keyed by zone_id"
+    snap = w.snapshot()
+    # every zone produced exactly one detection, remapped into its own crop
+    for i in range(3):
+        zid = f"z{i}"
+        assert len(snap["zones"][zid]) == 1
+        assert snap["status"][zid] == "ok"
+        bx = snap["zones"][zid][0].bbox_xyxy
+        # det is centred in its crop → its full-frame x must lie inside the rect
+        assert 10 + 60 * i <= (bx[0] + bx[2]) / 2.0 <= 60 + 60 * i
+
+
+def test_non_batchable_runs_per_zone():
+    """Case 2: supports_batch=False → N per-zone detect() calls, 1 frame each."""
+    patches = [_patch(f"z{i}", 10 + 60 * i, 10, 60 + 60 * i, 80) for i in range(3)]
+    w, _hub, factory = _batch_worker(patches, default_supports_batch=False)
+    w._detect_all_zones(_frame(), patches)
+    det = factory.made[(None, 320)]
+    assert det.calls == 3, "non-batchable → one detect() per zone"
+    assert det.frames_per_call == [1, 1, 1]
+    snap = w.snapshot()
+    assert all(snap["status"][f"z{i}"] == "ok" for i in range(3))
+
+
+def test_batched_raise_falls_back_per_zone_and_breaker_isolates():
+    """Case 3: a batched detect() that raises → per-zone fallback; the one broken
+    zone hits the breaker ('error') while the others stay 'ok' (isolation)."""
+    patches = [_patch("zok1", 0, 0, 60, 60),
+               _patch("zbad", 120, 0, 180, 60),
+               _patch("zok2", 240, 0, 300, 60)]
+    # Poison ONLY the zbad rect in the source frame; the detector raises when it
+    # sees a hot pixel. The batched call (carries zbad's crop) raises → per-zone
+    # fallback, where only zbad's own per-zone call raises → breaker isolates it.
+    frame = _frame()
+    frame[0:60, 120:180] = 255
+    det = FakeBatchDetector(supports_batch=True, raise_on_pixel=200)
+    w, _hub, _factory = _batch_worker(
+        patches, detectors_by_key={(None, 320): det})
+    w._detect_all_zones(frame, patches)
+    snap = w.snapshot()
+    assert snap["status"]["zbad"] == "error"
+    assert snap["status"]["zok1"] == "ok" and snap["status"]["zok2"] == "ok"
+    assert snap["zones"]["zok1"] and snap["zones"]["zok2"]
+    assert snap["zones"]["zbad"] == []
+    # breaker recorded for the culprit only
+    assert "zbad" in w._zone_breaker and "zok1" not in w._zone_breaker
+    # call shape: 1 batched (raised) + 3 per-zone fallback
+    assert det.calls == 4
+    assert det.frames_per_call[0] == 3 and det.frames_per_call[1:] == [1, 1, 1]
+
+
+def test_mixed_groups_behave_per_group():
+    """Case 4: a batchable multi-zone group + a non-batchable (RF-DETR-like) zone +
+    a single-zone batchable group each resolve independently."""
+    # group A: model=None, size 320, 2 batchable zones → batched
+    pa1 = _patch("a1", 0, 0, 60, 60)
+    pa2 = _patch("a2", 70, 0, 130, 60)
+    # group B: a different (resolvable) model, non-batchable → per-zone. Use an
+    # absolute existing file so resolve_model returns a DISTINCT group key.
+    rfdetr_path = __file__
+    pb = _patch("b1", 140, 0, 200, 60)
+    pb["model"] = rfdetr_path
+    # group C: model=None but a DIFFERENT infer_size → its own single-zone group
+    pc = _patch("c1", 210, 0, 270, 60)
+    pc["infer_size"] = 256
+    rfdetr = FakeBatchDetector(supports_batch=False)
+    w, _hub, factory = _batch_worker(
+        patches=[pa1, pa2, pb, pc],
+        detectors_by_key={(rfdetr_path, 320): rfdetr})
+    w._detect_all_zones(_frame(), [pa1, pa2, pb, pc])
+    a = factory.made[(None, 320)]
+    c = factory.made[(None, 256)]
+    assert a.calls == 1 and a.frames_per_call == [2]    # batched pair
+    assert rfdetr.calls == 1 and rfdetr.frames_per_call == [1]   # per-zone
+    assert c.calls == 1 and c.frames_per_call == [1]    # single-zone → per-zone
+    snap = w.snapshot()
+    assert all(snap["status"][z] == "ok" for z in ("a1", "a2", "b1", "c1"))
+
+
+def test_single_zone_batchable_group_uses_per_zone():
+    """Case 5: a batchable detector but only ONE zone in the group → per-zone path
+    (no point batching a single frame)."""
+    patches = [_patch("solo", 0, 0, 60, 60)]
+    w, _hub, factory = _batch_worker(patches, default_supports_batch=True)
+    w._detect_all_zones(_frame(), patches)
+    det = factory.made[(None, 320)]
+    assert det.calls == 1 and det.frames_per_call == [1]
+    assert w.snapshot()["status"]["solo"] == "ok"
+
+
+def test_breaker_blocked_zone_excluded_from_batch():
+    """Case 6: a zone whose breaker is open is excluded from grouping entirely —
+    the batch only carries the allowed zones."""
+    patches = [_patch("z0", 0, 0, 60, 60),
+               _patch("zblock", 70, 0, 130, 60),
+               _patch("z2", 140, 0, 200, 60)]
+    w, _hub, factory = _batch_worker(patches, default_supports_batch=True)
+    # pre-open the breaker for zblock far into the future
+    w._zone_breaker["zblock"] = (time.monotonic() + 1000.0, "no_vram")
+    w._detect_all_zones(_frame(), patches)
+    det = factory.made[(None, 320)]
+    assert det.calls == 1, "still one batched call for the 2 allowed zones"
+    assert det.frames_per_call == [2]
+    assert det.keys_per_call[0] == ["z0", "z2"]
+    snap = w.snapshot()
+    assert snap["status"]["zblock"] == "no_vram" and snap["zones"]["zblock"] == []
+    assert snap["status"]["z0"] == "ok" and snap["status"]["z2"] == "ok"
+
+
+def test_empty_crop_excluded_from_batch():
+    """Case 7: a degenerate/zero-size crop is excluded from the batch and published
+    as [] (still 'ok'); the rest batch normally."""
+    # zone with a zero-width rect → empty crop
+    bad = _patch("empty", 50, 50, 50, 120)     # x0 == x1 → zero width
+    good1 = _patch("g1", 0, 0, 60, 60)
+    good2 = _patch("g2", 70, 0, 130, 60)
+    w, _hub, factory = _batch_worker([bad, good1, good2], default_supports_batch=True)
+    w._detect_all_zones(_frame(), [bad, good1, good2])
+    det = factory.made[(None, 320)]
+    assert det.calls == 1
+    assert det.frames_per_call == [2], "empty crop excluded from the batch"
+    assert det.keys_per_call[0] == ["g1", "g2"]
+    snap = w.snapshot()
+    assert snap["zones"]["empty"] == [] and snap["status"]["empty"] == "ok"
+    assert snap["zones"]["g1"] and snap["zones"]["g2"]
 
 
 # ---- mask remap quality ------------------------------------------------------

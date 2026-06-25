@@ -4,10 +4,12 @@
 // into #comms-nodes-content.  Matches the style conventions of ws_tracks.js
 // (kpi-row / kpi-key / kpi-val / status-dot CSS classes).
 //
-// Three rendering states:
-//   configured:false  → muted hint (set the env var).
+// Mode is implicit: NO gateway URL = on-prem (the default) — a calm local
+// indicator, no nag. A gateway URL makes it "Online" and lists warehouse nodes.
+// Rendering states:
+//   configured:false  → calm "On-prem · local" (default; no gateway connected).
 //   error             → amber warning line (gateway unreachable).
-//   nodes[]           → one row per node, sorted by node_id; alive count header.
+//   nodes[]           → "Online" header + one row per node (sorted; alive count).
 
 const _POLL_INTERVAL_MS = 3000;
 
@@ -23,11 +25,15 @@ function _renderNodes(data) {
   const target = document.getElementById("comms-nodes-content");
   if (!target) return;
 
-  // Gateway not configured — show a muted hint so the operator knows why nothing
-  // appears, without alarming them (this is normal on a single-PC install).
+  // No gateway URL → on-prem mode (the default). Calm local indicator, no nag;
+  // online only engages once a Gateway URL is set in Settings → Communication.
   if (!data.configured) {
     target.innerHTML =
-      '<p class="comms-nodes-hint">Set MONITOR_WEB_GATEWAY_URL to see warehouse nodes.</p>';
+      '<div class="status-row comms-nodes-header">' +
+      '<span class="status-dot status-dot-green" aria-hidden="true"></span>' +
+      '<span class="kpi-key">On-prem · local</span></div>' +
+      '<p class="comms-nodes-hint comms-nodes-subtle">Add a Gateway URL in ' +
+      'Settings → Communication for the warehouse view.</p>';
     return;
   }
 
@@ -52,7 +58,8 @@ function _renderNodes(data) {
 
   const header = `
     <div class="status-row comms-nodes-header">
-      <span class="kpi-key">${aliveCount}/${sorted.length} alive</span>
+      <span class="status-dot status-dot-green" aria-hidden="true"></span>
+      <span class="kpi-key">Online · ${aliveCount}/${sorted.length} alive</span>
     </div>`;
 
   const rows = sorted.map((n) => {

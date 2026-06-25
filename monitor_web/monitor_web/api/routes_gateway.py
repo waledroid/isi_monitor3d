@@ -10,6 +10,14 @@ the dashboard can show "gateway unreachable" without crashing the poll loop).
 The handler is a SYNC ``def`` so its network I/O runs in the FastAPI threadpool
 rather than on the async event loop, matching the established monitor_web
 convention for blocking endpoints.
+
+**Resolution order for gateway_url / gateway_token:**
+  1. UI-settings store (``config/monitor_web_ui.yaml``) — set from Settings →
+     Communication so the operator never needs to edit env vars.
+  2. Env / pydantic-settings fallback (``MONITOR_WEB_GATEWAY_URL`` /
+     ``MONITOR_WEB_GATEWAY_TOKEN``).
+  If neither source provides a non-empty URL the endpoint returns
+  ``{"configured": false}``.
 """
 
 from __future__ import annotations
@@ -22,9 +30,22 @@ import urllib.request
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from ..api.routes_config import _read_ui_settings
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _resolve_gateway(cfg) -> tuple[str | None, str | None]:
+    """Return (gateway_url, gateway_token) using ui-settings first, then env fallback."""
+    ui = _read_ui_settings(cfg)
+    ui_url = ui.get("gateway_url", "") or ""
+    ui_token = ui.get("gateway_token", "") or ""
+    if ui_url.strip():
+        return ui_url.strip(), (ui_token.strip() or None)
+    # Fall back to the env/Settings value.
+    return cfg.gateway_url, cfg.gateway_token
 
 
 @router.get("/api/gateway/nodes")
@@ -35,13 +56,15 @@ def gateway_nodes(request: Request) -> JSONResponse:
     """
     cfg = request.app.state.settings
 
-    if not cfg.gateway_url:
+    gateway_url, gateway_token = _resolve_gateway(cfg)
+
+    if not gateway_url:
         return JSONResponse({"configured": False, "nodes": []})
 
-    url = cfg.gateway_url.rstrip("/") + "/nodes"
+    url = gateway_url.rstrip("/") + "/nodes"
     req = urllib.request.Request(url)
-    if cfg.gateway_token:
-        req.add_header("Authorization", f"Bearer {cfg.gateway_token}")
+    if gateway_token:
+        req.add_header("Authorization", f"Bearer {gateway_token}")
 
     try:
         with urllib.request.urlopen(req, timeout=cfg.gateway_timeout_s) as resp:
@@ -69,4 +92,4 @@ def gateway_nodes(request: Request) -> JSONResponse:
     else:
         nodes = []
 
-    return JSONResponse({"configured": True, "gateway_url": cfg.gateway_url, "nodes": nodes})
+    return JSONResponse({"configured": True, "gateway_url": gateway_url, "nodes": nodes})

@@ -127,20 +127,3 @@ def test_stream_unknown_patch_404(app_cfg):
         assert client.get("/stream/zone/nope").status_code == 404
 
 
-def test_max_fps_round_trips_and_clamps(app_cfg):
-    """The per-zone FPS cap persists; out-of-range values clamp to [0.1, 30]."""
-    app, _ = app_cfg
-    with TestClient(app) as client:
-        rois = [
-            {"id": "z1", "camera": "cam_a", "rect": [0, 0, 100, 100],
-             "frame_wh": [640, 480], "max_fps": 2.0},
-            {"id": "z2", "camera": "cam_a", "rect": [0, 0, 100, 100],
-             "frame_wh": [640, 480], "max_fps": 99.0},      # clamps to 30
-            {"id": "z3", "camera": "cam_a", "rect": [0, 0, 100, 100],
-             "frame_wh": [640, 480]},                        # omitted = global cap
-        ]
-        assert client.post("/api/zone-patches", json={"patches": rois}).status_code == 200
-        got = {p["id"]: p for p in client.get("/api/zone-patches").json()["patches"]}
-        assert got["z1"]["max_fps"] == 2.0
-        assert got["z2"]["max_fps"] == 30.0
-        assert got["z3"]["max_fps"] is None

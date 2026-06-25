@@ -243,6 +243,17 @@ class ConfigPayload(BaseModel):
     # Communication — node identity + MQTT broker. Both None = leave untouched.
     node_id: str | None = None
     mqtt_sink: MqttSinkConfig | None = None
+    # Camera FPS — written to every camera's source.capture_fps in backbone.yaml.
+    # Controls the shared camera-hub rate, which sets the cam-view VIDEO frame rate.
+    # None = leave the existing per-camera values untouched.
+    camera_fps: int | None = None
+
+    @field_validator("camera_fps")
+    @classmethod
+    def _camera_fps_range(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        return max(1, min(30, int(v)))
 
 
 # ---- path resolution helpers ----
@@ -333,6 +344,7 @@ async def get_config(request: Request) -> JSONResponse:
     backbone_data = _read_backbone(cfg)
     cameras_raw = backbone_data.get("cameras", {}) if isinstance(backbone_data, dict) else {}
     cameras_out: dict[str, dict[str, str | None]] = {}
+    _camera_fps_found: int | None = None
     if isinstance(cameras_raw, dict):
         for cam_id, body in cameras_raw.items():
             name, url, device = "rtsp", "", None
@@ -342,7 +354,14 @@ async def get_config(request: Request) -> JSONResponse:
                     name = src.get("name", "rtsp") or "rtsp"
                     url = src.get("url", "") or ""
                     device = src.get("device")
+                    # Read camera_fps from any camera's source (all should be equal).
+                    if _camera_fps_found is None and src.get("capture_fps") is not None:
+                        try:
+                            _camera_fps_found = int(src["capture_fps"])
+                        except (TypeError, ValueError):
+                            pass
             cameras_out[cam_id] = {"name": name, "url": url, "device": device}
+    camera_fps_out = _camera_fps_found if _camera_fps_found is not None else 20
 
     zones_path = _resolve_zones_path(cfg, backbone_data)
     zones_raw = _read_zones(zones_path)
@@ -438,6 +457,7 @@ async def get_config(request: Request) -> JSONResponse:
             "allowed_severities": list(ALLOWED_SEVERITIES),
             "node_id": node_id_out,
             "mqtt_sink": mqtt_sink_out,
+            "camera_fps": camera_fps_out,
         }
     )
 
@@ -595,6 +615,20 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
     for slot in MANAGED_CAMERA_SLOTS:
         if slot in cameras_block and slot not in payload.cameras:
             cameras_block.pop(slot, None)
+
+    # Camera FPS — write to every configured camera's source.capture_fps so the
+    # camera-hub rate (and thus the cam-view video frame rate) matches the setting.
+    # Only touches cameras currently in cameras_block (managed + hand-added).
+    if payload.camera_fps is not None:
+        fps_val = payload.camera_fps
+        for cam_body in cameras_block.values():
+            if isinstance(cam_body, dict):
+                src = cam_body.get("source", {})
+                if not isinstance(src, dict):
+                    src = {}
+                src["capture_fps"] = fps_val
+                cam_body["source"] = src
+
     backbone_data["cameras"] = cameras_block
 
     # ---- splice the detection model into backbone.yaml (drives Backbone + MP4 viewer) ----

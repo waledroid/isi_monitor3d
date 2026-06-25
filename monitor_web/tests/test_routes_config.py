@@ -899,3 +899,131 @@ def test_post_config_without_mqtt_sink_leaves_sinks_untouched(tmp_path: Path) ->
     # have both the original udp + mqtt entries.
     assert any(s["plugin"] == "mqtt" and s["host"] == "existing-broker" for s in sinks)
     assert any(s["plugin"] == "udp" for s in sinks)
+
+
+# ---- camera_fps (decoupled FPS: video rate vs detection rate) ----
+
+
+def _camera_fps_app(tmp_path: Path):
+    """App with both cam_a and cam_b already in backbone.yaml."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {
+            "cam_a": {"source": {"name": "rtsp", "url": "rtsp://a.example/Streaming",
+                                  "capture_fps": 12}},
+            "cam_b": {"source": {"name": "rtsp", "url": "rtsp://b.example/Streaming",
+                                  "capture_fps": 12}},
+        },
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    return create_app(cfg), backbone_yaml
+
+
+def test_get_config_returns_camera_fps(tmp_path: Path) -> None:
+    """GET /api/config exposes camera_fps (read from source.capture_fps, default 20)."""
+    app, _ = _camera_fps_app(tmp_path)
+    with TestClient(app) as client:
+        data = client.get("/api/config").json()
+    assert data["camera_fps"] == 12   # from backbone.yaml
+
+
+def test_get_config_camera_fps_defaults_to_20_when_absent(tmp_path: Path) -> None:
+    """When backbone.yaml has no capture_fps, GET returns camera_fps=20."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {
+            "cam_a": {"source": {"name": "rtsp", "url": "rtsp://a.example/Streaming"}},
+        },
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    with TestClient(create_app(cfg)) as client:
+        data = client.get("/api/config").json()
+    assert data["camera_fps"] == 20
+
+
+def test_post_camera_fps_writes_to_both_cameras(tmp_path: Path) -> None:
+    """POST camera_fps=20 writes source.capture_fps=20 to BOTH cam_a and cam_b."""
+    app, backbone_yaml = _camera_fps_app(tmp_path)
+    with TestClient(app) as client:
+        res = client.post("/api/config", json={
+            "cameras": {
+                "cam_a": {"url": "rtsp://a.example/Streaming"},
+                "cam_b": {"url": "rtsp://b.example/Streaming"},
+            },
+            "camera_fps": 20,
+        })
+        assert res.status_code == 200, res.text
+
+    bb = yaml.safe_load(backbone_yaml.read_text())
+    assert bb["cameras"]["cam_a"]["source"]["capture_fps"] == 20
+    assert bb["cameras"]["cam_b"]["source"]["capture_fps"] == 20
+
+
+def test_post_camera_fps_preserves_url_and_other_source_keys(tmp_path: Path) -> None:
+    """camera_fps write must not clobber the url or latency_ms keys."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {
+            "cam_a": {"source": {"name": "rtsp", "url": "rtsp://keep/Streaming",
+                                  "latency_ms": 100, "capture_fps": 12}},
+        },
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    with TestClient(create_app(cfg)) as client:
+        res = client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://keep/Streaming"}},
+            "camera_fps": 20,
+        })
+        assert res.status_code == 200, res.text
+
+    src = yaml.safe_load(backbone_yaml.read_text())["cameras"]["cam_a"]["source"]
+    assert src["url"] == "rtsp://keep/Streaming"
+    assert src["latency_ms"] == 100
+    assert src["capture_fps"] == 20
+
+
+def test_post_camera_fps_round_trips_via_get(tmp_path: Path) -> None:
+    """POST camera_fps=15 then GET returns camera_fps=15."""
+    app, _ = _camera_fps_app(tmp_path)
+    with TestClient(app) as client:
+        client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://a.example/Streaming"}},
+            "camera_fps": 15,
+        })
+        data = client.get("/api/config").json()
+    assert data["camera_fps"] == 15
+
+
+def test_post_camera_fps_omitted_leaves_existing_value(tmp_path: Path) -> None:
+    """Omitting camera_fps from the POST leaves source.capture_fps untouched."""
+    app, backbone_yaml = _camera_fps_app(tmp_path)
+    with TestClient(app) as client:
+        res = client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://a.example/Streaming"}},
+        })
+        assert res.status_code == 200, res.text
+
+    src = yaml.safe_load(backbone_yaml.read_text())["cameras"]["cam_a"]["source"]
+    assert src["capture_fps"] == 12   # unchanged from fixture
+
+
+def test_post_camera_fps_clamped_to_1_30(tmp_path: Path) -> None:
+    """Out-of-range camera_fps values are clamped (not rejected)."""
+    app, backbone_yaml = _camera_fps_app(tmp_path)
+    with TestClient(app) as client:
+        # 0 → clamped to 1
+        res = client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://a.example/Streaming"}},
+            "camera_fps": 0,
+        })
+        assert res.status_code == 200, res.text
+        src = yaml.safe_load(backbone_yaml.read_text())["cameras"]["cam_a"]["source"]
+        assert src["capture_fps"] == 1
+
+        # 99 → clamped to 30
+        client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://a.example/Streaming"}},
+            "camera_fps": 99,
+        })
+        src = yaml.safe_load(backbone_yaml.read_text())["cameras"]["cam_a"]["source"]
+        assert src["capture_fps"] == 30
