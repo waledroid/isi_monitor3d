@@ -96,3 +96,26 @@ class Settings(BaseSettings):
         default=_REPO_ROOT / "config" / "monitor_web_ui.yaml",
         description="YAML store for dashboard UI preferences (mp4 selection, etc.).",
     )
+
+    # isi-gateway integration — cross-warehouse node status.
+    # Set MONITOR_WEB_GATEWAY_URL (e.g. http://gateway-host:8080) to enable the
+    # "Warehouse nodes" sidebar panel.  When unset the panel shows a muted hint.
+    gateway_url: str | None = Field(
+        default=None,
+        description=(
+            "Base URL of the isi-gateway (e.g. http://gateway-host:8080). "
+            "When set, GET /api/gateway/nodes proxies the gateway's /nodes endpoint "
+            "so the dashboard shows the cross-warehouse node list."
+        ),
+    )
+    gateway_token: str | None = Field(
+        default=None,
+        description=(
+            "Bearer token sent as 'Authorization: Bearer <token>' to the gateway. "
+            "Leave unset when the gateway runs without auth."
+        ),
+    )
+    gateway_timeout_s: float = Field(
+        default=3.0,
+        description="HTTP timeout (seconds) for the gateway /nodes request.",
+    )

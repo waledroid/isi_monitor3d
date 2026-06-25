@@ -1686,3 +1686,61 @@ button.btn-stop:hover {
 #zm-model-imgsz-val { min-width: 3.5em; text-align: right; font-variant-numeric: tabular-nums; }
 .zm-hint { display: block; font-size: 11px; color: #9aa5b1; margin: 2px 0 8px; }
 
+/* ---------------- Warehouse nodes panel (comms_nodes.js) ---------------- */
+
+/* The grey dot variant for stale nodes (alive uses the existing status-dot-green). */
+.status-dot-grey {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b7280;
+  flex-shrink: 0;
+}
+
+.comms-nodes-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  padding: 4px 0;
+  margin: 0;
+}
+
+.comms-nodes-error {
+  color: #f5ab35;    /* amber — matches status-dot-amber colour */
+  font-size: 11px;
+  padding: 4px 0;
+  word-break: break-all;
+}
+
+.comms-nodes-header {
+  font-size: 11px;
+  padding-bottom: 4px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.comms-node-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.comms-node-id {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 90px;
+  flex-shrink: 0;
+}
+
+.comms-node-kpis {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Hide the comms-nodes section title when not configured (JS sets display:none
+   on the content div; section stays visible so the expand button works). */
+

@@ -214,6 +214,18 @@ class PosePayload(BaseModel):
     pose_confidence_threshold: float = 0.3
 
 
+class MqttSinkConfig(BaseModel):
+    """MQTT sink configuration — spliced into backbone.yaml's metadata.sinks."""
+
+    host: str = ""
+    port: int = 1883
+    tls: bool = False
+    ca_cert: str = ""
+    username: str = ""
+    password: str = ""
+    prefix: str = ""
+
+
 class ConfigPayload(BaseModel):
     cameras: dict[str, CameraConfig]
     # Metric floor-zones (zones.yaml). Now OPTIONAL: the Settings metric-zone editor
@@ -228,6 +240,9 @@ class ConfigPayload(BaseModel):
     # clears all rules on disk (the dashboard sends this when the operator
     # deletes every rule).
     link_lines: list[LinkLineRule] | None = None
+    # Communication — node identity + MQTT broker. Both None = leave untouched.
+    node_id: str | None = None
+    mqtt_sink: MqttSinkConfig | None = None
 
 
 # ---- path resolution helpers ----
@@ -388,6 +403,30 @@ async def get_config(request: Request) -> JSONResponse:
         logger.warning("link_lines: %s", exc)
         link_lines_rules = []
 
+    # ---- communications: node_id + mqtt_sink ----
+    node_id_out = backbone_data.get("node_id", "") if isinstance(backbone_data, dict) else ""
+    sinks_raw = []
+    if isinstance(backbone_data, dict):
+        meta_raw = backbone_data.get("metadata")
+        if isinstance(meta_raw, dict):
+            sinks_raw = meta_raw.get("sinks") or []
+    mqtt_raw = next((s for s in sinks_raw if isinstance(s, dict) and s.get("plugin") == "mqtt"), None)
+    if mqtt_raw:
+        mqtt_sink_out = {
+            "host": mqtt_raw.get("host", ""),
+            "port": int(mqtt_raw.get("port", 1883)),
+            "tls": bool(mqtt_raw.get("tls", False)),
+            "ca_cert": mqtt_raw.get("ca_cert", ""),
+            "username": mqtt_raw.get("username", ""),
+            "password": mqtt_raw.get("password", ""),
+            "prefix": mqtt_raw.get("prefix", ""),
+        }
+    else:
+        mqtt_sink_out = {
+            "host": "", "port": 1883, "tls": False,
+            "ca_cert": "", "username": "", "password": "", "prefix": "",
+        }
+
     return JSONResponse(
         {
             "cameras": cameras_out,
@@ -397,6 +436,8 @@ async def get_config(request: Request) -> JSONResponse:
             "max_zones": MAX_ZONES,
             "allowed_kinds": list(ALLOWED_KINDS),
             "allowed_severities": list(ALLOWED_SEVERITIES),
+            "node_id": node_id_out,
+            "mqtt_sink": mqtt_sink_out,
         }
     )
 
@@ -634,6 +675,40 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             block.pop("pose_onnx_path", None)   # empty = clear
         block["pose_confidence_threshold"] = payload.pose.pose_confidence_threshold
         backbone_data["detection"] = block
+
+    # ---- communications: node_id + mqtt_sink ----
+    # Both fields are optional: None = leave untouched. Handled BEFORE
+    # _ensure_launchable so the sink splice isn't clobbered by the default-fill.
+    if payload.node_id is not None:
+        backbone_data["node_id"] = payload.node_id
+
+    if payload.mqtt_sink is not None:
+        ms = payload.mqtt_sink
+        sink_dict: dict[str, Any] = {"plugin": "mqtt", "host": ms.host, "port": ms.port}
+        # Splice the prefix (use provided value; JS defaults it to isi/<node_id>).
+        if ms.prefix:
+            sink_dict["prefix"] = ms.prefix
+        # Only write optional auth/tls fields when truthy — keep the YAML clean.
+        if ms.tls:
+            sink_dict["tls"] = True
+        if ms.ca_cert:
+            sink_dict["ca_cert"] = ms.ca_cert
+        if ms.username:
+            sink_dict["username"] = ms.username
+        if ms.password:
+            sink_dict["password"] = ms.password
+
+        meta_block = backbone_data.get("metadata")
+        if not isinstance(meta_block, dict):
+            meta_block = {}
+        sinks_list = meta_block.get("sinks")
+        if not isinstance(sinks_list, list):
+            sinks_list = []
+        # Replace an existing mqtt entry; preserve all non-mqtt sinks (udp etc.).
+        sinks_list = [s for s in sinks_list if not (isinstance(s, dict) and s.get("plugin") == "mqtt")]
+        sinks_list.append(sink_dict)
+        meta_block["sinks"] = sinks_list
+        backbone_data["metadata"] = meta_block
 
     # ---- resolve zones_path; if backbone.yaml has none, default beside it ----
     zones_path = _resolve_zones_path(cfg, backbone_data)

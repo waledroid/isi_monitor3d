@@ -156,6 +156,53 @@ function buildCameraInputs(cameras) {
   }
 }
 
+function collectMqttSink() {
+  const nodeId = el("zm-comm-node-id")?.value.trim() || "";
+  const host = el("zm-comm-host")?.value.trim() || "";
+  const portRaw = parseInt(el("zm-comm-port")?.value || "1883", 10);
+  const port = Number.isFinite(portRaw) && portRaw > 0 ? portRaw : 1883;
+  const tls = !!(el("zm-comm-tls")?.checked);
+  const caCert = el("zm-comm-ca-cert")?.value.trim() || "";
+  const username = el("zm-comm-username")?.value.trim() || "";
+  const password = el("zm-comm-password")?.value || "";
+  // Default the prefix to isi/<node_id> when the operator left it blank.
+  const prefixRaw = el("zm-comm-prefix")?.value.trim() || "";
+  const prefix = prefixRaw || (nodeId ? `isi/${nodeId}` : "");
+  return {
+    node_id: nodeId,
+    mqtt_sink: { host, port, tls, ca_cert: caCert, username, password, prefix },
+  };
+}
+
+function fillCommSection(nodeId, mqttSink) {
+  const set = (id, v) => { const e = el(id); if (e != null) e.value = v ?? ""; };
+  set("zm-comm-node-id", nodeId || "");
+  set("zm-comm-host", mqttSink?.host || "");
+  set("zm-comm-port", mqttSink?.port ?? 1883);
+  const cbTls = el("zm-comm-tls");
+  if (cbTls) cbTls.checked = !!(mqttSink?.tls);
+  set("zm-comm-ca-cert", mqttSink?.ca_cert || "");
+  set("zm-comm-username", mqttSink?.username || "");
+  set("zm-comm-password", mqttSink?.password || "");
+  set("zm-comm-prefix", mqttSink?.prefix || "");
+  // Reflect TLS state in the Mode dropdown (best-effort; operator can override).
+  const modeSel = el("zm-comm-mode");
+  if (modeSel) modeSel.value = mqttSink?.tls ? "cloud" : "onprem";
+}
+
+function wireCommMode() {
+  const modeSel = el("zm-comm-mode");
+  if (!modeSel || modeSel._commHook) return;
+  modeSel._commHook = true;
+  modeSel.addEventListener("change", () => {
+    const cloud = modeSel.value === "cloud";
+    const portEl = el("zm-comm-port");
+    const tlsEl = el("zm-comm-tls");
+    if (portEl) portEl.value = cloud ? 8883 : 1883;
+    if (tlsEl) tlsEl.checked = cloud;
+  });
+}
+
 function collectPayload() {
   const cameras = {};
   for (const slot of CAMERA_SLOTS) {
@@ -178,6 +225,10 @@ function collectPayload() {
   payload.pose = collectPose();
   // S16: distance lines — always send the field (empty list clears the file).
   payload.link_lines = collectLinkLines();
+  // Communication — MQTT broker + node identity.
+  const { node_id, mqtt_sink } = collectMqttSink();
+  payload.node_id = node_id;
+  payload.mqtt_sink = mqtt_sink;
   return payload;
 }
 
@@ -401,11 +452,14 @@ async function open() {
     buildCameraInputs(data.cameras || {});
     fillModelSection(data.detection);
     buildLinkLines(data.link_lines || []);
+    fillCommSection(data.node_id, data.mqtt_sink);
   } catch (err) {
     buildCameraInputs({});
     buildLinkLines([]);
+    fillCommSection("", null);
     console.warn("zone_manager: failed to load config", err);
   }
+  wireCommMode();
   await revealMp4IfUnlocked();
   resetTabs();
   el("zone-manager").classList.remove("hidden");

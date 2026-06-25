@@ -256,6 +256,21 @@
           <svg class="icon-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
         </button>
       </section>
+      <!-- Warehouse-wide node panel: polls /api/gateway/nodes every 3 s.
+           Populated by comms_nodes.js; hidden automatically when not configured. -->
+      <section class="sidebar-section comms-nodes-section"
+               :class="{ 'section-expanded': panel==='comms', 'section-collapsed': panel==='status' || panel==='logs' }">
+        <h2 class="sidebar-title">{{ t.warehouse_nodes or 'WAREHOUSE NODES' }}</h2>
+        <div id="comms-nodes-content" class="sidebar-content status-content">
+          <!-- Filled by comms_nodes.js -->
+        </div>
+        <button class="glass-btn btn-icon sidebar-expand-btn"
+                @click="panel = panel==='comms' ? null : 'comms'"
+                :title="panel==='comms' ? 'Collapse' : 'Expand'" aria-label="Expand warehouse nodes">
+          <svg class="icon-expand" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
+          <svg class="icon-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
+        </button>
+      </section>
       <section class="sidebar-section"
                :class="{ 'section-expanded': panel==='logs', 'section-collapsed': panel==='status' }">
         <h2 class="sidebar-title" data-i18n="logs">{{ t.logs or 'LOGS' }}</h2>
@@ -304,6 +319,10 @@
         <button type="button" class="settings-tab-btn" data-tab="lines">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><path d="M5 12h14"/><circle cx="5" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
           <span data-i18n="lines_tab">Distance Lines</span>
+        </button>
+        <button type="button" class="settings-tab-btn" data-tab="communication">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.64 3.37 2 2 0 0 1 3.62 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6a16 16 0 0 0 6.06 6.06l1.06-.97a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+          <span data-i18n="communication_tab">Communication</span>
         </button>
       </div>
 
@@ -394,6 +413,45 @@
             <div id="zm-link-lines" class="config-link-list"></div>
             <button id="zm-link-add" class="glass-btn config-link-add" type="button"
                     data-i18n="link_add">{{ t.link_add or '+ Add rule' }}</button>
+          </section>
+        </div>
+
+        <!-- Tab 5: Communication — MQTT broker + node identity -->
+        <div class="settings-tab-content" id="tab-communication">
+          <section class="config-section">
+            <h3 data-i18n="communication_section">Communication</h3>
+            <div class="config-model">
+              <!-- Mode preset — pure UI sugar; sets port/tls defaults -->
+              <label for="zm-comm-mode" data-i18n="comm_mode">Mode</label>
+              <select id="zm-comm-mode" class="zm-input">
+                <option value="onprem">On-prem (LAN)</option>
+                <option value="cloud">Cloud (TLS)</option>
+              </select>
+
+              <label for="zm-comm-node-id" data-i18n="comm_node_id">Node ID</label>
+              <input id="zm-comm-node-id" type="text" class="zm-input" placeholder="warehouse-node-1" />
+
+              <label for="zm-comm-host" data-i18n="comm_host">Broker host</label>
+              <input id="zm-comm-host" type="text" class="zm-input" placeholder="192.168.1.10" />
+
+              <label for="zm-comm-port" data-i18n="comm_port">Broker port</label>
+              <input id="zm-comm-port" type="number" class="zm-input" min="1" max="65535" step="1" placeholder="1883" />
+
+              <label for="zm-comm-tls" data-i18n="comm_tls">TLS</label>
+              <input id="zm-comm-tls" type="checkbox" class="zm-checkbox" />
+
+              <label for="zm-comm-ca-cert" data-i18n="comm_ca_cert">CA certificate path</label>
+              <input id="zm-comm-ca-cert" type="text" class="zm-input" placeholder="/etc/ssl/certs/ca.pem" />
+
+              <label for="zm-comm-username" data-i18n="comm_username">Username</label>
+              <input id="zm-comm-username" type="text" class="zm-input" placeholder="(optional)" />
+
+              <label for="zm-comm-password" data-i18n="comm_password">Password</label>
+              <input id="zm-comm-password" type="password" class="zm-input" placeholder="(optional)" />
+
+              <label for="zm-comm-prefix" data-i18n="comm_prefix">Topic prefix</label>
+              <input id="zm-comm-prefix" type="text" class="zm-input" placeholder="isi/&lt;node_id&gt;" />
+            </div>
           </section>
         </div>
       </div>

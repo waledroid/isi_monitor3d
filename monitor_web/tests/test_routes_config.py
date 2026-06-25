@@ -755,3 +755,147 @@ def test_pose_payload_empty_path_clears(tmp_path: Path) -> None:
     det = yaml.safe_load(backbone_yaml.read_text())["detection"]
     assert "pose_onnx_path" not in det
     assert det["onnx_path"] == "./m.onnx"
+
+
+# ---- Communication: MQTT sink + node_id ----
+
+
+def _comm_populated_app(tmp_path: Path):
+    """App with backbone.yaml that already has a udp sink — mirrors populated_app."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {
+            "cam_a": {"source": {"name": "rtsp", "url": "rtsp://a.example/Streaming"}},
+        },
+        "metadata": {
+            "sinks": [{"plugin": "udp", "host": "127.0.0.1", "port": 50001}],
+        },
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    return create_app(cfg), backbone_yaml
+
+
+def test_get_config_returns_node_id_and_mqtt_sink(tmp_path: Path) -> None:
+    """GET /api/config surfaces node_id and mqtt_sink keys."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {},
+        "node_id": "wh-node-42",
+        "metadata": {
+            "sinks": [
+                {"plugin": "udp", "host": "127.0.0.1", "port": 50001},
+                {"plugin": "mqtt", "host": "broker.local", "port": 1883,
+                 "prefix": "isi/wh-node-42"},
+            ],
+        },
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    with TestClient(create_app(cfg)) as client:
+        res = client.get("/api/config")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["node_id"] == "wh-node-42"
+        assert data["mqtt_sink"]["host"] == "broker.local"
+        assert data["mqtt_sink"]["port"] == 1883
+        assert data["mqtt_sink"]["prefix"] == "isi/wh-node-42"
+        assert data["mqtt_sink"]["tls"] is False
+
+
+def test_post_config_writes_mqtt_sink_preserves_udp_and_cameras(tmp_path: Path) -> None:
+    """POST with node_id + mqtt_sink writes them; udp sink + cameras are untouched."""
+    app, backbone_yaml = _comm_populated_app(tmp_path)
+    payload = {
+        "cameras": {"cam_a": {"url": "rtsp://a.example/Streaming"}},
+        "node_id": "wh-node-1",
+        "mqtt_sink": {
+            "host": "mqtt.lan",
+            "port": 1883,
+            "tls": False,
+            "ca_cert": "",
+            "username": "",
+            "password": "",
+            "prefix": "isi/wh-node-1",
+        },
+    }
+    with TestClient(app) as client:
+        res = client.post("/api/config", json=payload)
+        assert res.status_code == 200, res.text
+
+    bb = yaml.safe_load(backbone_yaml.read_text())
+    assert bb["node_id"] == "wh-node-1"
+    sinks = bb["metadata"]["sinks"]
+    plugins = [s["plugin"] for s in sinks]
+    assert "udp" in plugins           # original udp sink preserved
+    assert "mqtt" in plugins          # mqtt sink added
+    mqtt = next(s for s in sinks if s["plugin"] == "mqtt")
+    assert mqtt["host"] == "mqtt.lan"
+    assert mqtt["port"] == 1883
+    assert mqtt["prefix"] == "isi/wh-node-1"
+    # cameras untouched
+    assert bb["cameras"]["cam_a"]["source"]["url"] == "rtsp://a.example/Streaming"
+
+
+def test_post_config_replaces_existing_mqtt_sink_not_duplicate(tmp_path: Path) -> None:
+    """A second POST with mqtt_sink replaces the existing entry — exactly one mqtt."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {},
+        "metadata": {
+            "sinks": [
+                {"plugin": "udp", "host": "127.0.0.1", "port": 50001},
+                {"plugin": "mqtt", "host": "old-broker", "port": 1883, "prefix": "old/"},
+            ],
+        },
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    with TestClient(create_app(cfg)) as client:
+        res = client.post("/api/config", json={
+            "cameras": {},
+            "mqtt_sink": {
+                "host": "new-broker", "port": 8883, "tls": True,
+                "ca_cert": "/etc/ssl/ca.pem", "username": "user",
+                "password": "pass", "prefix": "isi/node2",
+            },
+        })
+        assert res.status_code == 200, res.text
+
+    bb = yaml.safe_load(backbone_yaml.read_text())
+    sinks = bb["metadata"]["sinks"]
+    mqtt_sinks = [s for s in sinks if s["plugin"] == "mqtt"]
+    assert len(mqtt_sinks) == 1          # exactly one — not duplicated
+    m = mqtt_sinks[0]
+    assert m["host"] == "new-broker"
+    assert m["port"] == 8883
+    assert m["tls"] is True
+    assert m["ca_cert"] == "/etc/ssl/ca.pem"
+    assert m["username"] == "user"
+    assert m["password"] == "pass"
+    assert m["prefix"] == "isi/node2"
+    udp_sinks = [s for s in sinks if s["plugin"] == "udp"]
+    assert len(udp_sinks) == 1           # udp preserved
+
+
+def test_post_config_without_mqtt_sink_leaves_sinks_untouched(tmp_path: Path) -> None:
+    """POST without mqtt_sink leaves metadata.sinks exactly as it was on disk."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    original_sinks = [
+        {"plugin": "udp", "host": "127.0.0.1", "port": 50001},
+        {"plugin": "mqtt", "host": "existing-broker", "port": 1883, "prefix": "isi/node"},
+    ]
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {},
+        "metadata": {"sinks": original_sinks},
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    with TestClient(create_app(cfg)) as client:
+        res = client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://a/s"}},
+        })
+        assert res.status_code == 200, res.text
+
+    bb = yaml.safe_load(backbone_yaml.read_text())
+    sinks = bb["metadata"]["sinks"]
+    # _ensure_launchable won't overwrite a non-empty sinks list, so we still
+    # have both the original udp + mqtt entries.
+    assert any(s["plugin"] == "mqtt" and s["host"] == "existing-broker" for s in sinks)
+    assert any(s["plugin"] == "udp" for s in sinks)
