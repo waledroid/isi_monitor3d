@@ -128,8 +128,11 @@ class MqttSubscriber:
         if self._client is None:
             return
         try:
-            self._client.loop_stop()
+            # disconnect() first wakes the network loop out of its reconnect
+            # backoff so loop_stop()'s thread-join returns promptly (otherwise it
+            # can block for the full reconnect delay when the broker is down).
             self._client.disconnect()
+            self._client.loop_stop()
         except Exception:
             pass
         self._client = None

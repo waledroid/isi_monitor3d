@@ -45,3 +45,27 @@ All settings (see `isi_gateway/config.py`) use the `ISI_GATEWAY_` prefix.
 
 Optional bearer-token auth: set `ISI_GATEWAY_API_TOKEN` — all routes except
 `/healthz` require `Authorization: Bearer <token>` when set.
+
+## Deploy (central server)
+
+A self-hosted Mosquitto + gateway stack:
+
+```bash
+cd deploy
+docker compose up --build      # broker on :1883, polling API on :8080
+```
+
+The gateway image (`isi_gateway/Dockerfile`) builds from the repo root because it
+needs the backbone package for `backbone.metadata.schemas` + `backbone.shared.zones`
+(base deps only — no CUDA/OpenCV/GStreamer). Each warehouse-PC Backbone points its
+mqtt sink at this broker (`host: <server>`, `prefix: isi/<node_id>`); the gateway
+auto-discovers nodes from their retained `config` adverts. See
+`docs/architecture-distributed.md` for the full topology + topic map.
+
+## Security (default off — enable before internet exposure)
+
+| Control | How |
+|---|---|
+| Broker auth | `allow_anonymous false` + `password_file`; node `username`/`password` + `ISI_GATEWAY_MQTT_USERNAME`/`_PASSWORD` |
+| Broker TLS | TLS listener + certs; node `tls: true` + `ISI_GATEWAY_MQTT_TLS=true` |
+| API token | `ISI_GATEWAY_API_TOKEN` → `Authorization: Bearer <token>` on every route but `/healthz` |

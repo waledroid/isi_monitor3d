@@ -8,6 +8,7 @@ broker needed, no sockets opened.
 from __future__ import annotations
 
 import time
+from unittest.mock import MagicMock
 
 import pytest
 from backbone.metadata.schemas import (
@@ -24,6 +25,18 @@ from fastapi.testclient import TestClient
 
 from isi_gateway.app import create_app
 from isi_gateway.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def _no_real_broker(monkeypatch):
+    """Replace the paho client so the suite never opens a socket or spawns a
+    network thread — tests inject data via ``update_from_message`` directly, so
+    a real loop would only add a multi-second teardown join on the dead broker."""
+    monkeypatch.setattr(
+        "isi_gateway.mqtt_subscriber.mqtt.Client",
+        lambda *a, **k: MagicMock(),   # ignore the CallbackAPIVersion arg; unspec'd mock
+    )
+    yield
 
 
 def _settings(**kwargs) -> Settings:

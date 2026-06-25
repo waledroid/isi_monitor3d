@@ -1,0 +1,35 @@
+# Self-hosted central server: Mosquitto broker + isi-gateway.
+# Run from this directory:  docker compose up --build
+# Then the polling API is on http://<host>:8080 and the broker on :1883.
+#
+# Each warehouse-PC Backbone points its mqtt sink at this broker
+# (host = this server, prefix = isi/<node_id>); the gateway aggregates them.
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+    ports:
+      - "1883:1883"        # MQTT (add "8883:8883" when TLS is enabled)
+
+  gateway:
+    build:
+      context: ..                       # repo root — the image needs backbone/
+      dockerfile: isi_gateway/Dockerfile
+    restart: unless-stopped
+    environment:
+      ISI_GATEWAY_MQTT_HOST: mosquitto
+      ISI_GATEWAY_MQTT_PORT: "1883"
+      ISI_GATEWAY_MQTT_BASE: isi
+      # ISI_GATEWAY_API_TOKEN: "change-me"     # require Bearer auth on the API
+      # ISI_GATEWAY_MQTT_TLS: "true"           # + _MQTT_USERNAME / _MQTT_PASSWORD
+    ports:
+      - "8080:8080"        # polling REST API (AGVs / WMS pull here)
+    depends_on:
+      - mosquitto
+
+volumes:
+  mosquitto_data:
