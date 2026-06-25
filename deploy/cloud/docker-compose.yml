@@ -1,0 +1,62 @@
+# Cloud (internet-facing) profile — TLS + auth + API token.
+# Prerequisites:
+#   1. ./gen-certs.sh                    # mint CA + certs
+#   2. docker run --rm -v "$PWD:/w" eclipse-mosquitto:2 \
+#          mosquitto_passwd -b -c /w/passwd <user> <pass>
+#   3. cp .env.example .env && edit .env
+# Run:
+#   docker compose -f deploy/cloud/docker-compose.yml up -d --build
+#
+# AGVs / WMS pull from https://<host>/tracks (port 443, bearer token).
+# Backbone nodes on each warehouse PC connect to <host>:8883 (MQTTS).
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./certs:/mosquitto/certs:ro
+      - ./passwd:/mosquitto/config/passwd:ro
+      - mosquitto_data:/mosquitto/data
+    ports:
+      - "8883:8883"        # MQTTS (TLS)
+
+  gateway:
+    build:
+      context: ../..                     # repo root — the image needs backbone/
+      dockerfile: isi_gateway/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ISI_GATEWAY_MQTT_HOST: mosquitto
+      ISI_GATEWAY_MQTT_PORT: "8883"
+      ISI_GATEWAY_MQTT_BASE: isi
+      ISI_GATEWAY_MQTT_TLS: "true"
+      ISI_GATEWAY_MQTT_CA_CERT: /certs/ca.crt
+      ISI_GATEWAY_MQTT_USERNAME: ${MQTT_USERNAME}
+      ISI_GATEWAY_MQTT_PASSWORD: ${MQTT_PASSWORD}
+      ISI_GATEWAY_API_TOKEN: ${API_TOKEN}
+    volumes:
+      - ./certs:/certs:ro
+    # 8080 is NOT published to the host — only Caddy reaches it on the compose network.
+    depends_on:
+      - mosquitto
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "443:443"          # HTTPS (API for AGVs / WMS)
+    depends_on:
+      - gateway
+
+volumes:
+  mosquitto_data:
+  caddy_data:
+  caddy_config:

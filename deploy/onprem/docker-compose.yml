@@ -1,23 +1,27 @@
-# Self-hosted central server: Mosquitto broker + isi-gateway.
-# Run from this directory:  docker compose up --build
-# Then the polling API is on http://<host>:8080 and the broker on :1883.
+# On-prem (LAN) profile — plaintext, anonymous, trusted network.
+# Run:  docker compose -f deploy/onprem/docker-compose.yml up -d --build
+# Broker on :1883, polling API on http://<host>:8080.
 #
 # Each warehouse-PC Backbone points its mqtt sink at this broker
 # (host = this server, prefix = isi/<node_id>); the gateway aggregates them.
+#
+# Optional auth (still plaintext): set allow_anonymous false + password_file in
+# mosquitto.conf and uncomment ISI_GATEWAY_MQTT_USERNAME/PASSWORD below.
+# For internet-facing deployments use the cloud profile (deploy/cloud/) instead.
 
 services:
   mosquitto:
     image: eclipse-mosquitto:2
     restart: unless-stopped
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto_data:/mosquitto/data
     ports:
-      - "1883:1883"        # MQTT (add "8883:8883" when TLS is enabled)
+      - "1883:1883"        # MQTT plaintext
 
   gateway:
     build:
-      context: ..                       # repo root — the image needs backbone/
+      context: ../..                     # repo root — the image needs backbone/
       dockerfile: isi_gateway/Dockerfile
     restart: unless-stopped
     environment:

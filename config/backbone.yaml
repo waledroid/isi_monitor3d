@@ -64,6 +64,13 @@ metadata:
     # prefix is the per-node namespace: isi/<node_id>
     prefix: isi/zone_a
     qos: 0
+    # --- CLOUD node example (deploy/cloud/ profile) --------------------------
+    # host: <cloud-server-ip-or-dns>
+    # port: 8883
+    # tls: true
+    # ca_cert: /etc/isi/ca.crt        # copy from deploy/cloud/certs/ca.crt
+    # username: <MQTT_USERNAME>
+    # password: <MQTT_PASSWORD>
   images:
     enabled: false
     out_dir: /var/lib/isi_monitor3d/snapshots

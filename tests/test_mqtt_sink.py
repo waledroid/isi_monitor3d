@@ -404,3 +404,66 @@ def test_publish_config_retain_true_even_when_instance_retain_is_false() -> None
         call_args = mock_instance.publish.call_args
         assert call_args[1].get("retain") is True
         sink.close()
+
+
+# ---------------------------------------------------------------------------
+# TLS — ca_cert / tls_insecure wiring
+# ---------------------------------------------------------------------------
+
+def test_tls_with_ca_cert_calls_tls_set_with_ca_certs() -> None:
+    """tls=True + ca_cert path → client.tls_set(ca_certs=<path>)."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=8883, tls=True, ca_cert="/c/ca.crt")
+
+        mock_instance.tls_set.assert_called_once_with(ca_certs="/c/ca.crt")
+        mock_instance.tls_insecure_set.assert_not_called()
+        sink.close()
+
+
+def test_tls_insecure_calls_tls_insecure_set() -> None:
+    """tls=True + tls_insecure=True → client.tls_insecure_set(True) is called."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(
+            host="127.0.0.1", port=8883,
+            tls=True, ca_cert="/c/ca.crt", tls_insecure=True,
+        )
+
+        mock_instance.tls_set.assert_called_once_with(ca_certs="/c/ca.crt")
+        mock_instance.tls_insecure_set.assert_called_once_with(True)
+        sink.close()
+
+
+def test_tls_false_skips_tls_set_and_tls_insecure_set() -> None:
+    """tls=False → neither tls_set nor tls_insecure_set is called."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, tls=False, tls_insecure=True)
+
+        mock_instance.tls_set.assert_not_called()
+        mock_instance.tls_insecure_set.assert_not_called()
+        sink.close()
+
+
+def test_tls_with_no_ca_cert_uses_system_cas() -> None:
+    """tls=True with ca_cert=None (default) → tls_set(ca_certs=None) for system CAs."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=8883, tls=True)
+
+        mock_instance.tls_set.assert_called_once_with(ca_certs=None)
+        mock_instance.tls_insecure_set.assert_not_called()
+        sink.close()

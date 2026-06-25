@@ -51,23 +51,46 @@ central configuration** — a new node simply appears in `/nodes` and `/zones`.
 
 ## Per-node config (`config/backbone.yaml` on each PC)
 
+**On-prem (LAN, plaintext):**
+
 ```yaml
 node_id: zone_a
 metadata:
   area: "Zone A — racking"
   sinks:
     - plugin: mqtt
-      host: <central-broker-host>      # the cloud broker
+      host: <central-broker-host>
       port: 1883
       prefix: isi/zone_a               # = isi/<node_id>
-      # tls: true / username / password # enable for the cloud
+  diagnostics: { enabled: true, interval_sec: 5.0, rms_gate_px: 2.0 }
+```
+
+**Cloud (TLS + auth — matches the cloud deploy profile):**
+
+```yaml
+node_id: zone_a
+metadata:
+  area: "Zone A — racking"
+  sinks:
+    - plugin: mqtt
+      host: <cloud-server-ip-or-dns>
+      port: 8883
+      tls: true
+      ca_cert: /etc/isi/ca.crt         # distributed from deploy/cloud/certs/ca.crt
+      username: <MQTT_USERNAME>
+      password: <MQTT_PASSWORD>
+      prefix: isi/zone_a               # = isi/<node_id>
   diagnostics: { enabled: true, interval_sec: 5.0, rms_gate_px: 2.0 }
 ```
 
 ## Central server (`isi-gateway`)
 
 Aggregates all nodes and serves the polling API — see `isi_gateway/README.md` for
-the endpoint table and `deploy/docker-compose.yml` for a Mosquitto + gateway stack.
+the endpoint table and `deploy/README.md` for deployment profiles:
+
+- `deploy/onprem/docker-compose.yml` — LAN / trusted-network stack (plaintext, :1883)
+- `deploy/cloud/docker-compose.yml`  — internet-facing stack (TLS :8883 + Caddy :443)
+
 Node liveness comes from the diagnostics-heartbeat freshness
 (`ISI_GATEWAY_NODE_STALE_AFTER_S`, default 15 s): a node that stops heart-beating
 flips to `stale` in `/nodes`.

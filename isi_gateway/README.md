@@ -48,15 +48,27 @@ Optional bearer-token auth: set `ISI_GATEWAY_API_TOKEN` — all routes except
 
 ## Deploy (central server)
 
-A self-hosted Mosquitto + gateway stack:
+Two deployment profiles are provided — see `deploy/README.md` for full instructions.
+
+**On-prem (LAN, plaintext):**
 
 ```bash
-cd deploy
-docker compose up --build      # broker on :1883, polling API on :8080
+docker compose -f deploy/onprem/docker-compose.yml up -d --build
+# broker on :1883, polling API on http://<host>:8080
+```
+
+**Cloud (internet-facing, TLS + auth + API token):**
+
+```bash
+cd deploy/cloud
+CERT_HOST=<server-ip-or-dns> ./gen-certs.sh     # mint CA + certs
+# create broker credentials, fill .env (see deploy/README.md)
+docker compose -f deploy/cloud/docker-compose.yml up -d --build
+# MQTTS on :8883, HTTPS API on :443
 ```
 
 The gateway image (`isi_gateway/Dockerfile`) builds from the repo root because it
-needs the backbone package for `backbone.metadata.schemas` + `backbone.shared.zones`
+needs the backbone package for `backbone.comms.schemas` + `backbone.shared.zones`
 (base deps only — no CUDA/OpenCV/GStreamer). Each warehouse-PC Backbone points its
 mqtt sink at this broker (`host: <server>`, `prefix: isi/<node_id>`); the gateway
 auto-discovers nodes from their retained `config` adverts. See

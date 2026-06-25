@@ -73,6 +73,8 @@ class MqttSubscriber:
         base: str,
         *,
         tls: bool = False,
+        ca_cert: str | None = None,
+        tls_insecure: bool = False,
         username: str | None = None,
         password: str | None = None,
         passings_buffer: int = 200,
@@ -81,6 +83,8 @@ class MqttSubscriber:
         self._port = port
         self._base = base
         self._tls = tls
+        self._ca_cert = ca_cert
+        self._tls_insecure = tls_insecure
         self._username = username
         self._password = password
         self._passings_buffer = passings_buffer
@@ -104,7 +108,9 @@ class MqttSubscriber:
         if self._username is not None:
             client.username_pw_set(self._username, self._password)
         if self._tls:
-            client.tls_set()
+            client.tls_set(ca_certs=self._ca_cert)
+            if self._tls_insecure:
+                client.tls_insecure_set(True)
         client.reconnect_delay_set(min_delay=1, max_delay=10)
         client.on_connect = self._on_connect
         client.on_message = self._on_message

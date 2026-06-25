@@ -1,0 +1,14 @@
+# Caddy reverse proxy — terminates HTTPS for the isi-gateway API.
+# The gateway itself only listens on :8080 inside the compose network.
+#
+# Self-signed cert: run gen-certs.sh first to populate certs/.
+# To use a real domain + automatic Let's Encrypt instead:
+#   - replace ":443" with "your.domain.com"
+#   - remove the "tls ..." line (Caddy handles ACME automatically)
+#   - ensure port 80 is reachable for the ACME HTTP-01 challenge
+
+:443 {
+    tls /certs/api.crt /certs/api.key
+
+    reverse_proxy gateway:8080
+}

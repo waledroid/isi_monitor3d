@@ -68,6 +68,8 @@ class MqttSink(MetadataSink):
         username: str | None = None,
         password: str | None = None,
         tls: bool = False,
+        ca_cert: str | None = None,
+        tls_insecure: bool = False,
         track2d_topic: str = "{prefix}/track2d/{cls}",
         track3d_topic: str = "{prefix}/track3d/{cls}",
         event_topic: str = "{prefix}/zones/{zone}/passings",
@@ -93,7 +95,16 @@ class MqttSink(MetadataSink):
                        assign one.
             username: Optional broker username.
             password: Optional broker password (used only when username is set).
-            tls: If True, wrap the transport with TLS using system CAs.
+            tls: If True, wrap the transport with TLS.
+            ca_cert: Path to a CA certificate file (PEM) used to verify the
+                     broker's server certificate.  ``None`` (the default) falls
+                     back to the system CA bundle — the same behaviour as before
+                     this parameter existed.  Pass your own CA path when the
+                     broker uses a self-signed certificate.
+            tls_insecure: If True, skip hostname verification after ``tls_set``.
+                          This is an escape hatch for development rigs and must
+                          never be enabled in production.  Has no effect when
+                          ``tls=False``.
             track2d_topic: Topic template for ``Track2DMessage``; supports
                            ``{prefix}`` and ``{cls}`` tokens.
             track3d_topic: Topic template for ``Track3DMessage``; supports
@@ -134,6 +145,8 @@ class MqttSink(MetadataSink):
         self._image_topic = image_topic
         self._diag_topic = diag_topic
         self._config_topic = config_topic
+        self._ca_cert = ca_cert
+        self._tls_insecure = tls_insecure
         self._closed = False
 
         self._client = mqtt.Client(
@@ -145,7 +158,9 @@ class MqttSink(MetadataSink):
             self._client.username_pw_set(username, password)
 
         if tls:
-            self._client.tls_set()
+            self._client.tls_set(ca_certs=ca_cert)
+            if tls_insecure:
+                self._client.tls_insecure_set(True)
 
         self._client.reconnect_delay_set(min_delay=1, max_delay=30)
         self._client.on_connect = self._on_connect

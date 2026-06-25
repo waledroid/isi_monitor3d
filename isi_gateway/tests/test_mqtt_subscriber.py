@@ -125,3 +125,54 @@ def test_stop_is_idempotent_without_start(sub):
     """stop() on a never-started subscriber must not raise."""
     sub.stop()
     sub.stop()
+
+
+# ---------------------------------------------------------------------------
+# TLS — ca_cert / tls_insecure wiring (paho mocked via autouse conftest)
+# ---------------------------------------------------------------------------
+
+def test_tls_with_ca_cert_calls_tls_set_with_ca_certs():
+    """tls=True + ca_cert → client.tls_set(ca_certs=<path>) called in start()."""
+    from isi_gateway.mqtt_subscriber import MqttSubscriber
+    s = MqttSubscriber("127.0.0.1", 8883, "isi", tls=True, ca_cert="/c/ca.crt")
+    s.start()
+    client = s._client
+    client.tls_set.assert_called_once_with(ca_certs="/c/ca.crt")
+    client.tls_insecure_set.assert_not_called()
+    s.stop()
+
+
+def test_tls_insecure_calls_tls_insecure_set():
+    """tls=True + tls_insecure=True → client.tls_insecure_set(True) called in start()."""
+    from isi_gateway.mqtt_subscriber import MqttSubscriber
+    s = MqttSubscriber(
+        "127.0.0.1", 8883, "isi",
+        tls=True, ca_cert="/c/ca.crt", tls_insecure=True,
+    )
+    s.start()
+    client = s._client
+    client.tls_set.assert_called_once_with(ca_certs="/c/ca.crt")
+    client.tls_insecure_set.assert_called_once_with(True)
+    s.stop()
+
+
+def test_tls_false_skips_tls_set_and_tls_insecure_set():
+    """tls=False → neither tls_set nor tls_insecure_set is called in start()."""
+    from isi_gateway.mqtt_subscriber import MqttSubscriber
+    s = MqttSubscriber("127.0.0.1", 1884, "isi", tls=False, tls_insecure=True)
+    s.start()
+    client = s._client
+    client.tls_set.assert_not_called()
+    client.tls_insecure_set.assert_not_called()
+    s.stop()
+
+
+def test_tls_no_ca_cert_uses_system_cas():
+    """tls=True with default ca_cert=None → tls_set(ca_certs=None) for system CAs."""
+    from isi_gateway.mqtt_subscriber import MqttSubscriber
+    s = MqttSubscriber("127.0.0.1", 8883, "isi", tls=True)
+    s.start()
+    client = s._client
+    client.tls_set.assert_called_once_with(ca_certs=None)
+    client.tls_insecure_set.assert_not_called()
+    s.stop()

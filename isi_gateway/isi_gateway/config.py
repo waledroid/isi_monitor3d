@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     mqtt_port: int = 1883
     mqtt_base: str = "isi"
     mqtt_tls: bool = False
+    mqtt_ca_cert: str | None = None
+    mqtt_tls_insecure: bool = False
     mqtt_username: str | None = None
     mqtt_password: str | None = None
 
