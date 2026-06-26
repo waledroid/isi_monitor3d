@@ -4,9 +4,11 @@ How the ISI Monitor 3D system scales from one camera rig to a whole warehouse:
 many **Backbone** nodes (one per PC) publish metric metadata to a central **MQTT
 broker**, an **isi-gateway** aggregates it, and AGVs/WMS poll a single REST API.
 
-This document is the end-to-end reference: the comms module internals, the
-message contract, the broker, the gateway, the identity model, the security
-model, and a start-to-finish runbook.
+This document is the **field-level technical reference** — the comms module
+internals, the full message-field contract, the broker, the gateway, the identity
+and security models, and a start-to-finish runbook. For the design narrative and
+the rationale behind each decision, see the companion `docs/rfc.md`; for the bare
+topology, `docs/architecture-distributed.md`.
 
 ```
  Warehouse PC 1            Warehouse PC 2            Warehouse PC 3
@@ -23,23 +25,34 @@ model, and a start-to-finish runbook.
             AGVs / WMS poll here (HTTP only)
 ```
 
+The broker and gateway live together on **one central host that is deliberately
+*not* a warehouse PC** — a dedicated server, a small NUC, or a cloud VM, running
+nothing but Mosquitto and isi-gateway. A warehouse PC runs **only a Backbone**; it
+never hosts the hub. The only address that has to be reachable on the LAN is the
+central host's IP (`192.168.2.39` above) — every PC publishes to it and every AGV
+polls it. (You *may* co-locate everything on one box for a pilot, but a camera
+PC's Docker is not where the broker belongs in production.)
+
 ---
 
 ## 1. Design principles
 
-The MQTT layer obeys the Backbone's non-negotiables:
+The MQTT layer obeys the Backbone's non-negotiables. These five are stated once
+here; the rest of the document refers back to them rather than restating them:
 
 1. **The schema is the only contract.** A node shares **zero code** with a
    consumer. Everything crosses the boundary as validated JSON
    (`backbone/comms/schemas.py`). To add a capability you expand the schema, not
    share a module.
 2. **One identity space, per node.** Each Backbone owns its own `track_id`
-   counter. Global identity is the pair **`(node_id, track_id)`** — the gateway
-   tags every track with the `node_id` it read from the topic.
+   counter, so two PCs can both number a track `42`. Global identity is therefore
+   the pair **`(node_id, track_id)`** — the gateway *tags* every track with the
+   `node_id` it read from the topic, and never merges tracks across nodes.
 3. **Outbound-only nodes.** A node only *publishes*. It never subscribes, never
    listens, never knows another node exists. Firewall-friendly and decoupled.
-4. **Fail honestly.** Every sink call is wrapped in `try/except` + log; a dead
-   broker or a UDP hiccup degrades silently instead of crashing the pipeline.
+4. **Fail honestly.** Every sink call and every inbound parse is wrapped in
+   `try/except` + log; a dead broker, a UDP hiccup, or a malformed packet is
+   counted and degrades silently instead of crashing the pipeline or the gateway.
 5. **Latency against the capture clock.** Every message's `ts` is the frame's
    `capture_ts` (Unix seconds), propagated unchanged through the whole pipeline —
    never `time.time()` at publish. A consumer measuring `now - ts` gets true
@@ -95,9 +108,8 @@ keypoints_xyz: [(x,y,z), …]|None   # pose (S5.5)
 single_view: bool                  # Z pinned to floor from one camera (occlusion fallback)
 confidence: float
 ```
-The `track_id` is **identical** to the corresponding `Track2DMessage` — the "one
-identity space" principle. The triangulation layer augments tracks with 3D and
-**never re-IDs**.
+The `track_id` is **identical** to the corresponding `Track2DMessage` (principle 2):
+the triangulation layer augments an existing track with 3D and **never re-IDs**.
 
 **`PassingEventMessage`** — a boundary crossing:
 ```
@@ -137,31 +149,26 @@ zones: [{name, kind, type, severity, polygon:[[x,y],…]}, …]   # ZoneSpec
 calibration: {loaded, rms_ok, mode}
 ```
 
-### Schema versioning
-
-`schema_version` is a single integer consumers MUST read before parsing. **Adding
-optional, defaulted fields is non-breaking** (a v3 consumer ignores them);
-renaming/removing is breaking and bumps the version. `parse_envelope` currently
-accepts `{3, 4}` so a v4 node and a v3 consumer interoperate during a rollout;
-anything outside that set raises `SchemaVersionError`.
-
 ### Versioning — two independent axes
 
-The comms layer versions on **two orthogonal axes**, so message *content* and
-message *addressing* evolve independently:
+The comms layer versions on **two orthogonal axes**, so a message's *content* and
+its *addressing* evolve independently:
 
-- **Payload — `schema_version`** (integer, in every envelope; `parse_envelope`
-  accepts `{3, 4}`). Governs the *content* of a message: adding/changing/removing
-  fields. Bumped only on a breaking payload change; additive fields don't bump it.
+- **Payload — `schema_version`** (a single integer in every envelope; consumers
+  MUST read it before parsing). Governs the message's *content*. **Adding optional,
+  defaulted fields is non-breaking** (a v3 consumer ignores them); renaming or
+  removing a field is breaking and bumps the version. `parse_envelope` currently
+  accepts `{3, 4}`, so a v4 node and a v3 consumer interoperate during a rollout;
+  anything outside that set raises `SchemaVersionError`.
 - **Path / topic — `TOPIC_VERSION`** (`"v1"` in `backbone/comms/schemas.py`).
-  Governs the *contract/addressing*: the REST prefix (`/v1/...`) and the MQTT
-  topic tree (`isi/v1/...`). Lets `v1` and a future `v2` run side-by-side so
-  consumers migrate on their own schedule.
+  Governs the *addressing*: the REST prefix (`/v1/...`) and the MQTT topic tree
+  (`isi/v1/...`). Lets `v1` and a future `v2` run side-by-side so consumers migrate
+  on their own schedule.
 
 **How a `v2` lands:** nodes set `prefix: isi/v2/<node_id>` and publish
 `isi/v2/...`; the gateway already parses any `v\d+` segment, so it serves both
-trees at once; the gateway mounts `/v2/...` alongside `/v1/...`; consumers migrate
-when ready; `v1` is deprecated on a published date.
+trees at once and mounts `/v2/...` alongside `/v1/...`; consumers migrate when
+ready; `v1` is deprecated on a published date.
 
 **`v0` legacy fallback:** the gateway still accepts un-versioned
 `isi/<node_id>/...` topics (no `v\d+` segment) during transition and reports those
@@ -207,22 +214,49 @@ gained `publish_event` / `publish_image_ref` / `publish_diagnostics` /
 
 ### `MqttSink` behaviour (the details that matter operationally)
 
-- **Topic templates** (substituted per message; `prefix = isi/v1/<node_id>` =
-  `{base}/{TOPIC_VERSION}/{node_id}`):
-  ```
-  {prefix}/track2d/{cls}              {prefix}/diagnostics/heartbeat
-  {prefix}/track3d/{cls}              {prefix}/config            (retain=True)
-  {prefix}/zones/{zone}/passings
-  {prefix}/images/{zone}/{track_id}
-  ```
+Everything a node emits is namespaced under `prefix = isi/v1/<node_id>`
+(`= {base}/{TOPIC_VERSION}/{node_id}`). The sink substitutes one topic template per
+message; each branch carries one kind of information — in plain language:
+
+- **`{prefix}/track2d/{cls}`** — the **always-on** output: one metric 2D
+  position-and-velocity on the warehouse floor for each tracked object of class
+  `{cls}`. This is the signal an AGV navigates against. `track2d/person` carries
+  people positions, `track2d/forklift` forklifts, and so on.
+- **`{prefix}/track3d/{cls}`** — the same object lifted to full 3D `(X, Y, Z)`.
+  Published **only in Mode 2** (two calibrated cameras) and **only for subscribed
+  tracks** — when something downstream actually needs height or pose, not for
+  everything.
+- **`{prefix}/zones/{zone}/passings`** — an **event** each time a track crosses a
+  zone boundary: one `enter` or `leave` per crossing, not a continuous stream.
+- **`{prefix}/images/{zone}/{track_id}`** — a **URL pointer** to a saved snapshot
+  JPEG for that event; the bytes themselves never touch the bus (see
+  `ImageRefMessage` above).
+- **`{prefix}/diagnostics/heartbeat`** — the node's health pulse (~5 s): frame
+  rate, latency, and per-camera liveness. Absence of the pulse is how the gateway
+  notices a PC went down.
+- **`{prefix}/config`** *(retain=True)* — the node's self-description (area, mode,
+  cameras, zones). **"Retained"** means the broker stores the last message on the
+  topic and hands it to any subscriber the instant it connects — so a freshly
+  started gateway learns the layout immediately (see §5).
+
+```
+{prefix}/track2d/{cls}              {prefix}/diagnostics/heartbeat
+{prefix}/track3d/{cls}              {prefix}/config            (retain=True)
+{prefix}/zones/{zone}/passings
+{prefix}/images/{zone}/{track_id}
+```
+
+The specifics that make these templates safe and cheap:
+
 - **`track_id` is intentionally NOT in the topic** — it's in the payload. This
-  keeps the topic cardinality bounded (a wildcard `…/track2d/person` follows a
-  whole class, not one ephemeral id).
+  keeps topic cardinality bounded to O(classes): a wildcard `…/track2d/person`
+  follows a whole class, not one ephemeral id.
 - **Topic sanitisation.** `cls` and `zone` are run through a translation that
   replaces `/ + #` with `_`, so a zone named "dock/door" can't break the topic
   hierarchy or inject wildcards.
-- **QoS 0 by default** (set per sink). Tracks are high-rate and transient —
-  at-most-once is the right trade. `config` is the exception: see below.
+- **QoS 0 by default** (set per sink). Tracks/passings/diagnostics are high-rate
+  and disposable — at-most-once is the right trade, since the next message
+  supersedes the last. `config` is the exception: see below.
 - **`config` is always published with `retain=True`**, regardless of the sink's
   `retain` setting. The broker keeps the last `config` per topic forever.
 - **Broker-down-safe.** Construction uses `connect_async()` + `loop_start()`, so
@@ -296,13 +330,14 @@ persistence_location /mosquitto/data/
 allow_anonymous true                # fine on a trusted LAN
 ```
 
-**The self-describing trick (why `persistence` + `retain` matter):** each node
-publishes its `config` retained to `isi/v1/<node_id>/config`. The broker holds the
-latest one permanently. So when the gateway connects — first boot, reconnect, or
-a totally fresh gateway — and subscribes to `isi/#`, the broker **immediately
-replays every node's config**. The gateway learns the entire warehouse layout
-(nodes, areas, modes, cameras, zones) with **zero central configuration**. Add a
-PC and it simply *appears*; no registry, no node list to maintain.
+**The self-describing trick (why `persistence` + `retain` matter):** because each
+node publishes its `config` *retained* (§3), the broker holds the latest one per
+topic; `persistence true` keeps those retained adverts across a broker restart.
+So whenever the gateway subscribes to `isi/#` — first boot, reconnect, or a
+totally fresh gateway — the broker **immediately replays every node's config**,
+and the gateway learns the entire warehouse layout (nodes, areas, modes, cameras,
+zones) with **zero central configuration**. Adding a PC needs no registry and no
+node list to maintain — it simply *appears*.
 
 ---
 
@@ -463,23 +498,27 @@ curl http://<server-ip>:8080/v1/nodes   # zone_a present, status alive, topic_ve
 
 ## 9. Adding a PC / scaling
 
-To add an area: stand up one more PC, give it a **unique `node_id`**, point its
-mqtt sink at the same broker. It self-registers via its retained `config`, and
-`/v1/nodes` grows by one. **Nothing on the server changes.** Identity stays unique
-because everything is namespaced `(node_id, track_id)`.
+To add an area: stand up one more PC, give it a **unique `node_id`**, and point
+its mqtt sink at the same broker. It self-registers via its retained `config` (§5),
+`/v1/nodes` grows by one, and **nothing on the central host changes** — identity
+stays globally unique by `(node_id, track_id)` (principle 2).
 
 ---
 
 ## 10. Reliability & threading
 
+How the principles above hold up under load and failure:
+
 - Each `MqttSink` / `MqttSubscriber` owns a paho network loop in a background
-  thread; publishes are non-blocking.
-- `DiagnosticsPublisher` is a daemon thread.
-- The gateway cache is mutated under a lock; snapshots copy-under-lock.
-- Every sink call and every inbound parse is `try/except` + log — a bad message,
-  a dead broker, or one bad sink never takes down the pipeline or the gateway.
-- A Mode-2 node that loses one camera keeps serving `track2d` from the survivor;
-  `track3d` (which needs 2 views) simply stops matching. The pipeline does not die.
+  thread, so publishes are non-blocking; `DiagnosticsPublisher` is a daemon thread.
+- The gateway cache is mutated under a lock, and `snapshot_nodes()` copies the
+  inner containers under that same lock, so a reader never sees a half-updated node.
+- Fail-honestly (principle 4) in practice: a bad message, a dead broker, or one
+  failing sink is caught and logged, never fatal to the pipeline or the gateway.
+- Identity-preserving degradation: a Mode-2 node that loses one camera keeps
+  serving `track2d` from the survivor while `track3d` (which needs two views)
+  simply stops matching — track IDs persist across the drop and recovery, and the
+  pipeline does not die.
 
 ---
 
