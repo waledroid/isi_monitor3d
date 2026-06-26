@@ -23,6 +23,15 @@ requires **no change to the server**. This document explains the design top-down
 the engineering **methods** chosen at each layer, the **expected result at every
 operational stage**, and the **tests conducted** to date.
 
+Three properties recur throughout and are worth fixing up front, so the rest of
+the document can refer back to them rather than restate them:
+- **Outbound-only edge** — a PC only ever *publishes*; it opens no inbound ports
+  and holds no consumer connections.
+- **One identity space per PC** — each PC numbers its own tracks; global identity
+  is the pair `(node_id, track_id)`, and the gateway *tags*, never merges.
+- **Self-describing** — each PC publishes a retained `config` advert, so the
+  warehouse map assembles itself with no central list to maintain.
+
 ---
 
 ## 1. Motivation
@@ -53,8 +62,8 @@ publish once; a single aggregator serves everyone.
 
 **Non-Goals**
 - Image/video transport over the bus (only *references* to media are sent).
-- Cross-PC track fusion (each PC owns its own identity; the gateway tags, not
-  merges).
+- Cross-PC track fusion (per the one-identity-space property above, the gateway
+  tags, never merges).
 - Controlling the AGVs (we *inform*; the AGV/WMS decides).
 
 ---
@@ -87,6 +96,36 @@ publish once; a single aggregator serves everyone.
 
 AGVs never speak MQTT and never know how many PCs exist — they poll one URL.
 
+### Where each piece runs — the machines on the LAN
+
+The broker and the gateway live together on **one central machine that is
+deliberately *not* one of the warehouse PCs**. That central machine can be a
+dedicated server, a small NUC, or a cloud VM — its only job is to run Mosquitto
+and isi-gateway. A warehouse PC runs **only a Backbone**; it is never the hub.
+
+For a tiny pilot you *may* co-locate everything on one box, but in production the
+central server is its own host. Either way, the only thing the warehouse PCs and
+the AGVs need is that the central server's **IP is reachable on the LAN**.
+
+```
+   WAREHOUSE PCs (one Backbone each)            CENTRAL SERVER                 AGVs (DHCP)
+ ┌──────────────────────────────┐
+ │ PC-1   192.168.2.41          │── MQTT ─┐
+ │ Backbone  node_id = zone_a   │ :1883   │
+ └──────────────────────────────┘         │   ┌──────────────────────────┐
+ ┌──────────────────────────────┐         ├──►│   192.168.2.39           │   ┌────────────┐
+ │ PC-2   192.168.2.42          │── MQTT ─┘   │  Mosquitto      :1883    │   │ AGV-1, AGV-2│
+ │ Backbone  node_id = dock_1   │ :1883       │  isi-gateway    :8080    │◄──│  (DHCP)     │
+ └──────────────────────────────┘             └──────────────────────────┘   │  poll :8080 │
+                                                                              └────────────┘
+   each PC publishes outbound to                a separate host — NOT          AGVs poll
+   192.168.2.39:1883 only                       any warehouse PC's Docker      192.168.2.39:8080
+```
+
+The central server here (192.168.2.39) runs the `deploy/` Docker compose stack
+(Mosquitto + gateway). The warehouse PCs (192.168.2.41/.42) point their MQTT sink
+at `192.168.2.39:1883`; the AGVs poll `http://192.168.2.39:8080/v1/...`.
+
 ---
 
 ## 4. System breakdown — high to low
@@ -108,7 +147,31 @@ buffers/retains. Topics are hierarchical and namespaced by node (Layer 3).
 
 ### Layer 3 — The address space: the topic tree
 Everything a node emits is namespaced under `isi/<TOPIC_VERSION>/<node_id>/…`
-(currently `TOPIC_VERSION = "v1"`, in `backbone/comms/schemas.py`):
+(currently `TOPIC_VERSION = "v1"`, in `backbone/comms/schemas.py`). Each branch of
+the tree carries one kind of information — in plain language:
+
+- **`isi/v1/<node_id>/track2d/<cls>`** — the always-on output. One metric 2D
+  position-and-velocity on the warehouse floor for each tracked object of class
+  `<cls>`. This is what an AGV navigates against. The `<cls>` is the object class,
+  so `track2d/person` carries people positions, `track2d/forklift` forklifts, etc.
+- **`isi/v1/<node_id>/track3d/<cls>`** — the same object lifted to full 3D
+  `(X, Y, Z)`. Published **only in Mode 2** (two calibrated cameras) and **only for
+  subscribed tracks** — i.e. when something downstream actually needs height or
+  pose, not for everything.
+- **`isi/v1/<node_id>/zones/<zone>/passings`** — an **event** each time a tracked
+  object crosses a zone's boundary: an enter or a leave. One message per crossing,
+  not a continuous stream.
+- **`isi/v1/<node_id>/images/<zone>/<id>`** — a **URL pointer** to a saved snapshot
+  JPEG for that event. The image **bytes are never on the bus** — only a link a
+  consumer can fetch out-of-band.
+- **`isi/v1/<node_id>/diagnostics/heartbeat`** — the node's health pulse, emitted
+  about every 5 s: frame rate, latency, and whether each camera source is alive.
+  Absence of the pulse is how the gateway notices a PC went down.
+- **`isi/v1/<node_id>/config`** *(retained)* — the node's self-description: its
+  area, operational mode, cameras, and zones. **"Retained"** means the broker
+  stores the last one and immediately hands it to any subscriber that connects
+  later — so a freshly-started gateway learns the layout instantly.
+
 ```
 isi/v1/zone_a/track2d/person          isi/v1/zone_a/diagnostics/heartbeat
 isi/v1/zone_a/track3d/forklift        isi/v1/zone_a/config           (retained)
@@ -129,121 +192,106 @@ The engineering methods that make the above robust — detailed next (§5).
 
 ## 5. Methods in place
 
-This is the core of the design: *how* each guarantee is achieved.
+This is the core of the design: ten decisions that make the architecture above
+robust. Each is stated as **Problem → Method → ▶ Expected result** so it can be
+followed without reading the code. They build on one another — identity and
+self-description come first, then resilience, then the seams that let the system
+evolve.
 
 ### M1 — Identity by topic namespacing
-**Problem:** two PCs both number their tracks from 1.
+**Problem:** two PCs both number their tracks from 1, so "track 42" is ambiguous.
 **Method:** each node prefixes every topic with `isi/v1/<node_id>`. The gateway
-reads the `node_id` back out of the topic (skipping the `v\d+` version segment) and
-tags every record with it. Global identity is the pair **`(node_id, track_id)`**.
+reads the `node_id` back out of the topic and tags every record with it, making
+global identity the pair `(node_id, track_id)`.
 ▶ **Expected result:** `track 42` from `zone_a` and `track 42` from `dock_1` never
 collide; `/v1/tracks` shows both, distinctly tagged.
 
-### M2 — Self-describing nodes via *retained* config
+### M2 — Self-describing nodes via retained config
 **Problem:** the server would otherwise need a hand-maintained list of every PC.
-**Method:** at startup each node publishes a **retained** `config` message
-(its area, mode, cameras, zones, calibration status). The broker keeps the last
-one forever (`persistence true`). Any gateway that connects — even a brand-new one
-— is immediately replayed every node's `config`.
-▶ **Expected result:** a freshly-started gateway learns the entire warehouse
-layout with **zero configuration**. Plug in a new PC and it simply *appears* in
-`/v1/nodes` and `/v1/zones`.
+**Method:** at startup each node publishes a **retained** `config` (its area, mode,
+cameras, zones). The broker stores the last one and replays it to any subscriber —
+even a brand-new gateway — the instant it connects.
+▶ **Expected result:** the gateway learns the entire warehouse layout with zero
+configuration. Plug in a new PC and it simply *appears* in `/v1/nodes` and
+`/v1/zones`; nothing on the server changes.
 
 ### M3 — Broker-down-safe startup
 **Problem:** if a node crashed because the broker wasn't up yet, deployment order
 would matter.
 **Method:** nodes connect with paho's `connect_async()` + `loop_start()` — a
 background thread retries forever; construction never blocks or raises.
-▶ **Expected result:** you can start the PCs and the server **in any order**. A
-node boots, runs its pipeline, and silently connects whenever the broker appears.
+▶ **Expected result:** start the PCs and the server in **any order**. A node boots,
+runs its pipeline, and silently connects whenever the broker appears.
 
-### M4 — QoS & retain tuned per message
+### M4 — QoS and retain tuned per message
 **Problem:** tracks are high-rate and disposable; config must never be missed.
-**Method:** tracks/passings/diagnostics use **QoS 0** (at-most-once — cheap,
-right for a 20 fps stream where the next message supersedes the last). `config`
-is **retained** so late subscribers still get it.
-▶ **Expected result:** track throughput stays cheap; a consumer that joins late
-still learns each node's identity immediately.
+**Method:** tracks, passings, and diagnostics use **QoS 0** (at-most-once — cheap,
+right for a 20 fps stream where the next message supersedes the last); `config` is
+**retained** (M2) so late subscribers still receive it.
+▶ **Expected result:** track throughput stays cheap, while a consumer that joins
+late still learns each node's identity immediately. (Whether safety-critical
+messages should move to QoS 1 is an open question — see §10.)
 
-### M5 — Liveness by heartbeat freshness
-**Problem:** how does the gateway know a PC went down (vs. just quiet)?
-**Method:** every node emits a `diagnostics` heartbeat every ~5 s. The gateway
-marks a node **`stale`** if its last heartbeat is older than `NODE_STALE_AFTER_S`
-(default 15 s).
+### M5 — Liveness and honest latency via heartbeat
+**Problem:** the gateway must tell a downed PC from a merely quiet one, and a
+manager must see *true* end-to-end latency, not latency hidden by measuring at
+publish time.
+**Method:** every node emits a `diagnostics` heartbeat about every 5 s carrying
+fps, source liveness, and latency. Latency is computed against the frame's
+**capture timestamp**, carried unchanged through the whole pipeline, so a consumer
+reading `now − ts` gets the real number. The gateway marks a node **`stale`** if
+its last heartbeat is older than `NODE_STALE_AFTER_S` (default 15 s).
 ▶ **Expected result:** kill a PC and within ~15 s `/v1/nodes` flips it
-`alive → stale`. (Verified live.)
+`alive → stale` (verified live); the heartbeat reports p50/p95/p99 latency.
 
 ### M6 — Fail-honestly isolation
 **Problem:** one bad message or one dead sink shouldn't cascade.
-**Method:** every publish and every inbound parse is wrapped `try/except` + log.
-Malformed/incompatible messages are counted, not fatal.
+**Method:** every publish and every inbound parse is wrapped in `try/except` + log;
+malformed or incompatible messages are counted, not fatal.
 ▶ **Expected result:** a corrupt packet, a dead broker, or one failing sink
 degrades silently; the pipeline and the gateway keep running.
 
 ### M7 — Identity-preserving degradation (Mode 2)
 **Problem:** a PC's second camera dies mid-shift.
 **Method:** the node keeps serving `track2d` from the surviving camera; `track3d`
-(which needs two views) simply stops matching. Track IDs persist across the
-drop/recovery.
-▶ **Expected result:** 3D output pauses cleanly; 2D output and identities
-continue; no restart, no crash.
+(which needs two views) simply stops matching, and track IDs persist across the
+drop and recovery.
+▶ **Expected result:** 3D output pauses cleanly while 2D output and identities
+continue — no restart, no crash.
 
-### M8 — Honest latency (capture-clock)
-**Problem:** latency measured at publish time hides the real pipeline cost.
-**Method:** every message's timestamp `ts` is the frame's **capture time**,
-carried unchanged through the whole pipeline.
-▶ **Expected result:** a consumer computing `now − ts` reads true end-to-end
-latency; the diagnostics heartbeat reports p50/p95/p99.
-
-### M9 — Media by reference, never by value
+### M8 — Media by reference, never by value
 **Problem:** JPEG bytes would bloat the bus and the broker.
-**Method:** snapshots are written locally; only an `image_ref` **URL** is
-published. Consumers fetch bytes out-of-band over HTTP/file.
-▶ **Expected result:** MQTT payloads stay small; media scales independently.
+**Method:** snapshots are written locally; only an `image_ref` **URL** is published,
+and consumers fetch the bytes out-of-band over HTTP/file.
+▶ **Expected result:** MQTT payloads stay small and media scales independently of
+the metadata bus.
 
-### M10 — Pluggable transport (the `MetadataSink` seam)
+### M9 — Pluggable transport (the `MetadataSink` seam)
 **Problem:** future deployments may want MQTT-over-WebSocket, ROS, or AMQP.
-**Method:** UDP and MQTT are both implementations of one ABC, `MetadataSink`;
-the orchestrator builds them from config. A node can run several at once
-(e.g. UDP→local dashboard **and** MQTT→central).
-▶ **Expected result:** a new transport is a new plugin — the schema, pipeline,
-and gateway are untouched.
+**Method:** UDP and MQTT are both implementations of one ABC, `MetadataSink`, that
+the orchestrator builds from config; a node can run several at once (e.g. UDP → a
+local dashboard **and** MQTT → the central broker).
+▶ **Expected result:** a new transport is a new plugin — the schema, pipeline, and
+gateway are untouched.
 
-### M11 — Lean, isolated gateway image
-**Problem:** the gateway shouldn't drag in CUDA/OpenCV/the whole vision stack.
-**Method:** the gateway imports only the schema + the zone geometry; the zone
-point-in-polygon test is pure-numpy (no OpenCV); a build allowlist + an
-import-discipline test keep the Docker image minimal.
-▶ **Expected result:** a ~300 MB gateway image that builds and runs anywhere,
-including a tiny cloud VM, with no GPU.
-
-### M12 — Schema versioning for rolling upgrades
-**Problem:** you can't restart every PC at once during an upgrade.
-**Method:** a single integer `schema_version` on the **payload**; consumers accept
-a set (currently `{3, 4}`); adding optional fields is non-breaking. This is the
-*content* axis — see M13 for the orthogonal *addressing* axis.
-▶ **Expected result:** mixed old/new nodes interoperate during a staged rollout.
-
-### M13 — Explicit `/v1` API + topic versioning
-**Problem:** `schema_version` evolves message *content*, but the *addressing* — the
-REST paths and the MQTT topic tree — had no version, so a future breaking change to
-the contract/shape of the API or topics couldn't run alongside the old one.
-**Method:** a second, orthogonal version axis, `TOPIC_VERSION = "v1"` (in
-`backbone/comms/schemas.py`, shared so node + gateway agree). Topics are namespaced
-`<base>/<version>/<node_id>/<suffix>` (e.g. `isi/v1/zone_a/track2d/person`); the
-operator sets the MQTT `prefix` to `isi/v1/<node_id>`. The gateway mounts every
-resource route under **`/v1`** (`/v1/nodes`, `/v1/tracks`, …) **and** keeps the bare
-paths (`/nodes`, …) as back-compat aliases; `/healthz` stays unversioned. The
-subscriber parses the version out of the topic (a `^v\d+$` segment after the base);
-an un-versioned legacy topic (`isi/<node_id>/...`) is still accepted and reported as
-`topic_version: "v0"`, and each node's `topic_version` is surfaced on `/v1/nodes`
-and `/v1/config`.
-▶ **Expected result:** **two independent version axes** — payload (`schema_version`)
-for content, path/topic (`/v1`, `isi/v1/...`) for addressing. A future **v2** lands
-without breaking anyone: nodes publish `isi/v2/...`; the gateway already parses any
-`v\d+` segment so it serves both trees at once; it mounts `/v2/...` alongside
-`/v1/...`; consumers migrate on their own schedule; `v1` is deprecated on a
-published date.
+### M10 — Versioning on two axes for rolling upgrades
+**Problem:** you can't restart every PC at once during an upgrade, and a future
+breaking change must run *alongside* the old contract — across both what messages
+*say* and how they're *addressed*.
+**Method:** two independent version axes.
+1. **Content** — a single integer `schema_version` on each payload; consumers
+   accept a set (currently `{3, 4}`), and adding optional fields is non-breaking.
+2. **Addressing** — `TOPIC_VERSION = "v1"` (shared in `backbone/comms/schemas.py`)
+   namespaces both the MQTT topics (`isi/v1/<node_id>/…`) and the REST paths
+   (`/v1/nodes`, …). The gateway parses any `v\d+` segment out of the topic and
+   mounts every resource route under its version prefix; bare paths (`/nodes`) stay
+   as back-compat aliases and `/healthz` stays unversioned. A legacy un-versioned
+   topic (`isi/<node_id>/…`) is still accepted and reported as `topic_version:
+   "v0"`.
+▶ **Expected result:** mixed old/new nodes interoperate during a staged rollout. A
+future **v2** lands without breaking anyone — nodes publish `isi/v2/…`, the gateway
+serves both trees and mounts `/v2/…` alongside `/v1/…`, and consumers migrate on
+their own schedule.
 
 ---
 
@@ -279,6 +327,31 @@ only tracks currently inside that polygon.
 The AGV polls `GET /v1/tracks` (or `?zone=`) on its own loop.
 ▶ **Expected:** the AGV sees a consistent, single-source view and steers around
 it — with no MQTT client and no awareness of how many PCs exist.
+
+#### The full consumer API surface
+
+Every GET an AGV or the WMS can call today, with its purpose:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /v1/nodes` | list every PC and its status (`alive`/`stale`), area, mode, cameras |
+| `GET /v1/tracks` | every tracked object warehouse-wide, each tagged with its `node_id` |
+| `GET /v1/tracks?node=<id>` | tracks from one PC only |
+| `GET /v1/tracks?cls=<class>` | tracks of one object class only (e.g. `person`) |
+| `GET /v1/tracks?zone=<name>` | tracks currently inside one zone's polygon |
+| `GET /v1/zones` | every zone defined across all PCs (the warehouse map) |
+| `GET /v1/passings` | recent enter/leave boundary-crossing events |
+| `GET /v1/passings?limit=<n>` | cap how many events come back |
+| `GET /v1/passings?node=<id>` | events from one PC only |
+| `GET /v1/diagnostics` | each PC's latest heartbeat (fps, latency, source liveness) |
+| `GET /v1/config` | each PC's retained self-description |
+| `GET /healthz` | gateway up-check (unversioned) |
+
+(The query filters compose: `GET /v1/tracks?cls=person&zone=dock_door`.)
+
+**Growth path.** New endpoints or changed response shapes are introduced under a
+**new version prefix** (`/v2/...`) served *alongside* `/v1` (per M10). Existing AGVs
+keep calling `/v1` and migrate to `/v2` on their own schedule — no flag day.
 
 ### Stage E — Failure: a PC drops
 ▶ **Expected:** within ~15 s that node flips to **`stale`** in `/v1/nodes`; its last
@@ -335,7 +408,7 @@ Validation was done at three levels. **All green.**
 | monitor_web (dashboard consumer) | **272** | the operator UI consumes the contract |
 
 ▶ **Result:** the *logic* of every component is correct in isolation. **Versioning
-(M13) is implemented and covered:** `test_app_versioning.py` asserts every resource
+(M10) is implemented and covered:** `test_app_versioning.py` asserts every resource
 route answers under `/v1` and the bare alias with identical shape (and `/healthz`
 both ways); the subscriber tests assert `isi/v1/zone_a/...` parses to
 `topic_version: "v1"` and legacy `isi/zone_a/...` to `"v0"`; `TOPIC_VERSION == "v1"`
@@ -382,7 +455,7 @@ end-to-end** (unit + live wire + containerised deploy). It is currently on the
 |---|---|
 | Node publishing (6 message types) | ✅ done + live-validated |
 | Central gateway + REST API | ✅ done + live-validated |
-| Versioning (M13: `/v1` API + `isi/v1/...` topics, `v0` legacy fallback) | ✅ done + unit-covered |
+| Versioning (M10: `/v1` API + `isi/v1/...` topics, `v0` legacy fallback) | ✅ done + unit-covered |
 | On-prem Docker deploy | ✅ stood up + validated |
 | Cloud (TLS) Docker deploy | 🟡 artifacts ready, live smoke pending |
 | Merge to `main` | 🟡 pending |
@@ -401,15 +474,32 @@ end-to-end** (unit + live wire + containerised deploy). It is currently on the
 ## 10. Request for comments
 
 Feedback sought on:
-1. **Cloud rollout** — do we pilot the on-prem profile first and defer cloud, or
-   smoke the TLS profile now?
-2. **Retention policy** — should `track2d`/`passing` use QoS 1 (at-least-once) for
-   any safety-critical AGV use, accepting the cost?
-3. **API surface** — are the current endpoints (`/v1/nodes /v1/tracks /v1/zones
-   /v1/passings /v1/diagnostics /v1/config`; bare aliases retained) sufficient for
-   the WMS/AGV integration, or is a push/streaming (WebSocket) variant wanted
-   alongside polling?
-4. **Auth** — is Bearer-token API auth + broker password/TLS sufficient for the
+
+1. **Delivery guarantee for safety-critical messages (QoS).** MQTT offers a choice
+   of delivery guarantee per message:
+   - **QoS 0 — at-most-once.** What tracks use today: the cheapest option, with no
+     acknowledgement. If a message is lost it is simply gone, which is fine for a
+     20 fps stream because the next position message (50 ms later) supersedes it.
+   - **QoS 1 — at-least-once.** The broker re-sends until the subscriber
+     acknowledges, *guaranteeing* delivery at the cost of extra traffic and the
+     possibility of duplicates the consumer must tolerate.
+
+   Separately, **retained** means the broker stores the *last* message on a topic
+   and hands it to any late subscriber — which is why `config` is retained (a new
+   gateway gets the layout instantly), but it is not the same as a delivery
+   guarantee for the *next* message.
+
+   **Open question:** should safety-critical, AGV-facing messages — notably
+   `passings` (e.g. a person *entering a danger zone*) — move to **QoS 1** for
+   guaranteed delivery, accepting the added cost and duplicate-handling, while the
+   high-rate `track2d`/`track3d` streams stay on **QoS 0**? This is a deliberate
+   trade the manager can weigh: guaranteed safety events vs. a busier bus.
+
+2. **API surface** — are the current endpoints (see §6, *The full consumer API
+   surface*) sufficient for the WMS/AGV integration, or is a push/streaming
+   (WebSocket) variant wanted alongside polling?
+
+3. **Auth** — is Bearer-token API auth + broker password/TLS sufficient for the
    site's network policy?
 
 ---
