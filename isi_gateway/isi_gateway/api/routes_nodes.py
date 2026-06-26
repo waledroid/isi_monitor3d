@@ -45,6 +45,7 @@ async def nodes(request: Request) -> JSONResponse:
             "node_id": node_id,
             "area": area,
             "status": status,
+            "topic_version": node.topic_version,
             "last_seen": node.last_seen,
             "mode": mode,
             "cameras": cameras,

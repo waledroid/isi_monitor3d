@@ -128,6 +128,51 @@ def test_stop_is_idempotent_without_start(sub):
 
 
 # ---------------------------------------------------------------------------
+# Version-aware topic parsing (versioned + legacy fallback)
+# ---------------------------------------------------------------------------
+
+def test_parse_topic_versioned(sub):
+    """isi/v1/zone_a/track2d/person → node_id=zone_a, version=v1."""
+    node_id, version = sub._parse_topic("isi/v1/zone_a/track2d/person")
+    assert node_id == "zone_a"
+    assert version == "v1"
+
+
+def test_parse_topic_legacy_unversioned(sub):
+    """Legacy isi/zone_a/track2d/person → node_id=zone_a, version=v0."""
+    node_id, version = sub._parse_topic("isi/zone_a/track2d/person")
+    assert node_id == "zone_a"
+    assert version == "v0"
+
+
+def test_parse_topic_malformed_returns_none(sub):
+    assert sub._parse_topic("isi") is None
+    assert sub._parse_topic("other/v1/zone_a/track2d") is None
+
+
+def test_versioned_message_stores_topic_version(sub):
+    """A versioned message recorded via the topic path sets topic_version on the node."""
+    msg = make_track2d(track_id=7)
+    sub.update_from_message("zone_a", msg, topic_version="v1")
+    node = sub.snapshot_nodes()["zone_a"]
+    assert node.topic_version == "v1"
+
+
+def test_legacy_message_defaults_topic_version_v0(sub):
+    msg = make_track2d(track_id=7)
+    sub.update_from_message("zone_a", msg, topic_version="v0")
+    node = sub.snapshot_nodes()["zone_a"]
+    assert node.topic_version == "v0"
+
+
+def test_update_from_message_default_topic_version(sub):
+    """Tests that omit topic_version still work (default v1)."""
+    sub.update_from_message("zone_a", make_track2d())
+    node = sub.snapshot_nodes()["zone_a"]
+    assert node.topic_version == "v1"
+
+
+# ---------------------------------------------------------------------------
 # TLS — ca_cert / tls_insecure wiring (paho mocked via autouse conftest)
 # ---------------------------------------------------------------------------
 

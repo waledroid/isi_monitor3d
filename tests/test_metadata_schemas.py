@@ -205,6 +205,13 @@ def test_schema_version_is_4() -> None:
     assert SCHEMA_VERSION == 4
 
 
+def test_topic_version_is_v1() -> None:
+    """Pin the current MQTT topic-contract version (shared by node + gateway)."""
+    from backbone.comms.schemas import TOPIC_VERSION
+
+    assert TOPIC_VERSION == "v1"
+
+
 def test_extra_fields_rejected() -> None:
     payload = json.loads(Track2DMessage.from_track(_track_2d()).model_dump_json())
     payload["unknown_field"] = "surprise"

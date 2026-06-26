@@ -19,6 +19,7 @@ async def config(request: Request) -> JSONResponse:
     for node_id, node_state in subscriber.snapshot_nodes().items():
         result.append({
             "node_id": node_id,
+            "topic_version": node_state.topic_version,
             "config": node_state.config.model_dump() if node_state.config else None,
         })
 

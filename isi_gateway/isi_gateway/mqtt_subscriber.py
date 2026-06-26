@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -34,6 +35,10 @@ from backbone.comms.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# Matches a topic version segment like "v1", "v2" — i.e. the optional segment
+# between <base> and <node_id> in <base>/<version>/<node_id>/<suffix>.
+_VERSION_RE = re.compile(r"^v\d+$")
+
 
 @dataclass
 class NodeState:
@@ -45,6 +50,7 @@ class NodeState:
     last_diagnostics: DiagnosticsMessage | None = None
     config: ConfigMessage | None = None
     last_seen: float = 0.0   # time.time() at last update
+    topic_version: str = "v1"  # topic-contract version this node publishes on
 
 
 @dataclass
@@ -160,6 +166,26 @@ class MqttSubscriber:
         else:
             logger.warning("mqtt_subscriber: connect result code %d — will retry", rc)
 
+    def _parse_topic(self, topic: str) -> tuple[str, str] | None:
+        """Derive ``(node_id, topic_version)`` from a topic, or ``None`` if malformed.
+
+        Two layouts are accepted so the gateway works across the version
+        transition:
+
+        * versioned ``<base>/v<N>/<node_id>/...`` → ``(node_id, "v<N>")``
+        * legacy   ``<base>/<node_id>/...``        → ``(node_id, "v0")``
+        """
+        parts = topic.split("/")
+        if len(parts) < 2 or parts[0] != self._base:
+            return None
+        if _VERSION_RE.match(parts[1]):
+            # versioned: <base>/<version>/<node_id>/...
+            if len(parts) < 3:
+                return None
+            return parts[2], parts[1]
+        # legacy unversioned: <base>/<node_id>/...
+        return parts[1], "v0"
+
     def _on_message(
         self,
         client: mqtt.Client,
@@ -167,15 +193,14 @@ class MqttSubscriber:
         m: mqtt.MQTTMessage,
     ) -> None:
         topic: str = m.topic
-        # Expect at least 2 segments: <base>/<node_id>/...
-        parts = topic.split("/")
-        if len(parts) < 2 or parts[0] != self._base:
+        parsed = self._parse_topic(topic)
+        if parsed is None:
             with self._lock:
                 self._stats.dropped_malformed += 1
             logger.debug("mqtt_subscriber: malformed topic %r", topic)
             return
 
-        node_id = parts[1]
+        node_id, topic_version = parsed
 
         try:
             payload_text = m.payload.decode("utf-8")
@@ -202,7 +227,7 @@ class MqttSubscriber:
             )
             return
 
-        self.update_from_message(node_id, msg)
+        self.update_from_message(node_id, msg, topic_version=topic_version)
 
     # ---- state mutation (no broker dependency — testable directly) --------
 
@@ -217,10 +242,14 @@ class MqttSubscriber:
             | DiagnosticsMessage
             | ConfigMessage
         ),
+        topic_version: str = "v1",
     ) -> None:
         """Fold one parsed message into the per-node cache.
 
         Thread-safe.  Called from the paho network thread or directly from tests.
+        ``topic_version`` is the topic-contract version derived from the MQTT
+        topic ("v1" for the current versioned layout, "v0" for legacy
+        unversioned topics).
         """
         with self._lock:
             self._stats.received += 1
@@ -231,6 +260,7 @@ class MqttSubscriber:
                 )
                 self._nodes[node_id] = node
             node.last_seen = time.time()
+            node.topic_version = topic_version
 
             if isinstance(msg, Track2DMessage):
                 node.last_track2d_by_id[msg.track_id] = msg
@@ -267,6 +297,7 @@ class MqttSubscriber:
                     last_diagnostics=node.last_diagnostics,
                     config=node.config,
                     last_seen=node.last_seen,
+                    topic_version=node.topic_version,
                 )
                 for node_id, node in self._nodes.items()
             }

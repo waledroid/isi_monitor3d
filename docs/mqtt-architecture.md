@@ -11,7 +11,7 @@ model, and a start-to-finish runbook.
 ```
  Warehouse PC 1            Warehouse PC 2            Warehouse PC 3
  Backbone node_id=zone_a   Backbone node_id=dock_1   Backbone node_id=cold_3
-        │ publish isi/zone_a/…    │ isi/dock_1/…            │ isi/cold_3/…
+        │ publish isi/v1/zone_a/… │ isi/v1/dock_1/…         │ isi/v1/cold_3/…
         └──────────┬──────────────┴─────────────┬───────────┘   MQTT over the LAN
                    ▼                             ▼
         ┌────────────────────────────────────────────────┐
@@ -19,7 +19,7 @@ model, and a start-to-finish runbook.
         │   • Mosquitto broker      :1883  (TLS :8883)     │  routes isi/#
         │   • isi-gateway REST API  :8080  (HTTPS :443)    │  caches per node_id
         └────────────────────────────────────────────────┘
-                   ▲  GET /nodes /tracks /zones /passings …
+                   ▲  GET /v1/nodes /v1/tracks /v1/zones /v1/passings …
             AGVs / WMS poll here (HTTP only)
 ```
 
@@ -145,6 +145,28 @@ renaming/removing is breaking and bumps the version. `parse_envelope` currently
 accepts `{3, 4}` so a v4 node and a v3 consumer interoperate during a rollout;
 anything outside that set raises `SchemaVersionError`.
 
+### Versioning — two independent axes
+
+The comms layer versions on **two orthogonal axes**, so message *content* and
+message *addressing* evolve independently:
+
+- **Payload — `schema_version`** (integer, in every envelope; `parse_envelope`
+  accepts `{3, 4}`). Governs the *content* of a message: adding/changing/removing
+  fields. Bumped only on a breaking payload change; additive fields don't bump it.
+- **Path / topic — `TOPIC_VERSION`** (`"v1"` in `backbone/comms/schemas.py`).
+  Governs the *contract/addressing*: the REST prefix (`/v1/...`) and the MQTT
+  topic tree (`isi/v1/...`). Lets `v1` and a future `v2` run side-by-side so
+  consumers migrate on their own schedule.
+
+**How a `v2` lands:** nodes set `prefix: isi/v2/<node_id>` and publish
+`isi/v2/...`; the gateway already parses any `v\d+` segment, so it serves both
+trees at once; the gateway mounts `/v2/...` alongside `/v1/...`; consumers migrate
+when ready; `v1` is deprecated on a published date.
+
+**`v0` legacy fallback:** the gateway still accepts un-versioned
+`isi/<node_id>/...` topics (no `v\d+` segment) during transition and reports those
+nodes as `topic_version: "v0"`.
+
 ---
 
 ## 3. The comms module — `backbone/comms/`
@@ -176,7 +198,7 @@ metadata:
     - plugin: mqtt       # network → central broker
       host: 192.168.2.39
       port: 1883
-      prefix: isi/zone_a
+      prefix: isi/v1/zone_a
 ```
 
 A non-abstract default no-op base keeps the seam count at five even though sinks
@@ -185,7 +207,8 @@ gained `publish_event` / `publish_image_ref` / `publish_diagnostics` /
 
 ### `MqttSink` behaviour (the details that matter operationally)
 
-- **Topic templates** (substituted per message; `prefix = isi/<node_id>`):
+- **Topic templates** (substituted per message; `prefix = isi/v1/<node_id>` =
+  `{base}/{TOPIC_VERSION}/{node_id}`):
   ```
   {prefix}/track2d/{cls}              {prefix}/diagnostics/heartbeat
   {prefix}/track3d/{cls}              {prefix}/config            (retain=True)
@@ -274,7 +297,7 @@ allow_anonymous true                # fine on a trusted LAN
 ```
 
 **The self-describing trick (why `persistence` + `retain` matter):** each node
-publishes its `config` retained to `isi/<node_id>/config`. The broker holds the
+publishes its `config` retained to `isi/v1/<node_id>/config`. The broker holds the
 latest one permanently. So when the gateway connects — first boot, reconnect, or
 a totally fresh gateway — and subscribes to `isi/#`, the broker **immediately
 replays every node's config**. The gateway learns the entire warehouse layout
@@ -288,11 +311,13 @@ PC and it simply *appears*; no registry, no node list to maintain.
 A small FastAPI service that turns the MQTT firehose into a poll-able API.
 
 ### Subscriber + cache — `mqtt_subscriber.py`
-- Subscribes `{base}/#` (`base = isi`), derives `node_id` from the topic
-  (`topic.split('/')[1]`), `parse_envelope`s each message, and updates a
-  **thread-safe per-node `NodeState`**: latest tracks (by id), a passings ring
-  buffer (`passings_buffer`, default 200), last diagnostics, the config advert,
-  and `last_seen`.
+- Subscribes `{base}/#` (`base = isi`, matches both `isi/v1/...` and legacy
+  `isi/...`), parses the topic version-aware: a segment after the base matching
+  `^v\d+$` is the `topic_version` and the next segment is `node_id`; a legacy
+  un-versioned topic is accepted as `topic_version = "v0"`. Each message is
+  `parse_envelope`d and folded into a **thread-safe per-node `NodeState`**: latest
+  tracks (by id), a passings ring buffer (`passings_buffer`, default 200), last
+  diagnostics, the config advert, `topic_version`, and `last_seen`.
 - `connect_async()` + `loop_start()` (broker-down-safe, same as the sink).
 - `snapshot_nodes()` copies the inner containers **under the lock** so a reader
   never sees a half-updated node.
@@ -300,21 +325,26 @@ A small FastAPI service that turns the MQTT firehose into a poll-able API.
 
 ### Liveness
 A node whose last heartbeat is older than `node_stale_after_s` (default **15 s**)
-flips `alive → stale` in `/nodes`. (Observed live: a stopped node goes stale.)
+flips `alive → stale` in `/v1/nodes`. (Observed live: a stopped node goes stale.)
 
 ### REST endpoints (`api/routes_*.py`)
 
+All resource routes mount under the **`/v1`** prefix (`API_VERSION` in
+`isi_gateway/config.py`) **and** at the bare path as back-compat aliases, so
+`/v1/nodes` and `/nodes` hit the same handler. `/healthz` stays unversioned (and
+also answers under `/v1`). Adding a future `/v2` is one extra include per router.
+
 | Endpoint | Returns |
 |---|---|
-| `GET /healthz` | liveness probe — never touches the broker |
-| `GET /nodes` | per-node summary: status, area, mode, cameras, fps, latency |
-| `GET /tracks` | all tracks, each tagged `node_id`; filters `?node=&cls=&zone=` |
-| `GET /zones` | union of all nodes' zones — the global warehouse map |
-| `GET /passings` | recent crossings; `?limit=&node=` |
-| `GET /diagnostics` | per-node heartbeats |
-| `GET /config` | each node's raw self-description |
+| `GET /healthz` | liveness probe — never touches the broker (unversioned) |
+| `GET /v1/nodes` | per-node summary: status, area, **topic_version**, mode, cameras, fps, latency |
+| `GET /v1/tracks` | all tracks, each tagged `node_id`; filters `?node=&cls=&zone=` |
+| `GET /v1/zones` | union of all nodes' zones — the global warehouse map |
+| `GET /v1/passings` | recent crossings; `?limit=&node=` |
+| `GET /v1/diagnostics` | per-node heartbeats |
+| `GET /v1/config` | each node's raw self-description (incl. `topic_version`) |
 
-`GET /tracks?zone=<name>` does a **point-in-polygon** test (`backbone.shared.zones
+`GET /v1/tracks?zone=<name>` does a **point-in-polygon** test (`backbone.shared.zones
 .Zone.contains`, pure-numpy so the gateway image stays lean) to return only
 tracks currently inside that zone — across all nodes.
 
@@ -395,7 +425,7 @@ metadata:
     - plugin: mqtt                    # → central server
       host: <server-ip>
       port: 1883
-      prefix: isi/zone_a              # = isi/<node_id>
+      prefix: isi/v1/zone_a           # = isi/<TOPIC_VERSION>/<node_id>
 ```
 Run it (under systemd in production):
 ```bash
@@ -410,22 +440,23 @@ For a **cloud** node, point the mqtt sink at `port: 8883`, add `tls: true`,
 
 ### Step 3 — AGVs / WMS consume the global picture
 ```bash
-curl http://<server-ip>:8080/nodes                       # who's online, where
-curl http://<server-ip>:8080/tracks                      # every track, all PCs
-curl "http://<server-ip>:8080/tracks?node=zone_a&cls=person"
-curl "http://<server-ip>:8080/tracks?zone=dock_door"     # tracks inside a zone
-curl http://<server-ip>:8080/zones                       # global warehouse map
+curl http://<server-ip>:8080/v1/nodes                    # who's online, where
+curl http://<server-ip>:8080/v1/tracks                   # every track, all PCs
+curl "http://<server-ip>:8080/v1/tracks?node=zone_a&cls=person"
+curl "http://<server-ip>:8080/v1/tracks?zone=dock_door"  # tracks inside a zone
+curl http://<server-ip>:8080/v1/zones                    # global warehouse map
 ```
-An AGV polls `/tracks` (or `/tracks?zone=…`) on its own loop and steers — no MQTT
+(The bare paths `/nodes`, `/tracks`, … remain as back-compat aliases.)
+An AGV polls `/v1/tracks` (or `/v1/tracks?zone=…`) on its own loop and steers — no MQTT
 client, no per-node awareness, one HTTP endpoint.
 
 ### Verify the whole chain
 ```bash
 # watch every node's traffic on the broker:
 mosquitto_sub -h <server-ip> -t 'isi/#' -v
-#  → isi/zone_a/config (retained) · isi/zone_a/diagnostics/heartbeat · isi/zone_a/track2d/person …
+#  → isi/v1/zone_a/config (retained) · isi/v1/zone_a/diagnostics/heartbeat · isi/v1/zone_a/track2d/person …
 # confirm the gateway reflects it:
-curl http://<server-ip>:8080/nodes      # zone_a present, status alive, mode, cameras
+curl http://<server-ip>:8080/v1/nodes   # zone_a present, status alive, topic_version, mode, cameras
 ```
 
 ---
@@ -434,7 +465,7 @@ curl http://<server-ip>:8080/nodes      # zone_a present, status alive, mode, ca
 
 To add an area: stand up one more PC, give it a **unique `node_id`**, point its
 mqtt sink at the same broker. It self-registers via its retained `config`, and
-`/nodes` grows by one. **Nothing on the server changes.** Identity stays unique
+`/v1/nodes` grows by one. **Nothing on the server changes.** Identity stays unique
 because everything is namespaced `(node_id, track_id)`.
 
 ---

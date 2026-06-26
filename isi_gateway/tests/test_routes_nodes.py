@@ -70,3 +70,26 @@ def test_nodes_no_config_fields_are_null(client):
     assert node["cameras"] == []
     assert node["latency_ms"] is None
     assert node["fps"] is None
+
+
+def test_nodes_surface_topic_version(client):
+    """/nodes reflects each node's topic_version."""
+    sub = client.app.state.subscriber
+    sub.update_from_message("node_a", make_track2d(), topic_version="v1")
+    sub.update_from_message("node_b", make_track2d(), topic_version="v0")
+
+    r = client.get("/nodes")
+    nodes = {n["node_id"]: n for n in r.json()["nodes"]}
+    assert nodes["node_a"]["topic_version"] == "v1"
+    assert nodes["node_b"]["topic_version"] == "v0"
+
+
+def test_nodes_v1_prefix_matches_bare_alias(client):
+    """/v1/nodes returns the same shape as the bare /nodes alias."""
+    sub = client.app.state.subscriber
+    sub.update_from_message("node_a", make_track2d())
+
+    bare = client.get("/nodes")
+    versioned = client.get("/v1/nodes")
+    assert versioned.status_code == 200
+    assert versioned.json() == bare.json()

@@ -6,12 +6,16 @@ Central cloud aggregator for the distributed ISI Monitor 3D deployment.
 
 N Backbone nodes (one per warehouse PC, each identified by a `node_id`) publish
 metric track, zone-passing, diagnostics, and config messages to a central MQTT
-broker under the topic tree `isi/<node_id>/{track2d/<cls>, track3d/<cls>,
-zones/<zone>/passings, images/<zone>/<id>, diagnostics/heartbeat, config}`.
+broker under the **version-namespaced** topic tree
+`isi/v1/<node_id>/{track2d/<cls>, track3d/<cls>, zones/<zone>/passings,
+images/<zone>/<id>, diagnostics/heartbeat, config}`. The `v1` segment is
+`TOPIC_VERSION` (`backbone/comms/schemas.py`) — the topic-contract version.
 
-The gateway subscribes to that broker, aggregates per-node state keyed by
-`node_id`, and serves a single polling REST API for free-moving AGVs and
-supervisory systems.
+The gateway subscribes `isi/#` and parses both the versioned layout
+(`isi/v1/<node_id>/...`) and legacy unversioned topics (`isi/<node_id>/...`,
+reported as `topic_version=v0`), aggregates per-node state keyed by `node_id`,
+and serves a single polling REST API for free-moving AGVs and supervisory
+systems.
 
 ## Run
 
@@ -33,15 +37,22 @@ All settings (see `isi_gateway/config.py`) use the `ISI_GATEWAY_` prefix.
 
 ## API endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | /healthz | Liveness probe — never touches the broker |
-| GET | /nodes | Per-node summary (alive/stale, mode, cameras, latency/fps) |
-| GET | /tracks | Flat track list with node_id tag; filters: `?node=&cls=&zone=` |
-| GET | /diagnostics | Per-node diagnostics heartbeat |
-| GET | /passings | Recent zone-passing events; filters: `?limit=&node=` |
-| GET | /zones | Union of all nodes' config zones (global warehouse map) |
-| GET | /config | Per-node raw config advertisement |
+All resource routes are mounted under the **`/v1`** prefix (`API_VERSION` in
+`isi_gateway/config.py`) and **also** at the bare path as back-compat aliases, so
+`/v1/nodes` and `/nodes` serve the same handler. `/healthz` is available both
+un-prefixed and under `/v1`.
+
+| Method | Path (versioned) | Bare alias | Description |
+|--------|------|------|-------------|
+| GET | /healthz | /healthz | Liveness probe — never touches the broker |
+| GET | /v1/nodes | /nodes | Per-node summary (alive/stale, **topic_version**, mode, cameras, latency/fps) |
+| GET | /v1/tracks | /tracks | Flat track list with node_id tag; filters: `?node=&cls=&zone=` |
+| GET | /v1/diagnostics | /diagnostics | Per-node diagnostics heartbeat |
+| GET | /v1/passings | /passings | Recent zone-passing events; filters: `?limit=&node=` |
+| GET | /v1/zones | /zones | Union of all nodes' config zones (global warehouse map) |
+| GET | /v1/config | /config | Per-node raw config advertisement (incl. `topic_version`) |
+
+Adding a future `/v2` is a one-line extra include per router in `app.py`.
 
 Optional bearer-token auth: set `ISI_GATEWAY_API_TOKEN` — all routes except
 `/healthz` require `Authorization: Bearer <token>` when set.
@@ -70,7 +81,7 @@ docker compose -f deploy/cloud/docker-compose.yml up -d --build
 The gateway image (`isi_gateway/Dockerfile`) builds from the repo root because it
 needs the backbone package for `backbone.comms.schemas` + `backbone.shared.zones`
 (base deps only — no CUDA/OpenCV/GStreamer). Each warehouse-PC Backbone points its
-mqtt sink at this broker (`host: <server>`, `prefix: isi/<node_id>`); the gateway
+mqtt sink at this broker (`host: <server>`, `prefix: isi/v1/<node_id>`); the gateway
 auto-discovers nodes from their retained `config` adverts. See
 `docs/architecture-distributed.md` for the full topology + topic map.
 

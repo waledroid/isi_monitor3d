@@ -16,7 +16,7 @@ from .api import (
     routes_tracks,
     routes_zones,
 )
-from .config import Settings
+from .config import API_VERSION, Settings
 from .mqtt_subscriber import MqttSubscriber
 
 logger = logging.getLogger(__name__)
@@ -66,12 +66,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def _favicon() -> Response:
         return Response(status_code=204)
 
+    # Resource routers are mounted twice: under the versioned prefix
+    # (``/v1/nodes`` …) and bare (``/nodes`` …) as back-compat aliases so the
+    # monitor_web proxy and existing consumers keep working during transition.
+    # Adding ``/v2`` later is one extra include line per router.
+    _resource_routers = (
+        routes_nodes.router,
+        routes_tracks.router,
+        routes_diagnostics.router,
+        routes_passings.router,
+        routes_zones.router,
+        routes_config.router,
+    )
+    version_prefix = f"/{API_VERSION}"
+    for r in _resource_routers:
+        app.include_router(r, prefix=version_prefix)
+        app.include_router(r)  # bare alias
+
+    # /healthz stays available un-prefixed (and also under /v1).
     app.include_router(routes_health.router)
-    app.include_router(routes_nodes.router)
-    app.include_router(routes_tracks.router)
-    app.include_router(routes_diagnostics.router)
-    app.include_router(routes_passings.router)
-    app.include_router(routes_zones.router)
-    app.include_router(routes_config.router)
+    app.include_router(routes_health.router, prefix=version_prefix)
 
     return app

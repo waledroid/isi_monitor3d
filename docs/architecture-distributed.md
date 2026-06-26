@@ -29,21 +29,26 @@ areas and pull the global picture from that one API.
 
 ## Identity & topics
 
-Each node has a unique **`node_id`** (e.g. `zone_a`). Its MQTT sink `prefix` is
-`isi/<node_id>`, so everything it emits is namespaced:
+Each node has a unique **`node_id`** (e.g. `zone_a`). Topics carry an explicit
+**topic version** (`TOPIC_VERSION` in `backbone/comms/schemas.py`, currently `v1`)
+between the base and the node id, so its MQTT sink `prefix` is `isi/v1/<node_id>`
+and everything it emits is namespaced `<base>/<version>/<node_id>/<suffix>`:
 
 | Topic | Payload | Notes |
 |---|---|---|
-| `isi/<node_id>/track2d/<cls>` | `Track2DMessage` | per detection class |
-| `isi/<node_id>/track3d/<cls>` | `Track3DMessage` | subscribed tracks (Mode 2) |
-| `isi/<node_id>/zones/<zone>/passings` | `PassingEventMessage` | zone enter/leave |
-| `isi/<node_id>/images/<zone>/<id>` | `ImageRefMessage` | URL only, never bytes |
-| `isi/<node_id>/diagnostics/heartbeat` | `DiagnosticsMessage` | every ~5 s — node liveness |
-| `isi/<node_id>/config` | `ConfigMessage` | **retained**, once at startup — zones/cameras/mode |
+| `isi/v1/<node_id>/track2d/<cls>` | `Track2DMessage` | per detection class |
+| `isi/v1/<node_id>/track3d/<cls>` | `Track3DMessage` | subscribed tracks (Mode 2) |
+| `isi/v1/<node_id>/zones/<zone>/passings` | `PassingEventMessage` | zone enter/leave |
+| `isi/v1/<node_id>/images/<zone>/<id>` | `ImageRefMessage` | URL only, never bytes |
+| `isi/v1/<node_id>/diagnostics/heartbeat` | `DiagnosticsMessage` | every ~5 s — node liveness |
+| `isi/v1/<node_id>/config` | `ConfigMessage` | **retained**, once at startup — zones/cameras/mode |
 
 Each Backbone owns its **own `track_id` space**, so global identity is
-`(node_id, track_id)`. The gateway derives `node_id` from the topic (segment after
-the base) and tags every aggregated item with it.
+`(node_id, track_id)`. The gateway subscribes `<base>/#` and parses the version +
+`node_id` out of the topic: a segment matching `^v\d+$` after the base is the
+topic version (next segment is `node_id`); a legacy unversioned `isi/<node_id>/...`
+topic is accepted as `version=v0`. Every aggregated item is tagged with `node_id`,
+and each node's `topic_version` is surfaced on `/nodes` (and `/config`).
 
 **Self-describing nodes:** the retained `config` advert means a freshly-started
 gateway (or one that reconnects) learns each node's zones/cameras/mode with **zero
@@ -61,7 +66,7 @@ metadata:
     - plugin: mqtt
       host: <central-broker-host>
       port: 1883
-      prefix: isi/zone_a               # = isi/<node_id>
+      prefix: isi/v1/zone_a            # = isi/<TOPIC_VERSION>/<node_id>
   diagnostics: { enabled: true, interval_sec: 5.0, rms_gate_px: 2.0 }
 ```
 
@@ -79,7 +84,7 @@ metadata:
       ca_cert: /etc/isi/ca.crt         # distributed from deploy/cloud/certs/ca.crt
       username: <MQTT_USERNAME>
       password: <MQTT_PASSWORD>
-      prefix: isi/zone_a               # = isi/<node_id>
+      prefix: isi/v1/zone_a            # = isi/<TOPIC_VERSION>/<node_id>
   diagnostics: { enabled: true, interval_sec: 5.0, rms_gate_px: 2.0 }
 ```
 

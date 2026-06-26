@@ -8,6 +8,11 @@ from __future__ import annotations
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+API_VERSION = "v1"
+"""REST API version prefix. All resource routers mount under ``/<API_VERSION>``
+(e.g. ``/v1/nodes``); the bare paths (``/nodes``) remain as back-compat aliases.
+Adding ``/v2`` later is a one-line extra include in ``app.py``."""
+
 
 class Settings(BaseSettings):
     """All knobs for ``isi-gateway``. Override via ``ISI_GATEWAY_*`` env vars."""

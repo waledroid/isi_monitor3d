@@ -27,6 +27,16 @@ intentionally separate so internal refactors don't break the bus contract.
 Versioning: ``schema_version`` is a single integer that consumers MUST read
 before parsing further. Bump on any breaking change. Adding fields is
 non-breaking if they're optional and default-valued; renaming or removing is.
+
+MQTT topic convention (orthogonal to ``schema_version``): topics are namespaced
+``<base>/<version>/<node_id>/<suffix>`` — e.g. ``isi/v1/zone_a/track2d/person``.
+``base`` is the deployment root (default ``isi``), ``version`` is ``TOPIC_VERSION``
+below, ``node_id`` identifies the publishing Backbone, and ``suffix`` is the
+per-message-type tail (``track2d/<cls>``, ``config``, ``diagnostics/heartbeat``,
+…). The version lives in the operator-set MQTT ``prefix`` (``isi/v1/<node_id>``);
+``MqttSink`` keeps a freeform ``prefix`` and does not parse it. The gateway
+subscriber parses the version segment back out (and falls back to ``v0`` for
+legacy unversioned ``isi/<node_id>/...`` topics during transition).
 """
 
 from __future__ import annotations
@@ -47,6 +57,14 @@ v4: added ``PassingEventMessage`` (zone entry/leave events, Phase B). All prior
 message shapes are unchanged; ``parse_envelope`` accepts both v3 and v4."""
 
 _ACCEPTED_VERSIONS = frozenset({3, 4})
+
+TOPIC_VERSION = "v1"
+"""Current MQTT topic-contract version, shared so node + gateway agree.
+
+Embedded in the topic tree as ``<base>/<version>/<node_id>/<suffix>`` (the
+operator sets the MQTT sink ``prefix`` to ``isi/v1/<node_id>``). Independent of
+``SCHEMA_VERSION`` (the payload contract): a topic-layout change bumps this; a
+payload-shape change bumps ``SCHEMA_VERSION``."""
 
 
 class MessageType(str, Enum):
