@@ -126,6 +126,31 @@ The central server here (192.168.2.39) runs the `deploy/` Docker compose stack
 (Mosquitto + gateway). The warehouse PCs (192.168.2.41/.42) point their MQTT sink
 at `192.168.2.39:1883`; the AGVs poll `http://192.168.2.39:8080/v1/...`.
 
+### Containerized deployment
+
+On the central server the broker and gateway run as **two Docker containers**,
+orchestrated with Docker Compose (the profiles live under `deploy/`). The
+warehouse PCs run only the Backbone and connect over the LAN — they are **not**
+part of this stack.
+
+| Container | Image | Port(s) | Role |
+|---|---|---|---|
+| `mosquitto` | `eclipse-mosquitto:2` | 1883 (TLS 8883) | the MQTT broker; **persistence on** so retained `config` adverts survive a restart |
+| `gateway` | `isi-gateway` (custom, ≈300 MB, `python:3.10-slim`) | 8080 (HTTPS 443 via Caddy, cloud) | subscribes to the broker, caches per node, serves the REST API |
+
+Two profiles ship under `deploy/`:
+
+- **On-prem (LAN):** plaintext broker `:1883` + gateway `:8080`, anonymous — for a
+  trusted network.
+  Bring it up with `docker compose -f deploy/onprem/docker-compose.yml up -d`.
+- **Cloud (internet-facing):** broker over **TLS `:8883`** with authentication, the
+  gateway behind a **Caddy** reverse proxy on `:443` with a Bearer token
+  (`deploy/cloud/`).
+
+Both containers run `restart: unless-stopped`, so they return after a reboot.
+Deploying a new monitoring zone needs **no change to this stack** — only a new
+Backbone PC pointed at the broker (§6).
+
 ---
 
 ## 4. System breakdown — high to low
