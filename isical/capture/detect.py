@@ -23,6 +23,27 @@ import numpy as np
 _APRILTAG_DICT = "DICT_APRILTAG_36h11"
 
 
+def preprocess_for_tags(frame_bgr: np.ndarray, *, clahe: bool = True,
+                        clip: float = 2.0, grid: int = 8) -> np.ndarray:
+    """Grayscale (+ optional CLAHE) to boost small/far AprilTag detection.
+
+    CLAHE (contrast-limited adaptive histogram equalization) lifts low-contrast far
+    tags without moving their corners (it only remaps intensities), so the corners
+    Multical later re-detects on the SAME preprocessed pixels stay sub-pixel-faithful.
+    Returns a single-channel uint8 image. Apply this consistently in the capture gate
+    AND when writing the shot to disk, so what you capture is what solves.
+    """
+    if frame_bgr.ndim == 3:
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = frame_bgr
+    if not clahe:
+        return gray
+    g = max(1, int(grid))
+    eq = cv2.createCLAHE(clipLimit=float(clip), tileGridSize=(g, g))
+    return eq.apply(gray)
+
+
 @dataclass
 class Detection:
     """One frame's detection result + quality scores (normalized 0..1 coords)."""
@@ -72,15 +93,32 @@ class CharucoBoardDetector:
 
 
 class AprilTagDetector:
-    """AprilTag (36h11) tag-count detection for the extrinsic-phase auto-snap trigger."""
+    """AprilTag (36h11) tag-count detection for the extrinsic-phase auto-snap trigger.
 
-    def __init__(self) -> None:
+    Tunables favour small/far-tag detection over speed (the calibration use-case):
+    ``quad_decimate=1.0`` (no downscale → tiny tags survive) plus an optional CLAHE
+    contrast pass applied via :func:`preprocess_for_tags`. The same preprocessing is
+    written to disk for the solve, so the gate and Multical see identical pixels.
+    """
+
+    def __init__(self, *, quad_decimate: float = 1.0, clahe: bool = True,
+                 clahe_clip: float = 2.0, clahe_grid: int = 8) -> None:
+        self._clahe = clahe
+        self._clahe_clip = clahe_clip
+        self._clahe_grid = clahe_grid
         d = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, _APRILTAG_DICT))
         params = cv2.aruco.DetectorParameters()
+        # quad_decimate downscales before quad detection; 1.0 keeps full resolution so
+        # small/far tags are still found (slower, but calibration is not real-time).
+        try:
+            params.aprilTagQuadDecimate = float(quad_decimate)
+        except AttributeError:
+            pass
         self._detector = cv2.aruco.ArucoDetector(d, params)
 
     def detect(self, frame_bgr: np.ndarray) -> Detection:
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        gray = preprocess_for_tags(frame_bgr, clahe=self._clahe,
+                                   clip=self._clahe_clip, grid=self._clahe_grid)
         h, w = gray.shape[:2]
         corners, ids, _ = self._detector.detectMarkers(gray)
         det = Detection(blur_var=float(cv2.Laplacian(gray, cv2.CV_64F).var()))

@@ -414,6 +414,13 @@ label.chip input, .toolbar label input {
   text-shadow: 0 0 10px rgba(46, 213, 115, 0.2);
 }
 
+/* live capture: per-camera count line goes red when 0 tags/corners detected,
+   so the operator instantly sees a board that's too small/far to register. */
+.counts.no-det { color: var(--bad); font-weight: 600; }
+
+.pairs-label { display: inline-flex; align-items: center; gap: 6px; }
+.pairs-label input[type="number"] { width: 4.5em; }
+
 /* ---------------- Project Dashboard ---------------- */
 
 .project-list {

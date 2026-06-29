@@ -6,9 +6,11 @@ import cv2
 import numpy as np
 
 from isical.capture.detect import (
+    AprilTagDetector,
     CharucoBoardDetector,
     Detection,
     SnapGate,
+    preprocess_for_tags,
 )
 from isical.core.project import BoardSpec, charuco_spec
 
@@ -32,6 +34,38 @@ def test_charuco_detector_finds_corners():
 def test_charuco_detector_blank_is_empty():
     spec = charuco_spec(BoardSpec())
     d = CharucoBoardDetector(spec).detect(np.zeros((480, 640, 3), np.uint8))
+    assert d.n == 0 and d.corners_px is None
+
+
+def _render_apriltag(px=240) -> np.ndarray:
+    """Render one 36h11 AprilTag marker centred on a low-contrast gray field."""
+    d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)
+    marker = cv2.aruco.generateImageMarker(d, 0, px)
+    bgr = cv2.cvtColor(marker, cv2.COLOR_GRAY2BGR)
+    canvas = np.full((px + 120, px + 120, 3), 150, np.uint8)   # gray surround
+    canvas[60:60 + px, 60:60 + px] = bgr
+    return canvas
+
+
+def test_preprocess_for_tags_is_corner_preserving():
+    bgr = _render_apriltag()
+    g = preprocess_for_tags(bgr, clahe=True, clip=2.0, grid=8)
+    assert g.ndim == 2 and g.shape == bgr.shape[:2]    # same geometry, single channel
+    assert g.dtype == np.uint8
+    # CLAHE without clahe flag is plain grayscale (still single channel, same shape)
+    g0 = preprocess_for_tags(bgr, clahe=False)
+    assert g0.ndim == 2 and g0.shape == bgr.shape[:2]
+
+
+def test_apriltag_detector_finds_tag():
+    det = AprilTagDetector(quad_decimate=1.0, clahe=True)
+    d = det.detect(_render_apriltag())
+    assert d.n >= 1 and d.corners_px is not None
+    assert d.centroid is not None
+
+
+def test_apriltag_detector_blank_is_empty():
+    d = AprilTagDetector().detect(np.zeros((240, 320, 3), np.uint8))
     assert d.n == 0 and d.corners_px is None
 
 

@@ -21,6 +21,10 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Floor for the operator-settable extrinsic pair target — fewer than this and the
+# rig BA is too poorly conditioned to trust.
+EXTRINSIC_TARGET_MIN = 4
+
 CALIB_YAML = "calib.yaml"
 _ISICAL_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_PATH = _ISICAL_ROOT / "configs" / "calib_template.yaml"
@@ -69,12 +73,22 @@ class CaptureSpec(BaseModel):
 
     model_config = ConfigDict(extra="allow")
     target_per_camera: int = 25       # intrinsic shots wanted per camera
-    extrinsic_target: int = 20        # synchronized extrinsic pairs wanted
+    extrinsic_target: int = 10        # synchronized extrinsic pairs wanted (operator-settable)
     min_charuco_corners: int = 12     # auto-snap only with ≥ this many ChArUco corners
     min_april_tags: int = 4           # auto-snap only with ≥ this many AprilTags (per cam)
     blur_min_var: float = 80.0        # Laplacian variance floor (reject blur)
     steady_max_motion: float = 2.5    # max mean board-corner motion (px) to count "steady"
     novelty_min_dist: float = 0.06    # min normalized board-centroid move vs kept shots
+    # --- detection-boost for small/far AprilTags (favours detection over speed) ---
+    tag_clahe: bool = True            # grayscale + CLAHE before AprilTag detection
+    tag_clahe_clip: float = 2.0       # CLAHE clip limit
+    tag_clahe_grid: int = 8           # CLAHE tile grid (NxN)
+    tag_quad_decimate: float = 1.0    # AprilTag quad_decimate (1.0 = no downscale → small tags)
+
+    @field_validator("extrinsic_target")
+    @classmethod
+    def _floor_extrinsic_target(cls, v: int) -> int:
+        return max(EXTRINSIC_TARGET_MIN, int(v))
 
 
 class CalibConfig(BaseModel):

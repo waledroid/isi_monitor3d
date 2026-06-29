@@ -27,9 +27,16 @@ board:
 # Auto-snap thresholds for the live capture loop.
 capture:
   target_per_camera: 25      # intrinsic ChArUco shots wanted per camera
-  extrinsic_target: 20       # synchronized extrinsic pairs wanted
+  extrinsic_target: 10       # synchronized extrinsic pairs wanted (operator-settable, min 4)
   min_charuco_corners: 12    # snap only with >= this many ChArUco corners
   min_april_tags: 4          # snap only with >= this many AprilTags (per camera)
   blur_min_var: 80.0         # Laplacian-variance floor (reject motion blur)
   steady_max_motion: 2.5     # max mean board-corner motion (px) to count as steady
   novelty_min_dist: 0.06     # min normalized board-centroid move vs already-kept shots
+  # Detection-boost for small/far AprilTags (favours detection over speed). The same
+  # preprocessing is written to disk for the extrinsic shots, so Multical re-detects
+  # tags on identical pixels (what you capture is what solves).
+  tag_clahe: true            # grayscale + CLAHE contrast before AprilTag detection
+  tag_clahe_clip: 2.0        # CLAHE clip limit
+  tag_clahe_grid: 8          # CLAHE tile grid (NxN)
+  tag_quad_decimate: 1.0     # AprilTag quad_decimate (1.0 = full res -> tiny tags survive)

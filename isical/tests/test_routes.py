@@ -50,6 +50,22 @@ def test_extrinsic_capture_needs_two_cameras():
         assert r.status_code == 422                       # extrinsic needs both cams
 
 
+def test_capture_config_get_and_put_with_floor():
+    from isical.core.project import EXTRINSIC_TARGET_MIN, load_project
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        cfg = c.get("/api/p/rig/capture-config").json()
+        assert cfg["extrinsic_target"] == 10                 # new lower default
+        assert cfg["extrinsic_target_min"] == EXTRINSIC_TARGET_MIN
+        # set a custom (valid) target → persisted to calib.yaml
+        r = c.put("/api/p/rig/capture-config", json={"extrinsic_target": 8})
+        assert r.status_code == 200 and r.json()["extrinsic_target"] == 8
+        assert load_project(Settings().data_dir / "rig").capture.extrinsic_target == 8
+        # below the floor is rejected at the schema (422)
+        assert c.put("/api/p/rig/capture-config",
+                     json={"extrinsic_target": 1}).status_code == 422
+
+
 def test_run_unknown_phase_404():
     with _client() as c:
         c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})

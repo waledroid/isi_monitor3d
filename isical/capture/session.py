@@ -24,7 +24,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .detect import AprilTagDetector, CharucoBoardDetector, SnapGate, draw_hud
+from .detect import (
+    AprilTagDetector,
+    CharucoBoardDetector,
+    SnapGate,
+    draw_hud,
+    preprocess_for_tags,
+)
 
 _PAIR_WINDOW_S = 0.5      # both cameras must gate-pass within this window for a pair
 
@@ -79,8 +85,9 @@ def grab_floor_shot(project_dir: Path, cfg, camera_id: str, *,
         except Exception:
             pass
     if best is None:
-        raise ValueError("no ChArUco board detected on the floor — lay the board flat in "
-                         "view of the camera and try again")
+        raise ValueError("no ChArUco board detected on the floor — place the ChArUco board on "
+                         "the floor LEANED ~20-40° (not flat — a leaned board gives a better "
+                         "PnP pose and detects more reliably at distance) and try again")
     out = Path(project_dir) / "floor" / f"{camera_id}.jpg"
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), best[0])
@@ -132,7 +139,12 @@ class _CamWorker:
             self._min = cap.min_charuco_corners
             self.target = cap.target_per_camera
         else:
-            self._detector = AprilTagDetector()
+            self._detector = AprilTagDetector(
+                quad_decimate=getattr(cap, "tag_quad_decimate", 1.0),
+                clahe=getattr(cap, "tag_clahe", True),
+                clahe_clip=getattr(cap, "tag_clahe_clip", 2.0),
+                clahe_grid=getattr(cap, "tag_clahe_grid", 8),
+            )
             self._min = cap.min_april_tags
             self.target = cap.extrinsic_target
         self._gate = SnapGate(min_detections=self._min, blur_min_var=cap.blur_min_var,
@@ -162,10 +174,26 @@ class _CamWorker:
     def _save(self, raw: np.ndarray, det) -> None:
         idx = self.count
         path = self.out_dir / f"{self.camera_id}_{idx:03d}.jpg"
-        cv2.imwrite(str(path), raw)
+        cv2.imwrite(str(path), self._image_for_disk(raw))
         _write_shot_meta(path, det)
         self.count += 1
         self._gate.note_kept(det)
+
+    def _image_for_disk(self, raw: np.ndarray) -> np.ndarray:
+        """Image actually written to disk. For extrinsic shots, persist the SAME
+        CLAHE/grayscale preprocessing the gate detected on, so Multical re-detects
+        tags on identical pixels (what you capture is what solves). Intrinsic shots
+        stay raw BGR (ChArUco intrinsics want the original image)."""
+        if self.session.phase != "extrinsic":
+            return raw
+        cap = self.session.cfg.capture
+        if not getattr(cap, "tag_clahe", True):
+            return raw
+        return preprocess_for_tags(
+            raw, clahe=True,
+            clip=getattr(cap, "tag_clahe_clip", 2.0),
+            grid=getattr(cap, "tag_clahe_grid", 8),
+        )
 
     def _run(self) -> None:
         try:

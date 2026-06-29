@@ -21,6 +21,10 @@
       {% for c in cameras %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
     </select>
     {% else %}
+    <label class="pairs-label">pairs:
+      <input id="extrinsic-target" type="number" min="{{ extrinsic_target_min }}"
+             value="{{ extrinsic_target }}" step="1">
+    </label>
     <button id="cap-start">Start capture</button>
     {% endif %}
     <button id="cap-stop" disabled>Stop</button>
@@ -29,8 +33,9 @@
   </div>
   {% if phase == "extrinsic" %}
   <div id="floor-prompt" class="floor-prompt" hidden>
-    <p class="floor-prompt-head">Captures complete — lay the ChArUco board flat on the floor
-      and capture one shot per camera (the world anchor for extrinsics).</p>
+    <p class="floor-prompt-head">Captures complete — place the <b>ChArUco</b> board on the floor
+      (lean it ~20–40°, not flat — a leaned board gives a better world-anchor pose) and capture
+      one shot per camera (the world anchor for extrinsics).</p>
     <p id="floor-prompt-done" class="msg ok" hidden>Floor shots ready — go to the board and Solve.</p>
   </div>
   <div class="toolbar" id="floor-tools">

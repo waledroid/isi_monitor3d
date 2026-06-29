@@ -8,6 +8,7 @@ const startBtn = document.getElementById("cap-start");      // extrinsic only
 const stopBtn = document.getElementById("cap-stop");
 const restartBtn = document.getElementById("cap-restart");
 const camSelect = document.getElementById("cam-select");    // intrinsic only
+const targetInput = document.getElementById("extrinsic-target");  // extrinsic only
 let statusTimer = null;
 const shownGallery = new Set();   // cams already swapped from live → gallery (one-shot)
 let floorPromptShown = false;     // extrinsic: prompt revealed once captures complete (one-shot)
@@ -96,7 +97,13 @@ async function pollStatus() {
     if (!s.active) return;
     for (const [cam, c] of Object.entries(s.cameras || {})) {
       const el = document.querySelector(`.counts[data-cam="${cam}"]`);
-      if (el) el.textContent = `${c.count}/${c.target} · ${c.status} · ${c.detections} det`;
+      // Live per-frame tag/corner count — instant feedback on whether the board
+      // placement/size is being detected (extrinsic: "tags", intrinsic: "corners").
+      const unit = phase === "extrinsic" ? "tags" : "corners";
+      if (el) {
+        el.textContent = `${c.count}/${c.target} · ${c.status} · ${c.detections} ${unit}`;
+        el.classList.toggle("no-det", (c.detections || 0) === 0);
+      }
       if (phase === "intrinsic" && cam === activeCam() && c.count >= c.target && !shownGallery.has(cam)) {
         shownGallery.add(cam);
         await stopCapture();
@@ -157,7 +164,20 @@ function running(on) {
   if (camSelect) camSelect.disabled = on && phase === "intrinsic" ? false : camSelect.disabled;
 }
 
+// Persist the operator-chosen extrinsic pair count before (re)starting capture.
+async function saveExtrinsicTarget() {
+  if (phase !== "extrinsic" || !targetInput) return;
+  const v = parseInt(targetInput.value, 10);
+  if (!Number.isFinite(v)) return;
+  const floor = parseInt(targetInput.min, 10) || 4;
+  const target = Math.max(floor, v);
+  targetInput.value = target;
+  try { await sendJSON(`/api/p/${project}/capture-config`, "PUT", { extrinsic_target: target }); }
+  catch { /* keep going with the stored value */ }
+}
+
 async function startCapture(restart = false) {
+  await saveExtrinsicTarget();
   const verb = restart ? "restart" : "start";
   try {
     await sendJSON(`/api/p/${project}/capture/${phase}/${verb}${camQuery()}`, "POST", {});

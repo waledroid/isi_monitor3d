@@ -119,6 +119,39 @@ def test_grab_floor_shot_no_board(tmp_path, monkeypatch):
                                  settle_frames=2)
 
 
+def test_extrinsic_disk_image_is_clahe_grayscale(tmp_path, monkeypatch):
+    """Extrinsic shots are written with the SAME CLAHE/grayscale preprocessing the
+    gate detects on, so Multical re-detects tags on identical pixels."""
+    monkeypatch.setattr(sess_mod, "AprilTagDetector", _StubCharuco)
+    from isical.core.project import CameraSpec, create_project, load_project
+    cams = {"cam_a": CameraSpec(id="cam_a", url="rtsp://x/a"),
+            "cam_b": CameraSpec(id="cam_b", url="rtsp://x/b")}
+    pdir = create_project(tmp_path / "data", "rig", cams)
+    cfg = load_project(pdir)
+    s = sess_mod.CaptureSession(pdir, cfg, "extrinsic",
+                                source_factory=lambda spec, cid: _StubSource(0))
+    w = s.workers["cam_a"]
+    # a colour gradient frame → disk image must be effectively single-channel (gray)
+    raw = np.dstack([
+        np.tile(np.arange(160, dtype=np.uint8), (120, 1)),
+        np.full((120, 160), 30, np.uint8),
+        np.full((120, 160), 200, np.uint8),
+    ])
+    out = w._image_for_disk(raw)
+    assert out.ndim == 2                       # grayscale written to disk
+    assert out.shape == raw.shape[:2]          # geometry preserved (corners intact)
+
+
+def test_intrinsic_disk_image_stays_raw(tmp_path, monkeypatch):
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    pdir, cfg = _project(tmp_path)
+    s = sess_mod.CaptureSession(pdir, cfg, "intrinsic",
+                                source_factory=lambda spec, cid: _StubSource(0))
+    raw = np.full((120, 160, 3), 80, np.uint8)
+    out = s.workers["cam_a"]._image_for_disk(raw)
+    assert out.ndim == 3 and out is raw        # intrinsic untouched (raw BGR)
+
+
 def test_wipe_phase_captures(tmp_path):
     from isical.capture.session import wipe_phase_captures
     pdir, _cfg = _project(tmp_path)

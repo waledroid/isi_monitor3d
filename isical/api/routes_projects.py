@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from ..core.project import (
     CAMERA_IDS,
+    EXTRINSIC_TARGET_MIN,
     CameraSpec,
     create_project,
     delete_project,
@@ -92,6 +93,30 @@ async def cal_summary(request: Request, name: str) -> dict:
     """Vital calibration facts from the SOLVE (reprojection RMS + geometry)."""
     d = project_dir(request, name)
     return {"summary": calibration_summary(d)}
+
+
+class CaptureConfigBody(BaseModel):
+    extrinsic_target: int = Field(ge=EXTRINSIC_TARGET_MIN)
+
+
+@router.get("/api/p/{name}/capture-config")
+async def get_capture_config(request: Request, name: str) -> dict:
+    _d, cfg = project_cfg(request, name)
+    return {"extrinsic_target": cfg.capture.extrinsic_target,
+            "target_per_camera": cfg.capture.target_per_camera,
+            "extrinsic_target_min": EXTRINSIC_TARGET_MIN}
+
+
+@router.put("/api/p/{name}/capture-config")
+async def put_capture_config(request: Request, name: str,
+                             body: CaptureConfigBody) -> dict:
+    """Operator-settable capture targets (currently the extrinsic pair count).
+
+    Floored at ``EXTRINSIC_TARGET_MIN`` (the BA is ill-conditioned below it)."""
+    d, cfg = project_cfg(request, name)
+    cfg.capture.extrinsic_target = max(EXTRINSIC_TARGET_MIN, int(body.extrinsic_target))
+    save_project(d, cfg)
+    return {"ok": True, "extrinsic_target": cfg.capture.extrinsic_target}
 
 
 class CamerasBody(BaseModel):

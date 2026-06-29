@@ -5,8 +5,11 @@ from __future__ import annotations
 import pytest
 
 from isical.core.project import (
+    EXTRINSIC_TARGET_MIN,
     BoardSpec,
+    CalibConfig,
     CameraSpec,
+    CaptureSpec,
     aprilgrid_target,
     charuco_spec,
     create_project,
@@ -47,6 +50,30 @@ def test_empty_camb_is_mode1(tmp_path):
             "cam_b": CameraSpec(id="cam_b", url="")}     # blank source
     pdir = create_project(tmp_path / "data", "rig3", cams)
     assert load_project(pdir).configured_cameras() == ["cam_a"]
+
+
+def test_extrinsic_target_default_and_floor():
+    # default is the new lower-effort target
+    assert CaptureSpec().extrinsic_target == 10
+    # below the floor is clamped up; the floor itself is accepted
+    assert CaptureSpec(extrinsic_target=1).extrinsic_target == EXTRINSIC_TARGET_MIN
+    assert CaptureSpec(extrinsic_target=EXTRINSIC_TARGET_MIN).extrinsic_target == EXTRINSIC_TARGET_MIN
+    assert CaptureSpec(extrinsic_target=15).extrinsic_target == 15
+
+
+def test_extrinsic_target_floor_via_full_config():
+    cfg = CalibConfig.model_validate({
+        "name": "rig", "cameras": {"cam_a": {"id": "cam_a", "url": "rtsp://x/a"}},
+        "capture": {"extrinsic_target": 2},
+    })
+    assert cfg.capture.extrinsic_target == EXTRINSIC_TARGET_MIN
+
+
+def test_capture_detection_boost_defaults():
+    cap = CaptureSpec()
+    assert cap.tag_clahe is True
+    assert cap.tag_quad_decimate == 1.0
+    assert cap.tag_clahe_clip == 2.0 and cap.tag_clahe_grid == 8
 
 
 def test_board_adapters_match_print():
