@@ -42,9 +42,9 @@
   </div>
   {% if phase == "extrinsic" %}
   <div id="floor-prompt" class="floor-prompt" hidden>
-    <p class="floor-prompt-head">Captures complete — place the <b>ChArUco</b> board on the floor
-      (lean it ~20–40°, not flat — a leaned board gives a better world-anchor pose) and capture
-      one shot per camera (the world anchor for extrinsics).</p>
+    <p class="floor-prompt-head">Captures complete — lay the <b>ChArUco</b> board <b>FLAT</b> on the floor
+      (it defines the ground plane — keep it flat, well-lit and glare-free; move it closer if not detected)
+      and capture one shot per camera (the world anchor for extrinsics).</p>
     <p id="floor-prompt-done" class="msg ok" hidden>Floor shots ready — go to the board and Solve.</p>
   </div>
   <div class="toolbar" id="floor-tools">
@@ -57,7 +57,7 @@
   <div id="floor-preview" class="floor-preview" hidden>
     <figure class="cap-figure">
       <figcaption>floor aim — <b id="floor-preview-cam"></b>
-        <span class="msg">lean the ChArUco on the floor (~20–40°), then capture</span></figcaption>
+        <span class="msg">lay the ChArUco FLAT on the floor (it defines the ground plane), then capture</span></figcaption>
       <div class="canvas-wrap"><img id="floor-preview-img" alt="floor live"></div>
     </figure>
     <div class="toolbar">

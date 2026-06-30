@@ -461,11 +461,25 @@ class FloorAnchor:
 def _detect_charuco_in_image(
     image_path: Path,
     board: CharucoBoardSpec,
+    *,
+    clahe: bool = True,
+    clahe_clip: float = 2.0,
+    clahe_grid: int = 8,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Detect ChArUco corners in one image. Returns (corners_uv, object_xy)."""
+    """Detect ChArUco corners in one image. Returns (corners_uv, object_xy).
+
+    A CLAHE contrast pass (default ON) is applied before detection to match the
+    isical capture gate, so a flat, distant, low-contrast floor board detects as
+    reliably at solve time as it did when captured. CLAHE only remaps intensities
+    (no geometric warp), so the recovered corner positions stay sub-pixel-faithful.
+    """
     img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise RuntimeError(f"could not read image: {image_path}")
+    if clahe:
+        g = max(1, int(clahe_grid))
+        img = cv2.createCLAHE(clipLimit=float(clahe_clip),
+                              tileGridSize=(g, g)).apply(img)
     detector = cv2.aruco.CharucoDetector(board.board())
     ch_corners, ch_ids, _, _ = detector.detectBoard(img)
     if ch_corners is None or ch_ids is None or len(ch_ids) < 4:

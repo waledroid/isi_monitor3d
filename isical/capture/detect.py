@@ -62,15 +62,26 @@ class SnapVerdict:
 
 
 class CharucoBoardDetector:
-    """ChArUco detection + coverage for the intrinsic phase."""
+    """ChArUco detection + coverage for the intrinsic + floor-anchor phases.
 
-    def __init__(self, charuco_spec) -> None:
+    A CLAHE contrast pass (the same :func:`preprocess_for_tags` used for AprilTags)
+    runs before ``detectBoard`` so a flat, distant, low-contrast floor board detects
+    more reliably. CLAHE only remaps intensities — it does not warp geometry — so
+    ChArUco corner positions stay sub-pixel-faithful and the solve is unaffected.
+    """
+
+    def __init__(self, charuco_spec, *, clahe: bool = True,
+                 clahe_clip: float = 2.0, clahe_grid: int = 8) -> None:
         self._board = charuco_spec.board()
         self._detector = cv2.aruco.CharucoDetector(self._board)
         self._expected = max(1, (charuco_spec.squares_x - 1) * (charuco_spec.squares_y - 1))
+        self._clahe = clahe
+        self._clahe_clip = clahe_clip
+        self._clahe_grid = clahe_grid
 
     def detect(self, frame_bgr: np.ndarray) -> Detection:
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        gray = preprocess_for_tags(frame_bgr, clahe=self._clahe,
+                                   clip=self._clahe_clip, grid=self._clahe_grid)
         h, w = gray.shape[:2]
         ch_corners, ch_ids, _, _ = self._detector.detectBoard(gray)
         det = Detection(blur_var=float(cv2.Laplacian(gray, cv2.CV_64F).var()))

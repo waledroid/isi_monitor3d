@@ -37,6 +37,33 @@ def test_charuco_detector_blank_is_empty():
     assert d.n == 0 and d.corners_px is None
 
 
+def test_charuco_detector_runs_clahe_preprocess(monkeypatch):
+    """The ChArUco detector must route its input through the CLAHE preprocess."""
+    import isical.capture.detect as detect_mod
+
+    spec = charuco_spec(BoardSpec())
+    calls: list[dict] = []
+    real = detect_mod.preprocess_for_tags
+
+    def spy(frame, *, clahe, clip, grid):
+        calls.append({"clahe": clahe, "clip": clip, "grid": grid})
+        return real(frame, clahe=clahe, clip=clip, grid=grid)
+
+    monkeypatch.setattr(detect_mod, "preprocess_for_tags", spy)
+    det = CharucoBoardDetector(spec, clahe=True, clahe_clip=3.0, clahe_grid=4)
+    det.detect(_render_charuco(spec))
+    assert calls and calls[0] == {"clahe": True, "clip": 3.0, "grid": 4}
+
+
+def test_charuco_detector_clahe_default_on_and_still_detects():
+    """CLAHE defaults ON and a clean board still detects (corner-preserving)."""
+    spec = charuco_spec(BoardSpec())
+    det = CharucoBoardDetector(spec)              # default clahe=True
+    assert det._clahe is True
+    d = det.detect(_render_charuco(spec))
+    assert d.n >= 12 and d.corners_px is not None
+
+
 def _render_apriltag(px=240) -> np.ndarray:
     """Render one 36h11 AprilTag marker centred on a low-contrast gray field."""
     d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36h11)

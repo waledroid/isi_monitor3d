@@ -35,6 +35,21 @@ from .detect import (
 _PAIR_WINDOW_S = 0.5      # both cameras must gate-pass within this window for a pair
 
 
+def _charuco_detector(charuco_spec, cap) -> CharucoBoardDetector:
+    """Build a ChArUco detector with the capture spec's CLAHE knobs (default ON).
+
+    Reuses the same ``tag_clahe*`` knobs the AprilTag path uses — a CLAHE contrast
+    boost helps a flat, distant, low-contrast floor board detect (the "0/4" gate)
+    without moving corners, so it is safe for the floor-anchor solve too.
+    """
+    return CharucoBoardDetector(
+        charuco_spec,
+        clahe=getattr(cap, "tag_clahe", True),
+        clahe_clip=getattr(cap, "tag_clahe_clip", 2.0),
+        clahe_grid=getattr(cap, "tag_clahe_grid", 8),
+    )
+
+
 def _open_source(cam_spec, camera_id: str):
     """Open a frame source for a CameraSpec (lazy import; RTSP or USB)."""
     if cam_spec.type == "usb":
@@ -64,7 +79,7 @@ def grab_floor_shot(project_dir: Path, cfg, camera_id: str, *,
     is detected. Used by the Extrinsic phase's "capture floor shot" button.
     """
     from ..core.project import charuco_spec
-    detector = CharucoBoardDetector(charuco_spec(cfg.board))
+    detector = _charuco_detector(charuco_spec(cfg.board), cfg.capture)
     cam_spec = cfg.cameras[camera_id]
     source = source_factory(cam_spec, camera_id)
     source.start()
@@ -85,9 +100,9 @@ def grab_floor_shot(project_dir: Path, cfg, camera_id: str, *,
         except Exception:
             pass
     if best is None:
-        raise ValueError("no ChArUco board detected on the floor — place the ChArUco board on "
-                         "the floor LEANED ~20-40° (not flat — a leaned board gives a better "
-                         "PnP pose and detects more reliably at distance) and try again")
+        raise ValueError("no ChArUco board detected on the floor — lay the ChArUco board FLAT on "
+                         "the floor (it defines the ground plane); keep it flat, well-lit and free "
+                         "of glare, and move it closer if it is not detected, then try again")
     out = Path(project_dir) / "floor" / f"{camera_id}.jpg"
     out.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out), best[0])
@@ -101,8 +116,8 @@ class FloorPreview:
     thread (keeping the latest annotated JPEG for the MJPEG view AND the latest
     raw frame), and exposes `grab()` to write floor/<cam>.jpg from the same source
     — so the live preview and the grab never double-open the camera (the source of
-    the old 409 deadlock). The operator sees corner feedback while positioning the
-    leaned board, then captures.
+    the old 409 deadlock). The operator sees corner feedback while laying the board
+    FLAT on the floor, then captures.
     """
 
     def __init__(self, project_dir: Path, cfg, camera_id: str, *,
@@ -113,7 +128,7 @@ class FloorPreview:
         self.project_dir = Path(project_dir)
         self.cfg = cfg
         self.camera_id = camera_id
-        self._detector = CharucoBoardDetector(charuco_spec(cfg.board))
+        self._detector = _charuco_detector(charuco_spec(cfg.board), cfg.capture)
         self._cam_spec = cfg.cameras[camera_id]
         self._source_factory = source_factory
         self._latest_jpeg: bytes | None = None
@@ -140,9 +155,9 @@ class FloorPreview:
         with self._lock:
             good = self._latest_good
         if good is None:
-            raise ValueError("no ChArUco board detected on the floor — place the ChArUco board on "
-                             "the floor LEANED ~20-40° (not flat — a leaned board gives a better "
-                             "PnP pose and detects more reliably at distance) and try again")
+            raise ValueError("no ChArUco board detected on the floor — lay the ChArUco board FLAT on "
+                             "the floor (it defines the ground plane); keep it flat, well-lit and free "
+                             "of glare, and move it closer if it is not detected, then try again")
         out = self.project_dir / "floor" / f"{self.camera_id}.jpg"
         out.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(out), good[0])
@@ -167,7 +182,7 @@ class FloorPreview:
                 annotated = self._detector.annotate(raw, det)
                 annotated = draw_hud(annotated, count=det.n, target=4,
                                      status=("board OK — ready to capture" if ok_board
-                                             else "lean the ChArUco on the floor"),
+                                             else "lay the ChArUco FLAT on the floor"),
                                      ok=ok_board)
                 ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 with self._lock:
@@ -227,7 +242,7 @@ class _CamWorker:
 
         cap = session.cfg.capture
         if session.phase == "intrinsic":
-            self._detector = CharucoBoardDetector(session.charuco_spec)
+            self._detector = _charuco_detector(session.charuco_spec, cap)
             self._min = cap.min_charuco_corners
             self.target = cap.target_per_camera
         else:

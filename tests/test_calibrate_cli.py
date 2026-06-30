@@ -23,6 +23,7 @@ from calibration.calibrate import (
     _average_rotation,
     assemble_calibration,
     build_parser,
+    _detect_charuco_in_image,
     calibrate_intrinsics,
     compose_camera_in_world,
     find_multical_binary,
@@ -209,6 +210,35 @@ def test_assembled_calibration_roundtrips_through_json() -> None:
 
 
 # ---------- IntrinsicsResult debug API ----------
+
+
+def test_detect_charuco_applies_clahe_by_default(tmp_path: Path, monkeypatch) -> None:
+    """Solve-time floor detection runs the input through CLAHE (default ON)."""
+    import calibration.calibrate as cal
+    cv2 = cal.cv2
+
+    board = CharucoBoardSpec(squares_x=5, squares_y=7,
+                             square_length_m=0.035, marker_length_m=0.026)
+    img = board.board().generateImage((900, 1200))
+    img = cv2.copyMakeBorder(img, 40, 40, 40, 40, cv2.BORDER_CONSTANT, value=255)
+    shot = tmp_path / "floor.jpg"
+    cv2.imwrite(str(shot), img)
+
+    calls: list[bool] = []
+    real = cal.cv2.createCLAHE
+
+    def spy(*a, **k):
+        calls.append(True)
+        return real(*a, **k)
+
+    monkeypatch.setattr(cal.cv2, "createCLAHE", spy)
+    corners, obj = _detect_charuco_in_image(shot, board)
+    assert calls            # CLAHE was invoked
+    assert len(corners) >= 4 and len(obj) == len(corners)
+
+    calls.clear()
+    _detect_charuco_in_image(shot, board, clahe=False)
+    assert not calls        # CLAHE skipped when disabled
 
 
 def test_charuco_board_spec_constructs_opencv_objects() -> None:
