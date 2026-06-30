@@ -80,6 +80,7 @@ export function startPatchDraw(camId) {
         rect: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
         frame_wh: [img?.naturalWidth || 0, img?.naturalHeight || 0],
         infer_size: 320,                                   // detection input size (INTER_AREA)
+        sahi: false,                                       // SAHI slicing off by default
       });
       save();
     },
@@ -190,6 +191,8 @@ function renderSettingsList() {
       `<input class="zm-size" type="number" min="64" max="1280" step="32" value="${p.infer_size || 320}" title="Detect size (px)" />` +
       `<input class="zm-conf" type="number" min="0" max="1" step="0.05" value="${p.confidence ?? ""}" placeholder="conf" title="Confidence 0–1 (this zone) — blank = global" />` +
       `<input class="zm-color" type="color" value="${color}" title="Zone outline colour" />` +
+      `<label class="zm-sahi" title="SAHI slicing — tile this zone for small/distant objects (far zones only)">` +
+      `<input class="zm-sahi-cb" type="checkbox" ${p.sahi ? "checked" : ""} /> SAHI</label>` +
       `<button type="button" class="glass-btn zm-iconbtn zm-delete" title="Delete this zone" aria-label="Delete zone">` +
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
       '<path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>' +
@@ -209,6 +212,7 @@ function renderSettingsList() {
       save();
     });
     row.querySelector(".zm-color").addEventListener("change", (e) => { p.color = e.target.value; save(); });
+    row.querySelector(".zm-sahi-cb").addEventListener("change", (e) => { p.sahi = e.target.checked; save(); });
     row.querySelector(".zm-delete").addEventListener("click", () => deletePatch(p.id));
     host.appendChild(row);
   });

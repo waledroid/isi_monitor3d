@@ -83,6 +83,15 @@ class PatchRect(BaseModel):
     infer_size: int = 320
     color: str | None = None    # outline colour on the cam overlay (hex); None = red
     confidence: float | None = None   # per-zone detection confidence; None = global
+    # SAHI (Slicing Aided Hyper Inference) — slice this zone's crop into a
+    # rows x cols grid of overlapping tiles, detect each at infer_size, NMS-merge,
+    # remap to source. OFF by default (zero behaviour change). Only worth it on
+    # FAR zones whose distant objects shrink to a few pixels under the single
+    # resize. ``sahi_overlap`` is the fraction of tile size shared with neighbours.
+    sahi: bool = False
+    sahi_rows: int = 2
+    sahi_cols: int = 2
+    sahi_overlap: float = 0.2
 
     model_config = {"extra": "ignore"}   # tolerate legacy max_fps keys in saved YAML
 
@@ -95,6 +104,9 @@ class PatchRect(BaseModel):
         if not self.rect or len(self.rect) != 4:
             raise ValueError("zone patch needs a rect or a polygon of >=3 points")
         self.infer_size = max(64, min(1280, int(self.infer_size)))
+        self.sahi_rows = max(1, min(4, int(self.sahi_rows)))
+        self.sahi_cols = max(1, min(4, int(self.sahi_cols)))
+        self.sahi_overlap = max(0.0, min(0.5, float(self.sahi_overlap)))
         return self
 
 

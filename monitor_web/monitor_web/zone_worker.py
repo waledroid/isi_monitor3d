@@ -70,6 +70,12 @@ def _snapshot_fresh(snap: dict) -> bool:
 # frees up, while the other zones keep running undisturbed in between.
 ZONE_RETRY_COOLDOWN_S = 30.0
 
+# SAHI frame-skip: the heavy tiled pass runs only every Nth genuine frame. Between
+# passes the worker re-publishes the cached snapshot with a bumped frame_ts (the
+# objects are static between passes — no tracker in v1), and the published
+# `valid_s` is widened to cover the skip window so the carried boxes don't expire.
+SAHI_PERIOD = 3
+
 # Humans are rendered by POSE only on the cam views — any person-class box the
 # zone object-model emits is dropped so a person isn't boxed AND skeletoned.
 _PERSON_CLASSES = frozenset({"person", "people", "human", "pedestrian"})
@@ -155,6 +161,31 @@ def _remap_det(d, x0, y0, rx, ry, iw, ih, ch, cw):
                      keypoints_uv=d.keypoints_uv, mask=mask)
 
 
+def _tile_det_to_crop(d, tmeta: dict, cw: int, ch: int):
+    """Map one SAHI tile Detection from its (resized) fed-image frame into the ZONE
+    CROP's pixel frame: scale by the tile fed→crop ratio ``(rx, ry)`` then offset by
+    the tile origin ``(tx0, ty0)`` within the crop. The mask is resized to the
+    tile's crop-pixel size (INTER_LINEAR + 0.5 threshold) and pasted into a
+    crop-sized (``ch x cw``) canvas at the tile offset — so overlapping tiles compose
+    in crop coords before the merge + the unchanged ``_remap_det`` (crop→source)."""
+    from backbone.core.types import Detection
+    tx0, ty0 = tmeta["tx0"], tmeta["ty0"]
+    rx, ry, tw, th = tmeta["rx"], tmeta["ry"], tmeta["tw"], tmeta["th"]
+    bx = d.bbox_xyxy
+    bbox = (tx0 + bx[0] * rx, ty0 + bx[1] * ry, tx0 + bx[2] * rx, ty0 + bx[3] * ry)
+    foot = None if d.foot_uv is None else (tx0 + d.foot_uv[0] * rx, ty0 + d.foot_uv[1] * ry)
+    mask = None
+    if d.mask is not None:
+        mr = cv2.resize(d.mask.astype(np.float32), (tw, th),
+                        interpolation=cv2.INTER_LINEAR) >= 0.5
+        full = np.zeros((ch, cw), dtype=bool)
+        full[ty0:ty0 + th, tx0:tx0 + tw] = mr
+        mask = full
+    return Detection(camera_id=d.camera_id, capture_ts=d.capture_ts, cls=d.cls,
+                     confidence=d.confidence, bbox_xyxy=bbox, foot_uv=foot,
+                     keypoints_uv=d.keypoints_uv, mask=mask)
+
+
 def _scaled_polygon(patch: dict, frame_wh) -> np.ndarray | None:
     """The patch's drawn polygon in CURRENT-frame source pixels (the same
     stored_wh→frame_wh guard as :func:`patch_pixel_box`), or ``None``."""
@@ -190,6 +221,10 @@ class ZoneDetectionWorker:
         # Per-zone isolation state (worker-thread only — no locking needed):
         # circuit breaker {zone_id: (blocked_until_monotonic, reason)}.
         self._zone_breaker: dict[str, tuple[float, str]] = {}
+        # SAHI frame-skip counter (worker-thread only): counts genuine frames so
+        # the heavy tiled pass runs every SAHI_PERIOD-th frame; between passes the
+        # snapshot is carried forward (see _run).
+        self._sahi_tick = 0
 
     # ---- lifecycle ----
 
@@ -291,6 +326,17 @@ class ZoneDetectionWorker:
                     self._stop.wait(0.1)
                     continue
                 last_frame_id = frame
+                # SAHI frame-skip: when any zone slices, run the heavy tiled pass
+                # only every SAHI_PERIOD-th genuine frame; between passes carry the
+                # cached snapshot forward (bumped frame_ts) so the static boxes
+                # don't blink. Zero overhead when no zone enables SAHI.
+                self._sahi_tick += 1
+                if (any(p.get("sahi") for p in patches)
+                        and self._sahi_tick % SAHI_PERIOD != 0
+                        and self._snapshot.get("zones")):
+                    self._snapshot = {**self._snapshot, "frame_ts": time.time()}
+                    self._stop.wait(1.0 / max(1.0, float(display_fps(self._cfg))))
+                    continue
                 try:
                     self._detect_all_zones(frame, patches)
                 except Exception:
@@ -322,6 +368,7 @@ class ZoneDetectionWorker:
         # sharing that key share one detector session (the same key
         # `get_zone_detector` caches on), so they can be fed in ONE detect() call.
         groups: dict[tuple, list[dict]] = {}
+        sahi_patches: list[dict] = []
         for patch in patches:
             zone_id = str(patch.get("id"))
             polys[zone_id] = _scaled_polygon(patch, (iw, ih))
@@ -329,6 +376,10 @@ class ZoneDetectionWorker:
             if now < blocked_until:
                 # Breaker open → excluded from the batch entirely (it isn't run).
                 per_zone[zone_id], statuses[zone_id] = [], reason
+                continue
+            if patch.get("sahi"):
+                # SAHI zones never share a batch — each owns a tiled detect pass.
+                sahi_patches.append(patch)
                 continue
             model = patch.get("model")
             resolved_model = resolve_model(model, self._cfg) if model else None
@@ -383,6 +434,28 @@ class ZoneDetectionWorker:
                     # breaker can pinpoint the offending zone.
             self._detect_group_per_zone(frame, group, iw, ih, global_conf,
                                         now, per_zone, statuses)
+        # SAHI zones: each runs its own tiled detect pass, isolated by the same
+        # per-zone circuit breaker (VRAM admission / build / inference failures).
+        for patch in sahi_patches:
+            zid = str(patch.get("id"))
+            try:
+                dets = self._detect_zone_sahi(frame, patch, iw, ih, global_conf)
+            except ZoneModelUnavailable as exc:
+                self._zone_breaker[zid] = (now + ZONE_RETRY_COOLDOWN_S, exc.reason)
+                per_zone[zid], statuses[zid] = [], exc.reason
+                logger.warning("zone worker[%s]: sahi zone %s disabled for %.0fs (%s): %s",
+                               self.camera_id, zid, ZONE_RETRY_COOLDOWN_S,
+                               exc.reason, exc)
+                continue
+            except Exception:
+                self._zone_breaker[zid] = (now + ZONE_RETRY_COOLDOWN_S, "error")
+                per_zone[zid], statuses[zid] = [], "error"
+                logger.warning("zone worker[%s]: sahi zone %s failed — disabled for %.0fs",
+                               self.camera_id, zid, ZONE_RETRY_COOLDOWN_S,
+                               exc_info=True)
+                continue
+            self._zone_breaker.pop(zid, None)
+            per_zone[zid], statuses[zid] = dets, "ok"
         resolved = self._resolve_overlaps(per_zone, polys)
         # People (full-frame pose, foot points in source px) — best-effort.
         people: list = []
@@ -404,6 +477,12 @@ class ZoneDetectionWorker:
         # that gap is exactly what made the overlay boxes blink rhythmically.
         pass_dt = time.time() - ts
         valid_s = max(SNAPSHOT_MAX_AGE_S, 2.5 * pass_dt)
+        # When any zone slices, the next genuine detect pass is SAHI_PERIOD loop
+        # intervals away; widen the validity window to cover that skip so the
+        # carried boxes don't expire between heavy passes.
+        if any(p.get("sahi") for p in patches):
+            loop_dt = 1.0 / max(1.0, float(display_fps(self._cfg)))
+            valid_s = max(valid_s, (SAHI_PERIOD + 1) * loop_dt + pass_dt)
         self._snapshot = {"frame_ts": time.time(), "frame_wh": (iw, ih),
                           "zones": resolved, "status": statuses, "people": people,
                           "valid_s": valid_s}
@@ -494,6 +573,112 @@ class ZoneDetectionWorker:
                                                        image=fed)})
         raw = detector.detect(pair).get(self.camera_id, [])
         return self._postprocess_zone(raw, patch, meta, iw, ih, global_conf)
+
+    def _build_zone_tiles(self, frame, patch: dict, iw: int, ih: int):
+        """Slice ONE zone's crop into a ``rows x cols`` grid of OVERLAPPING tiles for
+        SAHI. Returns ``(tiles, zmeta)`` where:
+          - ``tiles`` is a list of ``(fed, tmeta)``: ``fed`` is the BGR tile resized
+            to ``infer_size`` (same longest-side rule as ``_build_zone_crop``);
+            ``tmeta`` carries the tile's origin ``(tx0, ty0)`` and scale
+            ``(rx, ry)`` WITHIN THE ZONE CROP (tile-fed→crop pixels), plus its
+            crop-pixel size ``(tw, th)``;
+          - ``zmeta`` is the zone-crop meta consumed by ``_postprocess_zone`` with
+            ``fed == the full crop`` (``fw=cw, fh=ch`` ⇒ unit fed→crop scale), so
+            the merged crop-coord detections postprocess + remap unchanged.
+        Returns ``None`` on a degenerate/zero-size crop (zone published as ``[]``)."""
+        rect = patch_rect(patch)
+        if rect is None:
+            return None
+        box = patch_pixel_box(rect, patch.get("frame_wh"), (iw, ih))
+        if box is None:
+            return None
+        x0, y0, x1, y1 = box
+        cw, ch = x1 - x0, y1 - y0
+        if cw <= 0 or ch <= 0:
+            return None
+        crop = frame[y0:y1, x0:x1]
+        rows = max(1, min(4, int(patch.get("sahi_rows") or 2)))
+        cols = max(1, min(4, int(patch.get("sahi_cols") or 2)))
+        overlap = max(0.0, min(0.5, float(patch.get("sahi_overlap") or 0.2)))
+        infer_size = int(patch.get("infer_size") or 320)
+        # Tile step = crop / count; tile size = step grown by the overlap fraction,
+        # clamped to the crop. Origins step by the base size so the grid spans the
+        # whole crop with neighbour tiles sharing an `overlap`-wide band.
+        base_w, base_h = cw / cols, ch / rows
+        tile_w = min(cw, base_w * (1.0 + overlap))
+        tile_h = min(ch, base_h * (1.0 + overlap))
+        tiles: list = []
+        for r in range(rows):
+            for c in range(cols):
+                tx0 = round(c * base_w)
+                ty0 = round(r * base_h)
+                tx1 = min(cw, round(tx0 + tile_w))
+                ty1 = min(ch, round(ty0 + tile_h))
+                tx0 = max(0, min(tx0, tx1 - 1))
+                ty0 = max(0, min(ty0, ty1 - 1))
+                tw, th = tx1 - tx0, ty1 - ty0
+                if tw <= 0 or th <= 0:
+                    continue
+                sub = crop[ty0:ty1, tx0:tx1]
+                fed = sub
+                longest = max(tw, th)
+                if longest > infer_size and longest > 0:
+                    s = infer_size / float(longest)
+                    fed = cv2.resize(sub, (max(1, round(tw * s)), max(1, round(th * s))),
+                                     interpolation=cv2.INTER_AREA)
+                fh, fw = fed.shape[:2]
+                # fed→crop scale: a tile-fed pixel maps to (tw/fw, th/fh) crop px.
+                tmeta = {"tx0": tx0, "ty0": ty0, "tw": tw, "th": th,
+                         "rx": tw / float(fw), "ry": th / float(fh)}
+                tiles.append((fed, tmeta))
+        if not tiles:
+            return None
+        zmeta = {"x0": x0, "y0": y0, "rect": rect, "cw": cw, "ch": ch,
+                 "fw": cw, "fh": ch}
+        return tiles, zmeta
+
+    def _detect_zone_sahi(self, frame, patch: dict, iw: int, ih: int,
+                          global_conf: float) -> list:
+        """SAHI path for ONE zone: slice the crop into overlapping tiles, detect
+        each at ``infer_size``, map every tile's detections into ZONE-CROP coords,
+        NMS-merge the overlapping-tile twins (``_zone_objects``), then run the
+        EXISTING ``_postprocess_zone`` (conf/person/polygon clip + ``_remap_det``)
+        unchanged. Detector build/inference failures PROPAGATE — the caller owns
+        the per-zone circuit breaker. Batched in one ``detect()`` for YOLO (dynamic
+        batch dim); sequential on the shared session for RF-DETR/OpenVINO."""
+        from backbone.core.types import Frame, FramePair
+        built = self._build_zone_tiles(frame, patch, iw, ih)
+        if built is None:
+            return []
+        tiles, zmeta = built
+        infer_size = int(patch.get("infer_size") or 320)
+        detector = self._detector_factory(patch.get("model"), self._cfg, infer_size)
+        zid = str(patch.get("id"))
+        ts = time.time()
+        frames: dict[str, object] = {}
+        keys: list[str] = []
+        for i, (fed, _tm) in enumerate(tiles):
+            k = f"{zid}#{i}"
+            keys.append(k)
+            frames[k] = Frame(camera_id=k, capture_ts=ts, frame_idx=0, image=fed)
+        if getattr(detector, "supports_batch", False):
+            out = detector.detect(FramePair(capture_ts=ts, frame_idx=0, frames=frames))
+        else:
+            # Non-batchable (RF-DETR/OpenVINO): one detect() per tile on the shared
+            # session — correct, just N runs.
+            out = {}
+            for k in keys:
+                one = FramePair(capture_ts=ts, frame_idx=0, frames={k: frames[k]})
+                out.update(detector.detect(one))
+        # Map every tile's detections into zone-crop coords, then concat.
+        crop_dets: list = []
+        for i, (_fed, tm) in enumerate(tiles):
+            crop_dets.extend(
+                _tile_det_to_crop(d, tm, zmeta["cw"], zmeta["ch"])
+                for d in out.get(keys[i], [])
+            )
+        merged = _zone_objects(crop_dets, iou_thresh=0.5)
+        return self._postprocess_zone(merged, patch, zmeta, iw, ih, global_conf)
 
     def _detect_group_batched(self, frame, group: list[dict], detector,
                               iw: int, ih: int, global_conf: float, now: float,

@@ -561,6 +561,215 @@ def test_zone_render_iter_never_detects(monkeypatch):
     assert len(out) == 2 and all((f == 0).all() for f in out)
 
 
+# ---- SAHI slicing ------------------------------------------------------------
+
+class WhiteBoxDetector:
+    """Detects the white (non-zero) region in each fed frame and returns it as one
+    detection in that frame's pixel coords. Lets a SAHI test place a real white box
+    in the source frame and assert which tiles see it + where it remaps to.
+
+    ``supports_batch`` toggles the batched-vs-sequential detect path. Records the
+    number of detect() calls so a test can assert N tiles → 1 call (batched) vs N
+    calls (sequential)."""
+
+    def __init__(self, *, supports_batch=True, with_mask=False):
+        self.supports_batch = supports_batch
+        self._with_mask = with_mask
+        self.calls = 0
+        self.frames_per_call: list[int] = []
+
+    def detect(self, pair):
+        self.calls += 1
+        keys = list(pair.frames.keys())
+        self.frames_per_call.append(len(keys))
+        out: dict[str, list] = {}
+        for k in keys:
+            img = pair.frames[k].image
+            gray = img.max(axis=2) if img.ndim == 3 else img
+            ys, xs = np.where(gray > 0)
+            if xs.size == 0:
+                out[k] = []
+                continue
+            x0, x1 = float(xs.min()), float(xs.max() + 1)
+            y0, y1 = float(ys.min()), float(ys.max() + 1)
+            mask = None
+            if self._with_mask:
+                mask = gray > 0
+            out[k] = [Detection(camera_id=k, capture_ts=time.time(), cls="palette",
+                                confidence=0.9, bbox_xyxy=(x0, y0, x1, y1),
+                                foot_uv=((x0 + x1) / 2.0, y1), mask=mask)]
+        return out
+
+
+def _sahi_patch(zone_id, x0, y0, x1, y1, *, rows=2, cols=2, overlap=0.2,
+                infer_size=320, cam="cam_a"):
+    p = _patch(zone_id, x0, y0, x1, y1, cam=cam)
+    p.update({"sahi": True, "sahi_rows": rows, "sahi_cols": cols,
+              "sahi_overlap": overlap, "infer_size": infer_size})
+    return p
+
+
+def _sahi_worker(patches, detector, *, frame, running=True):
+    hub = FakeHub(frame)
+    w = ZoneDetectionWorker(
+        "cam_a", {"name": "rtsp", "url": "rtsp://x"}, _CfgStub(), lambda: running,
+        detector_factory=lambda model, cfg, size: detector,
+        hub_factory=lambda: hub,
+    )
+    w.set_patches(patches)
+    return w, hub
+
+
+def test_sahi_tiles_cover_crop():
+    """A 2x2 0.2-overlap grid over a zone crop produces 4 tiles whose union covers
+    every crop pixel, with neighbours overlapping (no gaps)."""
+    w, _, _ = _worker([], running=True)
+    patch = _sahi_patch("z", 0, 0, 200, 160, rows=2, cols=2, overlap=0.2)
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    tiles, zmeta = w._build_zone_tiles(frame, patch, 320, 240)
+    assert len(tiles) == 4
+    assert (zmeta["cw"], zmeta["ch"]) == (200, 160)
+    cover = np.zeros((zmeta["ch"], zmeta["cw"]), dtype=bool)
+    for _fed, tm in tiles:
+        cover[tm["ty0"]:tm["ty0"] + tm["th"], tm["tx0"]:tm["tx0"] + tm["tw"]] = True
+    assert cover.all(), "tiles must cover the whole crop"
+    # overlap: tile widths sum to MORE than the crop width (shared bands).
+    widths = sum(tm["tw"] for _f, tm in tiles[:2])   # the two top-row tiles
+    assert widths > zmeta["cw"], "neighbouring tiles must overlap"
+
+
+def test_sahi_boundary_box_merges_to_one(frame_size=(240, 320)):
+    """A white box straddling a tile boundary is seen by two tiles → after merge
+    there is ONE box at the correct source coords (no duplicate)."""
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    # Box centred on the vertical mid-seam of a 0..200 crop (seam near x=100).
+    frame[60:100, 90:120] = 255          # source coords; inside crop [0,0,200,160]
+    patch = _sahi_patch("z", 0, 0, 200, 160, rows=2, cols=2, overlap=0.2)
+    det = WhiteBoxDetector(supports_batch=True)
+    w, _ = _sahi_worker([patch], det, frame=frame)
+    w._detect_all_zones(frame, [patch])
+    snap = w.snapshot()
+    dets = snap["zones"]["z"]
+    assert len(dets) == 1, "the boundary-straddling box must merge to ONE detection"
+    bx = dets[0].bbox_xyxy
+    cx, cy = (bx[0] + bx[2]) / 2.0, (bx[1] + bx[3]) / 2.0
+    assert 90 <= cx <= 120 and 60 <= cy <= 100, "merged box at the source location"
+
+
+def test_sahi_mask_stitched():
+    """A masked detection from a tile remaps into a full-frame mask aligned with the
+    source white box."""
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame[60:100, 40:70] = 255           # well inside the top-left tile
+    patch = _sahi_patch("z", 0, 0, 200, 160, rows=2, cols=2, overlap=0.2,
+                        infer_size=320)
+    det = WhiteBoxDetector(supports_batch=True, with_mask=True)
+    w, _ = _sahi_worker([patch], det, frame=frame)
+    w._detect_all_zones(frame, [patch])
+    dets = w.snapshot()["zones"]["z"]
+    assert len(dets) == 1 and dets[0].mask is not None
+    m = dets[0].mask
+    assert m.shape == (240, 320)
+    assert m[70:90, 45:65].all(), "mask covers the source box interior"
+
+
+def test_sahi_detector_agnostic_same_result():
+    """Batchable (N tiles → 1 detect call) and non-batchable (N calls) detectors
+    yield the SAME merged result for the same crop."""
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame[60:100, 40:70] = 255
+    patch = _sahi_patch("z", 0, 0, 200, 160, rows=2, cols=2, overlap=0.2)
+
+    det_b = WhiteBoxDetector(supports_batch=True)
+    wb, _ = _sahi_worker([patch], det_b, frame=frame)
+    wb._detect_all_zones(frame, [patch])
+    out_b = wb.snapshot()["zones"]["z"]
+    assert det_b.calls == 1 and det_b.frames_per_call == [4]
+
+    det_s = WhiteBoxDetector(supports_batch=False)
+    ws, _ = _sahi_worker([patch], det_s, frame=frame)
+    ws._detect_all_zones(frame, [patch])
+    out_s = ws.snapshot()["zones"]["z"]
+    assert det_s.calls == 4 and det_s.frames_per_call == [1, 1, 1, 1]
+
+    assert len(out_b) == len(out_s) == 1
+    bb, bs = out_b[0].bbox_xyxy, out_s[0].bbox_xyxy
+    for a, b in zip(bb, bs):
+        assert abs(a - b) <= 2.0, "batched and sequential paths agree"
+
+
+def test_sahi_false_parity_with_single_pass():
+    """A sahi:false zone produces IDENTICAL output to the current single-pass path:
+    the SAHI routing is byte-for-byte transparent when off."""
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame[60:100, 40:70] = 255
+    base = _patch("z", 0, 0, 200, 160)            # sahi absent ⇒ single pass
+    det = WhiteBoxDetector(supports_batch=True)
+    w, _ = _sahi_worker([base], det, frame=frame)
+    w._detect_all_zones(frame, [base])
+    out = w.snapshot()["zones"]["z"]
+    assert det.calls == 1 and det.frames_per_call == [1], "single fed crop, no tiles"
+    assert len(out) == 1
+    bx = out[0].bbox_xyxy
+    cx = (bx[0] + bx[2]) / 2.0
+    assert 40 <= cx <= 70
+
+
+def test_sahi_carry_forward_between_passes():
+    """SAHI runs every SAHI_PERIOD-th genuine frame; between passes the snapshot is
+    re-published with a bumped frame_ts and a valid_s wide enough that the carried
+    boxes do not expire."""
+    import monitor_web.zone_worker as zw
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame[60:100, 40:70] = 255
+    patch = _sahi_patch("z", 0, 0, 200, 160)
+    det = WhiteBoxDetector(supports_batch=True)
+
+    # Sequence of distinct frame objects so each loop tick sees a "new" frame.
+    frames = [frame.copy() for _ in range(zw.SAHI_PERIOD + 1)]
+    idx = {"i": 0}
+
+    class SeqStream:
+        def latest_real_frame(self):
+            i = idx["i"]
+            return frames[i] if i < len(frames) else frames[-1]
+
+    class SeqHub:
+        def acquire(self, *a):
+            return SeqStream()
+
+        def release(self, *a):
+            pass
+
+    w = ZoneDetectionWorker(
+        "cam_a", {"name": "rtsp"}, _CfgStub(), lambda: True,
+        detector_factory=lambda m, c, s: det, hub_factory=SeqHub)
+    w.set_patches([patch])
+
+    # Drive the worker loop body manually by stepping frames + the tick logic the
+    # same way _run does, but synchronously and deterministically.
+    snaps = []
+    for i in range(zw.SAHI_PERIOD):
+        idx["i"] = i
+        cur = frames[i]
+        w._sahi_tick += 1
+        if (any(p.get("sahi") for p in [patch]) and w._sahi_tick % zw.SAHI_PERIOD != 0
+                and w._snapshot.get("zones")):
+            w._snapshot = {**w._snapshot, "frame_ts": time.time()}
+        else:
+            w._detect_all_zones(cur, [patch])
+        snaps.append(dict(w._snapshot))
+
+    # Heavy pass runs on the warm-start tick (no cache yet) AND the period tick;
+    # the middle tick(s) carry the snapshot forward (no detect).
+    assert det.calls == 2, "SAHI detects on warm start + once per period, carries between"
+    assert det.frames_per_call == [4, 4], "each heavy pass slices into 4 tiles"
+    final = w._snapshot
+    assert final["zones"]["z"], "the heavy pass detected the box"
+    # The published valid_s covers the skip window so carried boxes don't expire.
+    assert final["valid_s"] >= zw.SAHI_PERIOD * (1.0 / 10.0)
+
+
 # ---- worker thread liveness ---------------------------------------------------
 
 def test_worker_start_stop_clean():
