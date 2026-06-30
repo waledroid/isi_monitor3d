@@ -11,6 +11,8 @@ from ..core.project import (
     CAMERA_IDS,
     EXTRINSIC_TARGET_MIN,
     CameraSpec,
+    board_cm_from_config,
+    board_config_from_cm,
     create_project,
     delete_project,
     list_projects,
@@ -117,6 +119,39 @@ async def put_capture_config(request: Request, name: str,
     cfg.capture.extrinsic_target = max(EXTRINSIC_TARGET_MIN, int(body.extrinsic_target))
     save_project(d, cfg)
     return {"ok": True, "extrinsic_target": cfg.capture.extrinsic_target}
+
+
+class BoardConfigBody(BaseModel):
+    tag_length_cm: float = Field(gt=0)
+    tag_gap_cm: float = Field(ge=0)
+
+
+@router.get("/api/p/{name}/board-config")
+async def get_board_config(request: Request, name: str) -> dict:
+    """AprilGrid board measurements for the extrinsic form, in cm (operator units).
+
+    Reverses the stored ``board.tag_length_m`` / ``tag_spacing`` back to the ruler
+    measurements: ``tag_length_cm`` and ``tag_gap_cm``, plus the derived config the
+    form echoes back to the operator."""
+    _d, cfg = project_cfg(request, name)
+    cm = board_cm_from_config(cfg.board.tag_length_m, cfg.board.tag_spacing)
+    return {**cm,
+            "tag_length_m": cfg.board.tag_length_m,
+            "tag_spacing": cfg.board.tag_spacing}
+
+
+@router.put("/api/p/{name}/board-config")
+async def put_board_config(request: Request, name: str, body: BoardConfigBody) -> dict:
+    """Persist AprilGrid board geometry from cm measurements (422 on bad input)."""
+    d, cfg = project_cfg(request, name)
+    try:
+        derived = board_config_from_cm(body.tag_length_cm, body.tag_gap_cm)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    cfg.board.tag_length_m = derived["tag_length_m"]
+    cfg.board.tag_spacing = derived["tag_spacing"]
+    save_project(d, cfg)
+    return {"ok": True, **derived}
 
 
 class CamerasBody(BaseModel):

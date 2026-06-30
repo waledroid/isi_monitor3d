@@ -63,9 +63,45 @@ class BoardSpec(BaseModel):
     n_aprilgrids: int = 6
     april_tags_x: int = 1
     april_tags_y: int = 2
-    tag_length_m: float = 0.11
-    tag_spacing: float = 0.2
+    tag_length_m: float = 0.18
+    tag_spacing: float = 0.3
     tag_family: str = "t36h11"
+
+
+# --- AprilGrid board-measurement conversion (operator measures in cm) ---
+# The operator measures the printed tag with a ruler in centimetres; isical derives
+# the Multical/Kalibr board config. tag_spacing is the Kalibr *ratio*: the physical
+# inter-tag gap equals tag_spacing * tag_length, so spacing = gap_cm / tag_length_cm.
+#
+#   18 cm tag, 5.4 cm gap  →  tag_length_m 0.18, tag_spacing 0.30
+#
+# Sane ruler ranges (reject/clamp out-of-range input at the API boundary).
+TAG_LENGTH_CM_MIN, TAG_LENGTH_CM_MAX = 1.0, 100.0
+TAG_GAP_CM_MIN, TAG_GAP_CM_MAX = 0.0, 50.0
+
+
+def board_config_from_cm(tag_length_cm: float, tag_gap_cm: float) -> dict[str, float]:
+    """cm measurements → persisted board config (tag_length_m, tag_spacing).
+
+    Raises ``ValueError`` for non-positive / out-of-range input."""
+    tl = float(tag_length_cm)
+    gap = float(tag_gap_cm)
+    if not (TAG_LENGTH_CM_MIN <= tl <= TAG_LENGTH_CM_MAX):
+        raise ValueError(f"tag_length_cm must be in [{TAG_LENGTH_CM_MIN}, {TAG_LENGTH_CM_MAX}]")
+    if not (TAG_GAP_CM_MIN <= gap <= TAG_GAP_CM_MAX):
+        raise ValueError(f"tag_gap_cm must be in [{TAG_GAP_CM_MIN}, {TAG_GAP_CM_MAX}]")
+    if tl <= 0:
+        raise ValueError("tag_length_cm must be > 0")
+    return {"tag_length_m": tl / 100.0, "tag_spacing": gap / tl}
+
+
+def board_cm_from_config(tag_length_m: float, tag_spacing: float) -> dict[str, float]:
+    """Reverse: persisted board config → cm inputs for the operator form.
+
+    tag_length_cm = tag_length_m * 100 ; tag_gap_cm = tag_spacing * tag_length_m * 100."""
+    tlm = float(tag_length_m)
+    return {"tag_length_cm": tlm * 100.0,
+            "tag_gap_cm": float(tag_spacing) * tlm * 100.0}
 
 
 class CaptureSpec(BaseModel):

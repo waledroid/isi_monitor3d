@@ -20,8 +20,8 @@ board:
   n_aprilgrids: 6
   april_tags_x: 1
   april_tags_y: 2
-  tag_length_m: 0.11
-  tag_spacing: 0.2
+  tag_length_m: 0.18    # 18 cm printed tag (operator-measured in cm via the UI)
+  tag_spacing: 0.3      # Kalibr ratio = gap_cm / tag_length_cm (5.4 / 18)
   tag_family: t36h11
 
 # Auto-snap thresholds for the live capture loop.

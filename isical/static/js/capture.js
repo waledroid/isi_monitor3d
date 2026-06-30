@@ -9,6 +9,9 @@ const stopBtn = document.getElementById("cap-stop");
 const restartBtn = document.getElementById("cap-restart");
 const camSelect = document.getElementById("cam-select");    // intrinsic only
 const targetInput = document.getElementById("extrinsic-target");  // extrinsic only
+const tagLenInput = document.getElementById("tag-length-cm");      // extrinsic only
+const tagGapInput = document.getElementById("tag-gap-cm");         // extrinsic only
+const boardDerived = document.getElementById("board-derived");     // extrinsic only
 let statusTimer = null;
 const shownGallery = new Set();   // cams already swapped from live → gallery (one-shot)
 let floorPromptShown = false;     // extrinsic: prompt revealed once captures complete (one-shot)
@@ -176,8 +179,48 @@ async function saveExtrinsicTarget() {
   catch { /* keep going with the stored value */ }
 }
 
+// ---- AprilGrid board measurements (operator measures the printed tag in cm) ----
+// The operator enters tag length + inter-tag gap in cm; isical derives the Kalibr
+// board config: tag_length_m = length/100, tag_spacing = gap/length (the ratio).
+function deriveBoard() {
+  if (!tagLenInput || !tagGapInput) return null;
+  const len = parseFloat(tagLenInput.value);
+  const gap = parseFloat(tagGapInput.value);
+  if (!Number.isFinite(len) || len <= 0 || !Number.isFinite(gap) || gap < 0) {
+    if (boardDerived) { boardDerived.textContent = "↛ enter valid cm values"; boardDerived.className = "msg board-derived bad"; }
+    return null;
+  }
+  const tag_length_m = len / 100;
+  const tag_spacing = gap / len;
+  if (boardDerived) {
+    boardDerived.textContent = `→ tag_length_m ${tag_length_m.toFixed(2)}, tag_spacing ${tag_spacing.toFixed(2)}`;
+    boardDerived.className = "msg board-derived";
+  }
+  return { tag_length_cm: len, tag_gap_cm: gap };
+}
+
+let _boardSaveTimer = null;
+async function saveBoardConfig() {
+  const body = deriveBoard();
+  if (!body) return;
+  try { await sendJSON(`/api/p/${project}/board-config`, "PUT", body); }
+  catch { /* keep the in-form values; capture still uses the stored config */ }
+}
+
+if (tagLenInput && tagGapInput) {
+  deriveBoard();   // show the derived config on load
+  for (const el of [tagLenInput, tagGapInput]) {
+    el.addEventListener("input", () => {
+      deriveBoard();
+      clearTimeout(_boardSaveTimer);
+      _boardSaveTimer = setTimeout(saveBoardConfig, 500);   // debounced persist
+    });
+  }
+}
+
 async function startCapture(restart = false) {
   await saveExtrinsicTarget();
+  await saveBoardConfig();
   const verb = restart ? "restart" : "start";
   try {
     await sendJSON(`/api/p/${project}/capture/${phase}/${verb}${camQuery()}`, "POST", {});

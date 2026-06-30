@@ -420,6 +420,9 @@ label.chip input, .toolbar label input {
 
 .pairs-label { display: inline-flex; align-items: center; gap: 6px; }
 .pairs-label input[type="number"] { width: 4.5em; }
+.board-measure-label { display: inline-flex; align-items: center; gap: 6px; }
+.board-measure-label input[type="number"] { width: 5em; }
+.board-derived { font-variant-numeric: tabular-nums; opacity: 0.85; }
 
 /* ---------------- Project Dashboard ---------------- */
 

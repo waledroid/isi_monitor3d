@@ -25,6 +25,15 @@
       <input id="extrinsic-target" type="number" min="{{ extrinsic_target_min }}"
              value="{{ extrinsic_target }}" step="1">
     </label>
+    <label class="board-measure-label">tag length (cm):
+      <input id="tag-length-cm" type="number" min="1" max="100" step="0.1"
+             value="{{ tag_length_cm }}">
+    </label>
+    <label class="board-measure-label">tag gap (cm):
+      <input id="tag-gap-cm" type="number" min="0" max="50" step="0.1"
+             value="{{ tag_gap_cm }}">
+    </label>
+    <span id="board-derived" class="msg board-derived"></span>
     <button id="cap-start">Start capture</button>
     {% endif %}
     <button id="cap-stop" disabled>Stop</button>

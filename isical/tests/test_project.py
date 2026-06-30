@@ -11,6 +11,8 @@ from isical.core.project import (
     CameraSpec,
     CaptureSpec,
     aprilgrid_target,
+    board_cm_from_config,
+    board_config_from_cm,
     charuco_spec,
     create_project,
     delete_project,
@@ -74,6 +76,45 @@ def test_capture_detection_boost_defaults():
     assert cap.tag_clahe is True
     assert cap.tag_quad_decimate == 1.0
     assert cap.tag_clahe_clip == 2.0 and cap.tag_clahe_grid == 8
+
+
+def test_board_config_from_cm():
+    # 18 cm tag, 5.4 cm gap → tag_length_m 0.18, tag_spacing 0.30
+    d = board_config_from_cm(18, 5.4)
+    assert d["tag_length_m"] == pytest.approx(0.18)
+    assert d["tag_spacing"] == pytest.approx(0.3)
+    # non-trivial: 20 cm tag, 4 cm gap → 0.20, 0.20
+    d2 = board_config_from_cm(20, 4)
+    assert d2["tag_length_m"] == pytest.approx(0.20)
+    assert d2["tag_spacing"] == pytest.approx(0.20)
+
+
+def test_board_cm_from_config_reverse():
+    # 0.18, 0.30 → 18 cm, 5.4 cm (what c1 should display)
+    cm = board_cm_from_config(0.18, 0.3)
+    assert cm["tag_length_cm"] == pytest.approx(18)
+    assert cm["tag_gap_cm"] == pytest.approx(5.4)
+    # round-trip the non-trivial case
+    cm2 = board_cm_from_config(0.20, 0.20)
+    assert cm2["tag_length_cm"] == pytest.approx(20)
+    assert cm2["tag_gap_cm"] == pytest.approx(4)
+
+
+def test_board_config_from_cm_rejects_bad_input():
+    for bad in [(0, 5), (-1, 5), (200, 5), (18, -1), (18, 60)]:
+        with pytest.raises(ValueError):
+            board_config_from_cm(*bad)
+
+
+def test_fresh_project_board_defaults_display_18_and_54(tmp_path):
+    # a fresh project's stored AprilGrid config reverses to 18 cm / 5.4 cm
+    cams = {"cam_a": CameraSpec(id="cam_a", url="rtsp://x/a")}
+    cfg = load_project(create_project(tmp_path / "data", "fresh", cams))
+    assert cfg.board.tag_length_m == pytest.approx(0.18)
+    assert cfg.board.tag_spacing == pytest.approx(0.3)
+    cm = board_cm_from_config(cfg.board.tag_length_m, cfg.board.tag_spacing)
+    assert cm["tag_length_cm"] == pytest.approx(18)
+    assert cm["tag_gap_cm"] == pytest.approx(5.4)
 
 
 def test_board_adapters_match_print():

@@ -66,6 +66,52 @@ def test_capture_config_get_and_put_with_floor():
                      json={"extrinsic_target": 1}).status_code == 422
 
 
+def test_board_config_get_and_put_roundtrip():
+    from isical.core.project import load_project
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        # fresh project reverses to the 18 cm / 5.4 cm defaults
+        bc = c.get("/api/p/rig/board-config").json()
+        assert bc["tag_length_cm"] == pytest.approx(18)
+        assert bc["tag_gap_cm"] == pytest.approx(5.4)
+        assert bc["tag_length_m"] == pytest.approx(0.18)
+        assert bc["tag_spacing"] == pytest.approx(0.3)
+        # operator measures a 20 cm tag with a 4 cm gap → 0.20 / 0.20 persisted
+        r = c.put("/api/p/rig/board-config", json={"tag_length_cm": 20, "tag_gap_cm": 4})
+        assert r.status_code == 200
+        assert r.json()["tag_length_m"] == pytest.approx(0.20)
+        assert r.json()["tag_spacing"] == pytest.approx(0.20)
+        board = load_project(Settings().data_dir / "rig").board
+        assert board.tag_length_m == pytest.approx(0.20)
+        assert board.tag_spacing == pytest.approx(0.20)
+        # and it round-trips back to cm
+        bc2 = c.get("/api/p/rig/board-config").json()
+        assert bc2["tag_length_cm"] == pytest.approx(20)
+        assert bc2["tag_gap_cm"] == pytest.approx(4)
+
+
+def test_board_config_rejects_bad_input():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        # tag length 0 / out of range → 422
+        assert c.put("/api/p/rig/board-config",
+                     json={"tag_length_cm": 0, "tag_gap_cm": 4}).status_code == 422
+        assert c.put("/api/p/rig/board-config",
+                     json={"tag_length_cm": 200, "tag_gap_cm": 4}).status_code == 422
+        assert c.put("/api/p/rig/board-config",
+                     json={"tag_length_cm": 18, "tag_gap_cm": 60}).status_code == 422
+
+
+def test_extrinsic_capture_page_has_board_measure_inputs():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+                                      "cam_b": {"type": "rtsp", "url": "rtsp://x/b"}})
+        html = c.get("/p/rig/capture/extrinsic").text
+        assert 'id="tag-length-cm"' in html
+        assert 'id="tag-gap-cm"' in html
+        assert 'value="18' in html and 'value="5.4"' in html
+
+
 def test_run_unknown_phase_404():
     with _client() as c:
         c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
