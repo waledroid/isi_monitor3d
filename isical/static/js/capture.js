@@ -263,24 +263,76 @@ if (camSelect) {
 
 window.addEventListener("beforeunload", () => {
   navigator.sendBeacon?.(`/api/p/${project}/capture/${phase}/stop`);
+  if (floorPreviewCam) {
+    navigator.sendBeacon?.(`/api/p/${project}/floor/${floorPreviewCam}/preview/stop`);
+  }
 });
 
-// ---- floor anchor shots (extrinsic only; needs capture stopped) ----
+// ---- floor anchor shots (extrinsic only) ----
+// Two-step: clicking "floor <cam>" opens a LIVE preview of that camera so the
+// operator can aim the ChArUco on the floor; "Capture floor shot" then grabs from
+// the same open source (the grab reuses the preview's camera — no 409 deadlock).
+let floorPreviewCam = null;
+const floorPreview = document.getElementById("floor-preview");
+const floorPreviewImg = document.getElementById("floor-preview-img");
+const floorPreviewCamEl = document.getElementById("floor-preview-cam");
+const floorPreviewMsg = document.getElementById("floor-preview-msg");
+
+async function openFloorPreview(cam) {
+  // Stop any running capture session (cameras are exclusive) before the preview.
+  if (!stopBtn.disabled) await stopCapture();
+  try {
+    await sendJSON(`/api/p/${project}/floor/${cam}/preview`, "POST", {});
+  } catch (e) {
+    if (floorPreviewMsg) flash(floorPreviewMsg, e.message, false);
+    return;
+  }
+  floorPreviewCam = cam;
+  if (floorPreviewCamEl) floorPreviewCamEl.textContent = cam;
+  if (floorPreviewMsg) floorPreviewMsg.textContent = "";
+  if (floorPreviewImg) floorPreviewImg.src = `/floor-stream/${project}/${cam}?t=${Date.now()}`;
+  if (floorPreview) floorPreview.hidden = false;
+  const motionOk = !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  floorPreview?.scrollIntoView({ behavior: motionOk ? "smooth" : "auto", block: "center" });
+}
+
+async function closeFloorPreview() {
+  if (floorPreviewImg) floorPreviewImg.src = "";
+  if (floorPreview) floorPreview.hidden = true;
+  const cam = floorPreviewCam;
+  floorPreviewCam = null;
+  if (cam) {
+    try { await sendJSON(`/api/p/${project}/floor/${cam}/preview/stop`, "POST", {}); } catch { /* */ }
+  }
+}
+
 document.querySelectorAll(".floor-btn").forEach((btn) => {
-  btn.onclick = async () => {
-    const cam = btn.dataset.cam;
+  btn.onclick = () => openFloorPreview(btn.dataset.cam);
+});
+
+const floorCaptureBtn = document.getElementById("floor-capture");
+if (floorCaptureBtn) {
+  floorCaptureBtn.onclick = async () => {
+    const cam = floorPreviewCam;
+    if (!cam) return;
     const st = document.querySelector(`.floor-status[data-cam="${cam}"]`);
-    btn.disabled = true;
+    floorCaptureBtn.disabled = true;
     if (st) { st.textContent = "grabbing…"; st.className = "msg floor-status"; }
     try {
       const r = await sendJSON(`/api/p/${project}/floor/${cam}`, "POST", {});
       if (st) { st.textContent = `✓ ${r.corners} corners`; st.className = "msg floor-status ok"; }
+      if (floorPreviewMsg) flash(floorPreviewMsg, `captured ${r.corners} corners`, true);
       await refreshFloorState();
+      await closeFloorPreview();
     } catch (e) {
       if (st) { st.textContent = e.message; st.className = "msg floor-status bad"; }
-    } finally { btn.disabled = false; }
+      if (floorPreviewMsg) flash(floorPreviewMsg, e.message, false);
+    } finally { floorCaptureBtn.disabled = false; }
   };
-});
+}
+
+const floorCloseBtn = document.getElementById("floor-preview-close");
+if (floorCloseBtn) floorCloseBtn.onclick = closeFloorPreview;
 
 // On load (extrinsic), reflect any floor shots already on disk.
 if (phase === "extrinsic") refreshFloorState();

@@ -99,12 +99,47 @@ async def status(request: Request, name: str) -> dict:
     return {"active": True, **sess.status()}
 
 
-@router.post("/api/p/{name}/floor/{cam}")
-async def floor_shot(request: Request, name: str, cam: str) -> dict:
-    """Grab one ChArUco-on-floor shot for a camera (the world anchor for extrinsics)."""
+@router.post("/api/p/{name}/floor/{cam}/preview")
+async def floor_preview_start(request: Request, name: str, cam: str) -> dict:
+    """Open a single-camera live ChArUco preview so the operator can aim the floor
+    shot. Stream it via /floor-stream/{name}/{cam}; capture with POST /floor/{cam}."""
     d, cfg = project_cfg(request, name)
     if cam not in cfg.configured_cameras():
         raise HTTPException(status_code=404, detail=f"camera {cam!r} not configured")
+    try:
+        request.app.state.capture.start_floor(name, d, cfg, cam)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"floor preview failed: {exc}") from exc
+    return {"ok": True, "camera": cam}
+
+
+@router.post("/api/p/{name}/floor/{cam}/preview/stop")
+async def floor_preview_stop(request: Request, name: str) -> dict:
+    project_dir(request, name)
+    request.app.state.capture.stop_floor()
+    return {"ok": True}
+
+
+@router.post("/api/p/{name}/floor/{cam}")
+async def floor_shot(request: Request, name: str, cam: str) -> dict:
+    """Grab one ChArUco-on-floor shot for a camera (the world anchor for extrinsics).
+
+    If a floor preview is live for this camera, grab from its already-open source
+    (so preview + grab never double-open the camera). Otherwise fall back to a
+    standalone open/settle/grab — but never while a full capture session holds the
+    cameras (409)."""
+    d, cfg = project_cfg(request, name)
+    if cam not in cfg.configured_cameras():
+        raise HTTPException(status_code=404, detail=f"camera {cam!r} not configured")
+    fp = request.app.state.capture.floor(name, cam)
+    if fp is not None:
+        try:
+            res = fp.grab()
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"floor shot failed: {exc}") from exc
+        return {"ok": True, **res}
     if request.app.state.capture.active(name) is not None:
         raise HTTPException(status_code=409,
                             detail="stop the live capture first (the camera is busy)")
@@ -116,6 +151,13 @@ async def floor_shot(request: Request, name: str, cam: str) -> dict:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"floor shot failed: {exc}") from exc
     return {"ok": True, **res}
+
+
+@router.get("/floor-stream/{name}/{cam}")
+def floor_stream(request: Request, name: str, cam: str) -> StreamingResponse:
+    project_dir(request, name)
+    gen = request.app.state.capture.floor_mjpeg(name, cam)
+    return StreamingResponse(gen, media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 @router.get("/stream/{name}/{cam}")

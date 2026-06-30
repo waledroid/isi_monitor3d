@@ -119,6 +119,66 @@ def test_grab_floor_shot_no_board(tmp_path, monkeypatch):
                                  settle_frames=2)
 
 
+def test_floor_preview_grabs_from_live_source(tmp_path, monkeypatch):
+    """FloorPreview opens the camera, keeps a live JPEG, and grab() writes
+    floor/<cam>.jpg from the SAME source (the well-detected latest frame)."""
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    pdir, cfg = _project(tmp_path)
+    fp = sess_mod.FloorPreview(pdir, cfg, "cam_a",
+                               source_factory=lambda spec, cid: _StubSource(60))
+    fp.start()
+    for _ in range(200):
+        if fp.latest_jpeg() is not None and fp._latest_good is not None:
+            break
+        time.sleep(0.01)
+    assert fp.latest_jpeg() is not None                     # live MJPEG frame ready
+    res = fp.grab()
+    fp.stop()
+    assert res["camera"] == "cam_a" and res["corners"] >= 4
+    assert (pdir / "floor" / "cam_a.jpg").exists()
+
+
+def test_floor_preview_grab_without_board_raises(tmp_path, monkeypatch):
+    class _Blank:
+        def __init__(self, *_a, **_k): pass
+        def detect(self, frame):
+            from isical.capture.detect import Detection
+            return Detection(n=0)
+        def annotate(self, frame, det): return frame
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _Blank)
+    pdir, cfg = _project(tmp_path)
+    fp = sess_mod.FloorPreview(pdir, cfg, "cam_a",
+                               source_factory=lambda spec, cid: _StubSource(10))
+    fp.start()
+    time.sleep(0.15)
+    fp.stop()
+    import pytest
+    with pytest.raises(ValueError):
+        fp.grab()
+
+
+def test_manager_floor_targets_requested_camera(tmp_path, monkeypatch):
+    """start_floor for cam_b yields a preview only for cam_b; floor(project, cam)
+    returns it only for the matching camera (cam_a aiming must not show cam_b)."""
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    from isical.core.project import CameraSpec, create_project, load_project
+    cams = {"cam_a": CameraSpec(id="cam_a", url="rtsp://x/a"),
+            "cam_b": CameraSpec(id="cam_b", url="rtsp://x/b")}
+    pdir = create_project(tmp_path / "data", "rig", cams)
+    cfg = load_project(pdir)
+    mgr = sess_mod.CaptureManager()
+    mgr.start_floor("rig", pdir, cfg, "cam_b",
+                    source_factory=lambda spec, cid: _StubSource(20))
+    try:
+        assert mgr.floor("rig", "cam_b") is not None
+        assert mgr.floor("rig", "cam_a") is None           # not the targeted camera
+        assert mgr.floor("other", "cam_b") is None         # not this project
+        assert mgr.floor("rig", "cam_b").camera_id == "cam_b"
+    finally:
+        mgr.stop_floor()
+    assert mgr.floor("rig", "cam_b") is None
+
+
 def test_extrinsic_disk_image_is_clahe_grayscale(tmp_path, monkeypatch):
     """Extrinsic shots are written with the SAME CLAHE/grayscale preprocessing the
     gate detects on, so Multical re-detects tags on identical pixels."""

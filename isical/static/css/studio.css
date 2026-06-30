@@ -773,6 +773,12 @@ button:disabled:hover {
 @media (prefers-reduced-motion: reduce) {
   .floor-prompt { animation: none; }
 }
+.floor-preview {
+  margin: 10px 0;
+  max-width: 640px;
+}
+.floor-preview .cap-figure { margin: 0; }
+.floor-preview .toolbar { margin-top: 8px; }
 
 .job-log {
   background: rgba(7, 8, 12, 0.85);

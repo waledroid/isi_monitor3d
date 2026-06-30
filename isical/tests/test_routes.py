@@ -139,6 +139,55 @@ def test_floor_shot_unknown_cam_404():
         assert c.post("/api/p/rig/floor/cam_b").status_code == 404   # cam_b not configured
 
 
+def test_floor_preview_route_targets_camera(monkeypatch):
+    """POST /floor/{cam}/preview opens a single-camera preview; the manager exposes
+    it ONLY for that camera, and grabbing reuses the preview's open source."""
+    from isical.capture import session as sess_mod
+    from isical.tests.test_session import _StubCharuco, _StubSource
+
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    monkeypatch.setattr(sess_mod, "_open_source", lambda spec, cid: _StubSource(80))
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig",
+                                      "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+                                      "cam_b": {"type": "rtsp", "url": "rtsp://x/b"}})
+        assert c.post("/api/p/rig/floor/cam_b/preview").status_code == 200
+        mgr = c.app.state.capture
+        # only cam_b is being previewed (floor cam_b shows cam_b, not cam_a)
+        assert mgr.floor("rig", "cam_b") is not None
+        assert mgr.floor("rig", "cam_a") is None
+        # unknown camera rejected
+        assert c.post("/api/p/rig/floor/nope/preview").status_code == 404
+        # grab reuses the live preview source (no 409, even though a session is "busy")
+        import time as _t
+        for _ in range(200):
+            if mgr.floor("rig", "cam_b") and mgr.floor("rig", "cam_b")._latest_good:
+                break
+            _t.sleep(0.01)
+        r = c.post("/api/p/rig/floor/cam_b")
+        assert r.status_code == 200 and r.json()["corners"] >= 4
+        c.post("/api/p/rig/floor/cam_b/preview/stop")
+        assert mgr.floor("rig", "cam_b") is None
+
+
+def test_floor_shot_409_when_full_capture_active(monkeypatch):
+    """With a full capture session holding the cameras and NO floor preview, the
+    floor grab still 409s (cameras busy) — the original safety is preserved."""
+    from isical.capture import session as sess_mod
+    from isical.tests.test_session import _StubCharuco, _StubSource
+
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    monkeypatch.setattr(sess_mod, "_open_source", lambda spec, cid: _StubSource(200))
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig",
+                                      "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        c.post("/api/p/rig/capture/intrinsic/start?cam=cam_a")
+        try:
+            assert c.post("/api/p/rig/floor/cam_a").status_code == 409
+        finally:
+            c.post("/api/p/rig/capture/intrinsic/stop")
+
+
 def test_intrinsic_start_single_camera_and_restart():
     with _client() as c:
         c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},

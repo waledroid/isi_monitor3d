@@ -48,11 +48,23 @@
     <p id="floor-prompt-done" class="msg ok" hidden>Floor shots ready — go to the board and Solve.</p>
   </div>
   <div class="toolbar" id="floor-tools">
-    <span class="msg">Floor anchor (one ChArUco-on-floor shot per camera, capture stopped):</span>
+    <span class="msg">Floor anchor (one ChArUco-on-floor shot per camera):</span>
     {% for c in cameras %}
     <button class="floor-btn" data-cam="{{ c }}">floor {{ c }}</button>
     <span class="msg floor-status" data-cam="{{ c }}"></span>
     {% endfor %}
+  </div>
+  <div id="floor-preview" class="floor-preview" hidden>
+    <figure class="cap-figure">
+      <figcaption>floor aim — <b id="floor-preview-cam"></b>
+        <span class="msg">lean the ChArUco on the floor (~20–40°), then capture</span></figcaption>
+      <div class="canvas-wrap"><img id="floor-preview-img" alt="floor live"></div>
+    </figure>
+    <div class="toolbar">
+      <button id="floor-capture">Capture floor shot</button>
+      <button id="floor-preview-close">Close preview</button>
+      <span id="floor-preview-msg" class="msg"></span>
+    </div>
   </div>
   {% endif %}
   <div id="cap-views" class="fourup">

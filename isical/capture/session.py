@@ -94,6 +94,98 @@ def grab_floor_shot(project_dir: Path, cfg, camera_id: str, *,
     return {"camera": camera_id, "corners": best[1], "path": str(out)}
 
 
+class FloorPreview:
+    """A single-camera live ChArUco preview for aiming the floor-anchor shot.
+
+    Opens ONE camera via `_open_source`, runs the ChArUco detector in a daemon
+    thread (keeping the latest annotated JPEG for the MJPEG view AND the latest
+    raw frame), and exposes `grab()` to write floor/<cam>.jpg from the same source
+    — so the live preview and the grab never double-open the camera (the source of
+    the old 409 deadlock). The operator sees corner feedback while positioning the
+    leaned board, then captures.
+    """
+
+    def __init__(self, project_dir: Path, cfg, camera_id: str, *,
+                 source_factory=None) -> None:
+        from ..core.project import charuco_spec
+        if source_factory is None:
+            source_factory = _open_source           # resolve module global at call time
+        self.project_dir = Path(project_dir)
+        self.cfg = cfg
+        self.camera_id = camera_id
+        self._detector = CharucoBoardDetector(charuco_spec(cfg.board))
+        self._cam_spec = cfg.cameras[camera_id]
+        self._source_factory = source_factory
+        self._latest_jpeg: bytes | None = None
+        self._latest_good: tuple[np.ndarray, int] | None = None   # raw frame w/ ≥4 corners
+        self.status = "starting"
+        self.last_det_n = 0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name=f"isical-floor-{camera_id}")
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def latest_jpeg(self) -> bytes | None:
+        with self._lock:
+            return self._latest_jpeg
+
+    def grab(self) -> dict:
+        """Write the latest well-detected frame to floor/<cam>.jpg (≥4 corners)."""
+        with self._lock:
+            good = self._latest_good
+        if good is None:
+            raise ValueError("no ChArUco board detected on the floor — place the ChArUco board on "
+                             "the floor LEANED ~20-40° (not flat — a leaned board gives a better "
+                             "PnP pose and detects more reliably at distance) and try again")
+        out = self.project_dir / "floor" / f"{self.camera_id}.jpg"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(out), good[0])
+        return {"camera": self.camera_id, "corners": int(good[1]), "path": str(out)}
+
+    def _run(self) -> None:
+        try:
+            source = self._source_factory(self._cam_spec, self.camera_id)
+            source.start()
+        except Exception as exc:
+            self.status = f"camera error: {exc}"
+            return
+        self.status = "live"
+        try:
+            for frame in source.frames():
+                if self._stop.is_set():
+                    break
+                raw = frame.image
+                det = self._detector.detect(raw)
+                self.last_det_n = det.n
+                ok_board = det.n >= 4
+                annotated = self._detector.annotate(raw, det)
+                annotated = draw_hud(annotated, count=det.n, target=4,
+                                     status=("board OK — ready to capture" if ok_board
+                                             else "lean the ChArUco on the floor"),
+                                     ok=ok_board)
+                ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                with self._lock:
+                    if ok_board:
+                        self._latest_good = (raw, det.n)
+                    if ok:
+                        self._latest_jpeg = buf.tobytes()
+        except Exception as exc:                                # source died mid-stream
+            self.status = f"stream ended: {exc}"
+        finally:
+            try:
+                source.stop()
+            except Exception:
+                pass
+            if not self.status.startswith("camera error"):
+                self.status = "stopped"
+
+
 def _write_shot_meta(jpg_path: Path, det) -> None:
     """Persist per-shot quality next to the jpg (powers the Studio gallery).
 
@@ -319,6 +411,8 @@ class CaptureManager:
     def __init__(self) -> None:
         self._session: CaptureSession | None = None
         self._key: tuple[str, str] | None = None          # (project, phase)
+        self._floor: FloorPreview | None = None
+        self._floor_key: tuple[str, str] | None = None    # (project, camera_id)
         self._lock = threading.Lock()
 
     def start(self, project: str, project_dir: Path, cfg, phase: str,
@@ -340,6 +434,54 @@ class CaptureManager:
 
     def stop_all(self) -> None:
         self.stop_current()
+        self.stop_floor()
+
+    # ---- floor-anchor live preview (extrinsic): a single-camera aiming view ----
+    def start_floor(self, project: str, project_dir: Path, cfg, camera_id: str,
+                    **kw) -> None:
+        """Open a single-camera ChArUco preview for floor aiming. Stops the full
+        capture session first (cameras are exclusive). Re-targeting a different
+        camera replaces the previous preview."""
+        with self._lock:
+            if self._session is not None:
+                self._session.stop()
+                self._session = None
+                self._key = None
+            if self._floor is not None:
+                self._floor.stop()
+            self._floor = FloorPreview(project_dir, cfg, camera_id, **kw)
+            self._floor_key = (project, camera_id)
+            self._floor.start()
+
+    def stop_floor(self) -> None:
+        with self._lock:
+            if self._floor is not None:
+                self._floor.stop()
+            self._floor = None
+            self._floor_key = None
+
+    def floor(self, project: str, camera_id: str | None = None) -> FloorPreview | None:
+        with self._lock:
+            if self._floor is None or self._floor_key is None:
+                return None
+            if self._floor_key[0] != project:
+                return None
+            if camera_id is not None and self._floor_key[1] != camera_id:
+                return None
+            return self._floor
+
+    def floor_mjpeg(self, project: str, camera_id: str) -> Iterator[bytes]:
+        """Multipart MJPEG generator for the floor-aiming preview (annotated)."""
+        boundary = b"--frame"
+        while True:
+            fp = self.floor(project, camera_id)
+            if fp is None:
+                break
+            jpeg = fp.latest_jpeg()
+            if jpeg:
+                yield (boundary + b"\r\nContent-Type: image/jpeg\r\n"
+                       + f"Content-Length: {len(jpeg)}\r\n\r\n".encode() + jpeg + b"\r\n")
+            time.sleep(0.05)
 
     def active(self, project: str, phase: str | None = None) -> CaptureSession | None:
         with self._lock:
