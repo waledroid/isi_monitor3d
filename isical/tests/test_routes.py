@@ -257,6 +257,65 @@ def test_list_shots_unknown_cam_404():
         assert c.get("/api/p/rig/shots/intrinsic/cam_b").status_code == 404
 
 
+def test_list_extrinsic_shots_both_cameras():
+    """The Boards notebook's Extrinsic-pairs cell reads the same shot-listing route
+    for phase=extrinsic across both cameras (read-only)."""
+    import cv2
+    import numpy as np
+
+    from isical.config import Settings
+    with _client() as c:
+        c.post("/api/projects", json={
+            "name": "rig",
+            "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+            "cam_b": {"type": "rtsp", "url": "rtsp://x/b"},
+        })
+        data = Settings().data_dir / "rig"
+        for cam, n in (("cam_a", 2), ("cam_b", 1)):
+            d = data / "extrinsic" / cam
+            for i in range(n):
+                cv2.imwrite(str(d / f"{cam}_{i:03d}.jpg"), np.zeros((48, 64, 3), np.uint8))
+        ra = c.get("/api/p/rig/shots/extrinsic/cam_a").json()
+        rb = c.get("/api/p/rig/shots/extrinsic/cam_b").json()
+        assert ra["count"] == 2 and rb["count"] == 1
+        assert ra["shots"][0]["file"] == "cam_a_000.jpg"
+        # bytes serve through the existing shot route for the extrinsic sub-dir
+        assert c.get("/shots/rig/extrinsic/cam_a/cam_a_000.jpg").status_code == 200
+
+
+def test_floor_shots_empty_then_present():
+    """floor-shots reports per-camera presence; empty gracefully, then serves bytes."""
+    import cv2
+    import numpy as np
+
+    from isical.config import Settings
+    with _client() as c:
+        c.post("/api/projects", json={
+            "name": "rig",
+            "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},
+            "cam_b": {"type": "rtsp", "url": "rtsp://x/b"},
+        })
+        r = c.get("/api/p/rig/floor-shots").json()
+        assert set(r["cameras"]) == {"cam_a", "cam_b"}
+        assert r["cameras"]["cam_a"]["present"] is False
+        assert r["cameras"]["cam_a"]["file"] is None
+
+        floor = Settings().data_dir / "rig" / "floor"
+        floor.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(floor / "cam_a.jpg"), np.zeros((48, 64, 3), np.uint8))
+        r = c.get("/api/p/rig/floor-shots").json()
+        assert r["cameras"]["cam_a"] == {"present": True, "file": "cam_a.jpg"}
+        assert r["cameras"]["cam_b"]["present"] is False
+        assert c.get("/floor-shot/rig/cam_a.jpg").status_code == 200
+
+
+def test_floor_shot_serve_path_guarded():
+    with _client() as c:
+        c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"}})
+        assert c.get("/floor-shot/rig/cam_a.png").status_code == 404    # not .jpg
+        assert c.get("/floor-shot/rig/cam_a.jpg").status_code == 404    # absent
+
+
 def test_intrinsic_capture_page_has_tabs_and_gallery_markup():
     with _client() as c:
         c.post("/api/projects", json={"name": "rig", "cam_a": {"type": "rtsp", "url": "rtsp://x/a"},

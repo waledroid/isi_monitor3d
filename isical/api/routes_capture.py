@@ -386,6 +386,39 @@ def targetless_stage_image(request: Request, name: str, stage: str) -> FileRespo
     return FileResponse(str(target), media_type="image/jpeg")
 
 
+@router.get("/api/p/{name}/floor-shots")
+def list_floor_shots(request: Request, name: str) -> dict:
+    """Read-only presence of the per-camera floor-anchor ChArUco shots.
+
+    Each configured camera writes ONE ``floor/<cam>.jpg`` (a flat file, not a
+    sub-dir like intrinsic/extrinsic). Returns ``{cameras: {cam: {present: bool,
+    file: "<cam>.jpg"|None}}}`` — the Boards notebook's Floor-anchor cell reads
+    this to show either the captured shots or an "awaiting floor shots" placeholder.
+    Never writes.
+    """
+    d, cfg = project_cfg(request, name)
+    floor_dir = d / "floor"
+    cams: dict[str, dict] = {}
+    for cam in cfg.configured_cameras():
+        jpg = floor_dir / f"{cam}.jpg"
+        present = jpg.is_file()
+        cams[cam] = {"present": present, "file": f"{cam}.jpg" if present else None}
+    return {"cameras": cams}
+
+
+@router.get("/floor-shot/{name}/{file}")
+def floor_shot_image(request: Request, name: str, file: str) -> FileResponse:
+    """Serve one captured floor-anchor jpg (floor/<cam>.jpg). Read-only, path-guarded."""
+    if not _SHOT_FILE_RE.match(file):
+        raise HTTPException(status_code=404, detail="not found")
+    d = project_dir(request, name)
+    base = (d / "floor").resolve()
+    target = (base / file).resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(str(target), media_type="image/jpeg")
+
+
 @router.get("/shots/{name}/{phase}/{cam}/{file}")
 def shot_image(request: Request, name: str, phase: str, cam: str, file: str) -> FileResponse:
     if phase not in _PHASES or not _SHOT_FILE_RE.match(file):

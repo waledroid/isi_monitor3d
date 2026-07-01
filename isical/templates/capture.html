@@ -80,6 +80,45 @@
       <span id="floor-preview-msg" class="msg"></span>
     </div>
   </div>
+  <div id="boards-panel" class="targetless-panel" hidden>
+    <h2>Boards (AprilGrid) extrinsics</h2>
+    <p class="msg">Each stage below is a <b>read-only view of the data already captured</b> for this
+      project. The Capture / Solve controls above stay fully functional — this notebook just
+      organizes the phase into stages + galleries.</p>
+
+    <!-- Notebook cells -->
+    <div class="nb" id="boards-notebook">
+      <!-- Cell ① captured synchronized AprilGrid pairs (both cameras) -->
+      <section class="nb-cell" id="bcell-pairs" data-stage="pairs">
+        <div class="nb-head"><span class="nb-num">1</span><h3>Extrinsic pairs</h3>
+          <span id="boards-pairs-status" class="nb-status msg">loading…</span></div>
+        <div class="nb-out" id="boards-pairs-out">
+          <div class="nb-placeholder">captured cam_a | cam_b AprilGrid pairs will appear here</div>
+        </div>
+      </section>
+
+      <!-- Cell ② floor anchor (per-camera ChArUco-on-floor shots) -->
+      <section class="nb-cell" id="bcell-floor" data-stage="floor">
+        <div class="nb-head"><span class="nb-num">2</span><h3>Floor anchor</h3>
+          <span id="boards-floor-status" class="nb-status msg">loading…</span></div>
+        <div class="nb-out" id="boards-floor-out">
+          <div class="nb-placeholder">per-camera ChArUco-on-floor world-anchor shots (use the floor
+            controls above to capture them)</div>
+        </div>
+      </section>
+
+      <!-- Cell ③ result (R/t per camera + reprojection RMS, once solved) -->
+      <section class="nb-cell" id="bcell-result" data-stage="result">
+        <div class="nb-head"><span class="nb-num">3</span><h3>Result</h3>
+          <span id="boards-result-status" class="nb-status msg">not solved yet</span></div>
+        <div class="nb-out">
+          <pre id="boards-result-matrices" class="result-matrices"></pre>
+          <div id="boards-result-placeholder" class="nb-placeholder">extrinsic R / t + reprojection RMS
+            per camera appear here after Solve</div>
+        </div>
+      </section>
+    </div>
+  </div>
   <div id="targetless-panel" class="targetless-panel" hidden>
     <h2>Targetless extrinsics <span class="tag-exp">experimental</span></h2>
     <p class="msg">Aim BOTH cameras so their views overlap on a textured floor, capture synchronized
@@ -177,6 +216,8 @@
 {% endblock %}
 {% block scripts %}<script type="module" src="/static/js/capture.js"></script>
 {% if phase == "extrinsic" %}<script type="module">
+  import { initBoards } from "/static/js/capture_boards.js";
   import { initTargetless } from "/static/js/capture_targetless.js";
+  initBoards(document.getElementById("cap-root"));
   initTargetless(document.getElementById("cap-root"));
 </script>{% endif %}{% endblock %}

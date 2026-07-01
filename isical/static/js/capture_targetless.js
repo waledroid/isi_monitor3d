@@ -30,8 +30,16 @@ export function initTargetless(root) {
   const panel = document.getElementById("targetless-panel");
   if (!sel || !panel) return;
 
+  const boardsPanel = document.getElementById("boards-panel");
+
   const applyMethod = (method) => {
     panel.hidden = method !== "targetless";
+    // Boards (AprilGrid): show the read-only stage notebook (galleries of the
+    // already-captured pairs + floor + solved result).
+    if (boardsPanel) {
+      boardsPanel.hidden = method === "targetless";
+      if (method === "aprilgrid") window.__boardsNotebook?.refresh();
+    }
     // Reflect the two-way toggle's active state.
     if (toggle) {
       toggle.querySelectorAll(".method-opt").forEach((b) =>
