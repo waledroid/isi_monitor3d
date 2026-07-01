@@ -45,10 +45,22 @@ export function initTargetless(root) {
       toggle.querySelectorAll(".method-opt").forEach((b) =>
         b.classList.toggle("active", b.dataset.method === method));
     }
-    // Targetless hides the AprilGrid tag-measurement inputs (irrelevant).
-    document.querySelectorAll(".board-measure-label").forEach((el) => {
+    // Targetless hides the AprilGrid tag-measurement inputs and derived text (irrelevant).
+    document.querySelectorAll(".board-measure-label, #board-derived").forEach((el) => {
       el.style.display = method === "targetless" ? "none" : "";
     });
+    // Targetless also hides the top main capture buttons/messages to prevent redundancy.
+    document.querySelectorAll("#cap-start, #cap-stop, #cap-restart, #cap-msg").forEach((el) => {
+      el.style.display = method === "targetless" ? "none" : "";
+    });
+    // Hide Boards-specific floor anchor tools and previews in Targetless mode
+    const floorTools = document.getElementById("floor-tools");
+    const floorLive = document.getElementById("floor-live");
+    const floorPrompt = document.getElementById("floor-prompt");
+    if (floorTools) floorTools.style.display = method === "targetless" ? "none" : "";
+    if (floorLive && method === "targetless") floorLive.hidden = true;
+    if (floorPrompt && method === "targetless") floorPrompt.hidden = true;
+
     // The default capture fourup IS redundant in targetless mode (its live views
     // are re-hosted at the top of the notebook), so hide it there.
     const capViews = document.getElementById("cap-views");
@@ -92,8 +104,14 @@ function mirrorLiveViews(project, cameras) {
   wrap.dataset.built = "1";
   wrap.innerHTML = cameras.map((c) => `
     <figure class="cap-figure" data-cam="${c}">
-      <figcaption>${c}</figcaption>
-      <div class="canvas-wrap"><img class="tl-stream" data-cam="${c}" alt="${c} live"></div>
+      <figcaption>${c} <span class="counts" data-cam="${c}">—</span></figcaption>
+      <div class="canvas-wrap">
+        <div class="stream-placeholder">
+          <svg class="placeholder-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4zM14 13h-3v3H9v-3H6v-2h3V8h2v3h3v2z"/></svg>
+          <span class="placeholder-text">Stream Inactive</span>
+        </div>
+        <img class="tl-stream" data-cam="${c}" alt="${c} live">
+      </div>
     </figure>`).join("");
 }
 

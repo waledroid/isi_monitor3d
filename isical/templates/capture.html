@@ -26,7 +26,7 @@
     <span id="method-msg" class="msg"></span>
   </div>
   {% endif %}
-  <div class="toolbar">
+  <div class="toolbar" id="main-capture-tools">
     {% if phase == "intrinsic" %}
     <div class="cam-tabs">
       {% for c in cameras %}<button type="button" class="cam-tab" data-cam="{{ c }}">{{ c }}</button>{% endfor %}
@@ -48,7 +48,7 @@
              value="{{ tag_gap_cm }}">
     </label>
     <span id="board-derived" class="msg board-derived"></span>
-    <button id="cap-start">Start capture</button>
+    <button id="cap-start" class="primary">Start capture</button>
     {% endif %}
     <button id="cap-stop" disabled>Stop</button>
     <button id="cap-restart">Restart (wipe + recapture)</button>
@@ -74,7 +74,13 @@
       {% for c in cameras %}
       <figure class="cap-figure" data-cam="{{ c }}">
         <figcaption>{{ c }} <span class="msg floor-live-counts" data-cam="{{ c }}"></span></figcaption>
-        <div class="canvas-wrap"><img class="floor-stream" data-cam="{{ c }}" alt="{{ c }} floor live"></div>
+        <div class="canvas-wrap">
+          <div class="stream-placeholder">
+            <svg class="placeholder-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4zM14 13h-3v3H9v-3H6v-2h3V8h2v3h3v2z"/></svg>
+            <span class="placeholder-text">Stream Inactive</span>
+          </div>
+          <img class="floor-stream" data-cam="{{ c }}" alt="{{ c }} floor live">
+        </div>
       </figure>
       {% endfor %}
     </div>
@@ -202,7 +208,13 @@
     {% for c in cameras %}
     <figure class="cap-figure" data-cam="{{ c }}">
       <figcaption>{{ c }} <span class="counts" data-cam="{{ c }}">—</span></figcaption>
-      <div class="canvas-wrap"><img class="cap-stream" data-cam="{{ c }}" alt="{{ c }} live"></div>
+      <div class="canvas-wrap">
+        <div class="stream-placeholder">
+          <svg class="placeholder-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4zM14 13h-3v3H9v-3H6v-2h3V8h2v3h3v2z"/></svg>
+          <span class="placeholder-text">Stream Inactive</span>
+        </div>
+        <img class="cap-stream" data-cam="{{ c }}" alt="{{ c }} live">
+      </div>
       <div class="shot-gallery" data-cam="{{ c }}" hidden></div>
     </figure>
     {% endfor %}
