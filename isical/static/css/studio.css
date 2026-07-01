@@ -1286,3 +1286,17 @@ button:disabled:hover {
 /* ok/bad are re-used from .cal-table but we declare them standalone for safety */
 .ok { color: var(--ok); }
 .bad { color: var(--bad); }
+
+/* --- Targetless extrinsics (Stage 3) --- */
+#method-tools { align-items: center; }
+.method-label select { margin-left: .4rem; }
+.targetless-panel { margin-top: 1rem; padding-top: .6rem; border-top: 1px solid var(--line, #333); }
+.targetless-panel h2 { margin: .2rem 0 .4rem; }
+.scale-ref-list { font-size: .85rem; color: var(--muted, #aaa); margin: .4rem 0; }
+.scale-stream { cursor: crosshair; }
+.stage-imgs { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: .6rem; }
+.stage-fig { margin: 0; }
+.stage-fig img { width: 100%; border: 1px solid var(--line, #333); border-radius: 4px; }
+.stage-fig figcaption { font-size: .8rem; color: var(--muted, #aaa); }
+.report-body { background: #111; color: #ddd; padding: .6rem; border-radius: 4px;
+               white-space: pre-wrap; font-size: .85rem; }

@@ -257,6 +257,8 @@ class FeatureExtrinsicsResult:
     n_inliers: int
     inlier_mask: np.ndarray       # (N,) bool over the input matches
     points_3d: np.ndarray         # (M, 3) triangulated inliers, cam_a frame, metric
+    matched_pts_a: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
+    matched_pts_b: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
 
 
 # ---------------------------------------------------------------------------
@@ -576,4 +578,6 @@ def solve_feature_extrinsics(
         n_inliers=n_inliers,
         inlier_mask=inliers,
         points_3d=pts3,
+        matched_pts_a=pts_a,
+        matched_pts_b=pts_b,
     )

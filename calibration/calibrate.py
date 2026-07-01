@@ -789,6 +789,124 @@ def calibrate_two_stage(
 
 
 # ---------------------------------------------------------------------------
+# Targetless (SuperPoint+LightGlue) extrinsics — experimental, opt-in
+# ---------------------------------------------------------------------------
+
+
+def _load_intrinsics_kd(intrinsic_json: Path) -> dict[str, tuple[np.ndarray, np.ndarray, tuple[int, int]]]:
+    """Read per-camera (K, D, image_size_wh) from a Multical intrinsic.json."""
+    data = json.loads(Path(intrinsic_json).read_text())
+    cams = data.get("cameras") or {}
+    out: dict[str, tuple[np.ndarray, np.ndarray, tuple[int, int]]] = {}
+    for cid, c in cams.items():
+        K = np.asarray(c["K"], dtype=np.float64)
+        raw = c.get("dist", [])
+        D = np.asarray(raw, dtype=np.float64).reshape(-1)
+        wh = tuple(int(v) for v in (c.get("image_size") or [0, 0]))
+        out[cid] = (K, D, wh)
+    return out
+
+
+def _load_stereo_pairs(pair_dir_a: Path, pair_dir_b: Path) -> list:
+    """Load synchronized cam_a/cam_b JPEG pairs (sorted, paired by filename order)."""
+    a = sorted(p for p in Path(pair_dir_a).iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
+    b = sorted(p for p in Path(pair_dir_b).iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
+    n = min(len(a), len(b))
+    if n == 0:
+        raise FileNotFoundError(f"no stereo pairs in {pair_dir_a} / {pair_dir_b}")
+    pairs = []
+    for ia, ib in zip(a[:n], b[:n], strict=False):
+        img_a = cv2.imread(str(ia))
+        img_b = cv2.imread(str(ib))
+        if img_a is None or img_b is None:
+            continue
+        pairs.append((img_a, img_b))
+    return pairs
+
+
+def run_targetless(
+    intrinsic_json: Path,
+    pair_dir_a: Path,
+    pair_dir_b: Path,
+    references: list,
+    output_path: Path,
+    *,
+    matcher=None,
+    models_dir: Path | None = None,
+    reference_calib: dict | None = None,
+    measurements: list | None = None,
+    report_path: Path | None = None,
+    render_stage_images: bool = False,
+    stage_image_dir: Path | None = None,
+) -> CalibrationFile:
+    """Targetless stereo extrinsic solve → calibration.json + validation report.
+
+    Reads intrinsics (K, D) from ``intrinsic_json`` (Multical), loads the
+    synchronized stereo pairs, injects the ``matcher`` (defaults to the on-rig ONNX
+    SuperPoint+LightGlue when ``models_dir`` is given), and runs the Stage-1+2+assemble
+    flow. When ``report_path`` is set the three-level validation report is written
+    beside the calibration; the AprilGrid ``reference_calib`` + ``measurements`` are
+    optional metric-acceptance inputs.
+    """
+    from calibration.targetless_orchestration import solve_targetless
+
+    kd = _load_intrinsics_kd(intrinsic_json)
+    if "cam_a" not in kd or "cam_b" not in kd:
+        raise RuntimeError(
+            f"targetless needs cam_a + cam_b intrinsics in {intrinsic_json}; "
+            f"found {sorted(kd)}")
+    K_a, D_a, wh_a = kd["cam_a"]
+    K_b, D_b, _wh_b = kd["cam_b"]
+
+    if matcher is None:
+        from calibration.feature_extrinsics import OnnxSuperPointLightGlue
+        md = Path(models_dir) if models_dir else (Path(__file__).resolve().parents[1] / "models")
+        matcher = OnnxSuperPointLightGlue(models_dir=md)
+
+    pairs = _load_stereo_pairs(pair_dir_a, pair_dir_b)
+    res = solve_targetless(
+        image_pairs=pairs, matcher=matcher,
+        K_a=K_a, D_a=D_a, K_b=K_b, D_b=D_b,
+        references=references, image_size_wh=wh_a,
+        reference_calib=reference_calib, measurements=measurements,
+        render_stage_images=render_stage_images or bool(stage_image_dir),
+    )
+    res.calibration.write(output_path)
+    print(f"[targetless] wrote {output_path}", flush=True)
+    for cid, cam in res.calibration.cameras.items():
+        print(f"[targetless]   {cid}: RMS={cam.reprojection_rms_px:.3f} px", flush=True)
+    for line in res.report.summary_lines:
+        print(f"[targetless]   {line}", flush=True)
+
+    if report_path is not None:
+        Path(report_path).write_text(json.dumps(res.report.to_dict(), indent=2, default=float))
+        print(f"[targetless] wrote report {report_path}", flush=True)
+    if stage_image_dir is not None:
+        Path(stage_image_dir).mkdir(parents=True, exist_ok=True)
+        for name, img in res.stage_images.items():
+            cv2.imwrite(str(Path(stage_image_dir) / f"{name}.jpg"), img)
+
+    return res.calibration
+
+
+def _references_from_json(path: Path) -> list:
+    """Load scale references from a JSON file → list[ScaleReference].
+
+    Schema: ``[{"p1_a":[u,v],"p1_b":[u,v],"p2_a":[u,v],"p2_b":[u,v],"distance_m":m}, ...]``.
+    """
+    from calibration.feature_extrinsics import ScaleReference
+    data = json.loads(Path(path).read_text())
+    refs = []
+    for r in data:
+        refs.append(ScaleReference(
+            p1_a=tuple(r["p1_a"]), p1_b=tuple(r["p1_b"]),
+            p2_a=tuple(r["p2_a"]), p2_b=tuple(r["p2_b"]),
+            distance_m=float(r["distance_m"]),
+        ))
+    return refs
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -924,6 +1042,25 @@ def _cmd_calibrate_2cam(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_calibrate_targetless(args: argparse.Namespace) -> int:
+    refs = _references_from_json(Path(args.references))
+    reference_calib = None
+    if args.reference_calibration:
+        reference_calib = json.loads(Path(args.reference_calibration).read_text())
+    run_targetless(
+        intrinsic_json=Path(args.intrinsic_json),
+        pair_dir_a=Path(args.pair_dir_a),
+        pair_dir_b=Path(args.pair_dir_b),
+        references=refs,
+        output_path=Path(args.output),
+        models_dir=Path(args.models_dir) if args.models_dir else None,
+        reference_calib=reference_calib,
+        report_path=Path(args.report) if args.report else None,
+        stage_image_dir=Path(args.stage_image_dir) if args.stage_image_dir else None,
+    )
+    return 0
+
+
 def _cmd_vis(args: argparse.Namespace) -> int:
     binary = _binary_from_args(args)
     run_multical_vis(Path(args.workspace), multical_binary=binary)
@@ -1004,6 +1141,29 @@ def build_parser() -> argparse.ArgumentParser:
     _add_board_args(p2)
     _add_aprilgrid_args(p2)
     p2.set_defaults(func=_cmd_calibrate_2cam)
+
+    # calibrate-targetless — EXPERIMENTAL: SuperPoint+LightGlue extrinsics + plane-fit floor.
+    pt = sub.add_parser(
+        "calibrate-targetless",
+        help="EXPERIMENTAL 2-cam targetless extrinsics (SuperPoint+LightGlue) "
+             "+ floor-plane world frame → calibration.json (opt-in; AprilGrid is the fallback)",
+    )
+    pt.add_argument("--intrinsic-json", required=True,
+                    help="Multical intrinsic.json with cam_a + cam_b K,D")
+    pt.add_argument("--pair-dir-a", required=True, help="dir of cam_a stereo-pair frames")
+    pt.add_argument("--pair-dir-b", required=True, help="dir of cam_b stereo-pair frames")
+    pt.add_argument("--references", required=True,
+                    help="JSON of ≥3 measured floor scale-references "
+                         "([{p1_a,p1_b,p2_a,p2_b,distance_m}, ...])")
+    pt.add_argument("--output", required=True, help="output calibration.json path")
+    pt.add_argument("--models-dir", default=None,
+                    help="dir with superpoint.onnx + superpoint_lightglue.onnx (default: repo models/)")
+    pt.add_argument("--reference-calibration", default=None,
+                    help="AprilGrid calibration.json on the same rig (metric report diff)")
+    pt.add_argument("--report", default=None, help="write the 3-level validation report JSON here")
+    pt.add_argument("--stage-image-dir", default=None,
+                    help="write the 5 key-stage annotated images here (jpg)")
+    pt.set_defaults(func=_cmd_calibrate_targetless)
 
     # vis — re-open Multical's 3D viewer on a saved workspace (no recalibration).
     pv = sub.add_parser(

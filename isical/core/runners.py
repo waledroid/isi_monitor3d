@@ -151,6 +151,92 @@ def run_extrinsic(project_dir: Path) -> dict:
     return {"calibration_json": str(out), "rms": rms, "cameras": list(calibration.cameras)}
 
 
+_SCALE_REFS_JSON = "work/scale_references.json"
+_TARGETLESS_REPORT_JSON = "work/targetless_report.json"
+_TARGETLESS_STAGE_DIR = "work/targetless_stages"
+
+
+def _load_scale_references(project_dir: Path):
+    """Load the operator-marked floor scale references → list[ScaleReference]."""
+    from calibration.feature_extrinsics import ScaleReference
+    path = Path(project_dir) / _SCALE_REFS_JSON
+    if not path.exists():
+        raise ValueError(
+            "no scale references marked — mark ≥3 measured floor point-pairs on the "
+            "targetless extrinsic page first (work/scale_references.json missing)")
+    data = json.loads(path.read_text())
+    refs = [ScaleReference(
+        p1_a=tuple(r["p1_a"]), p1_b=tuple(r["p1_b"]),
+        p2_a=tuple(r["p2_a"]), p2_b=tuple(r["p2_b"]),
+        distance_m=float(r["distance_m"])) for r in data]
+    if len(refs) < 3:
+        raise ValueError(f"targetless needs ≥3 floor scale references, have {len(refs)}")
+    return refs
+
+
+def run_extrinsic_targetless(project_dir: Path) -> dict:
+    """Phase 2 (targetless) — SuperPoint+LightGlue extrinsics + plane-fit floor.
+
+    Uses Phase 1's ``work/intrinsic.json`` (K, D), the captured synchronized stereo
+    pairs (``extrinsic/{cam}/*.jpg``), and the operator's ≥3 measured floor
+    scale-references (``work/scale_references.json``) to solve stereo extrinsics
+    without a physical target. Writes ``calibration.json``, the 3-level validation
+    report, and the 5 key-stage images. The ONNX matcher weights must be vendored
+    into ``models/`` — absent them this raises a clear MatcherWeightsMissing (on-rig).
+    """
+    from calibration.calibrate import run_targetless
+    project_dir = Path(project_dir)
+    cfg = load_project(project_dir)
+    cams = cfg.configured_cameras()
+    if len(cams) < 2:
+        raise ValueError("targetless extrinsics needs both cameras configured")
+    intrinsic_json = project_dir / _INTRINSIC_JSON
+    if not intrinsic_json.exists():
+        raise ValueError("no work/intrinsic.json — run the Intrinsic phase first")
+    pair_a = project_dir / "extrinsic" / "cam_a"
+    pair_b = project_dir / "extrinsic" / "cam_b"
+    if not (pair_a.is_dir() and any(pair_a.glob("*.jpg"))
+            and pair_b.is_dir() and any(pair_b.glob("*.jpg"))):
+        raise ValueError("no synchronized stereo pairs captured for targetless extrinsics")
+
+    references = _load_scale_references(project_dir)
+    # Optional: diff against a prior AprilGrid calibration.json if one is present.
+    ref_calib = None
+    apr = project_dir / "calibration_aprilgrid.json"
+    if apr.exists():
+        ref_calib = json.loads(apr.read_text())
+
+    out = project_dir / _CALIBRATION_JSON
+    report = project_dir / _TARGETLESS_REPORT_JSON
+    stages = project_dir / _TARGETLESS_STAGE_DIR
+    logger.info("extrinsic(targetless): solving rig %s (%d scale refs)", cams, len(references))
+    progress.report(0, 3, "targetless:solve")
+    calibration = run_targetless(
+        intrinsic_json=intrinsic_json, pair_dir_a=pair_a, pair_dir_b=pair_b,
+        references=references, output_path=out,
+        reference_calib=ref_calib, report_path=report,
+        stage_image_dir=stages, render_stage_images=True,
+    )
+    progress.report(3, 3, "targetless:done")
+    rms = {cid: round(float(c.reprojection_rms_px), 4)
+           for cid, c in calibration.cameras.items()}
+    logger.info("extrinsic(targetless): wrote %s | RMS=%s", out, rms)
+    return {"calibration_json": str(out), "rms": rms,
+            "cameras": list(calibration.cameras),
+            "report_json": str(report), "method": "targetless"}
+
+
+def targetless_report(project_dir: Path) -> dict | None:
+    """The persisted 3-level validation report (or None if not solved)."""
+    path = Path(project_dir) / _TARGETLESS_REPORT_JSON
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
 def run_export(project_dir: Path, *, install: bool = False) -> dict:
     """Phase 3 — present the calibration.json; optionally INSTALL it to the live system.
 

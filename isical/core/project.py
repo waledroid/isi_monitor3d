@@ -135,6 +135,9 @@ class CalibConfig(BaseModel):
     cameras: dict[str, CameraSpec]
     board: BoardSpec = Field(default_factory=BoardSpec)
     capture: CaptureSpec = Field(default_factory=CaptureSpec)
+    # Extrinsic method: "aprilgrid" (default/fallback, target-based) or
+    # "targetless" (SuperPoint+LightGlue, experimental).
+    extrinsic_method: Literal["aprilgrid", "targetless"] = "aprilgrid"
 
     @field_validator("cameras")
     @classmethod

@@ -19,7 +19,12 @@ from ..core.project import (
     load_project,
     save_project,
 )
-from ..core.runners import calibration_summary, intrinsic_summary, phase_status
+from ..core.runners import (
+    calibration_summary,
+    intrinsic_summary,
+    phase_status,
+    targetless_report,
+)
 from .deps import project_cfg, project_dir
 
 router = APIRouter()
@@ -152,6 +157,35 @@ async def put_board_config(request: Request, name: str, body: BoardConfigBody) -
     cfg.board.tag_spacing = derived["tag_spacing"]
     save_project(d, cfg)
     return {"ok": True, **derived}
+
+
+class ExtrinsicMethodBody(BaseModel):
+    method: Literal["aprilgrid", "targetless"]
+
+
+@router.get("/api/p/{name}/extrinsic-method")
+async def get_extrinsic_method(request: Request, name: str) -> dict:
+    """The extrinsic calibration method: AprilGrid (target) or targetless."""
+    _d, cfg = project_cfg(request, name)
+    return {"method": cfg.extrinsic_method}
+
+
+@router.put("/api/p/{name}/extrinsic-method")
+async def put_extrinsic_method(request: Request, name: str,
+                               body: ExtrinsicMethodBody) -> dict:
+    """Select the extrinsic method. Targetless is experimental; AprilGrid is the
+    default/fallback. Routes the extrinsic solve (routes_jobs) accordingly."""
+    d, cfg = project_cfg(request, name)
+    cfg.extrinsic_method = body.method
+    save_project(d, cfg)
+    return {"ok": True, "method": cfg.extrinsic_method}
+
+
+@router.get("/api/p/{name}/targetless-report")
+async def get_targetless_report(request: Request, name: str) -> dict:
+    """The 3-level targetless validation report (or null when not yet solved)."""
+    d = project_dir(request, name)
+    return {"report": targetless_report(d)}
 
 
 class CamerasBody(BaseModel):

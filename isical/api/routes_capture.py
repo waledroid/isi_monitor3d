@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel
 
 from .deps import project_cfg, project_dir
 
@@ -218,6 +219,73 @@ def list_shots(request: Request, name: str, phase: str, cam: str) -> dict:
     target = cfg.capture.target_per_camera if phase == "intrinsic" else cfg.capture.extrinsic_target
     return {"target": target, "count": len(shots),
             "blur_min_var": float(cfg.capture.blur_min_var), "shots": shots}
+
+
+# ---------------------------------------------------------------------------
+# Targetless extrinsics — scale-reference marking + stage-image serving
+# ---------------------------------------------------------------------------
+
+
+class ScaleRefIn(BaseModel):
+    p1_a: tuple[float, float]
+    p1_b: tuple[float, float]
+    p2_a: tuple[float, float]
+    p2_b: tuple[float, float]
+    distance_m: float
+
+
+class ScaleRefsBody(BaseModel):
+    references: list[ScaleRefIn]
+
+
+_SCALE_REFS_REL = "work/scale_references.json"
+_STAGE_DIR_REL = "work/targetless_stages"
+
+
+@router.get("/api/p/{name}/scale-references")
+async def get_scale_references(request: Request, name: str) -> dict:
+    """The operator-marked floor scale references for the targetless flow."""
+    d = project_dir(request, name)
+    path = d / _SCALE_REFS_REL
+    refs = json.loads(path.read_text()) if path.exists() else []
+    return {"references": refs, "count": len(refs)}
+
+
+@router.put("/api/p/{name}/scale-references")
+async def put_scale_references(request: Request, name: str, body: ScaleRefsBody) -> dict:
+    """Persist ≥3 measured floor point-pairs (targetless scale). Marked interactively
+    by clicking the pair on the images + entering each measured metres value."""
+    d = project_dir(request, name)
+    for r in body.references:
+        if r.distance_m <= 0:
+            raise HTTPException(status_code=422, detail="each reference distance_m must be > 0")
+    (d / "work").mkdir(parents=True, exist_ok=True)
+    (d / _SCALE_REFS_REL).write_text(
+        json.dumps([r.model_dump() for r in body.references], indent=2))
+    return {"ok": True, "count": len(body.references),
+            "enough": len(body.references) >= 3}
+
+
+@router.get("/api/p/{name}/targetless-stages")
+async def list_targetless_stages(request: Request, name: str) -> dict:
+    """Which of the 5 key-stage images exist for this project (post-solve)."""
+    d = project_dir(request, name)
+    stage_dir = d / _STAGE_DIR_REL
+    names = sorted(p.stem for p in stage_dir.glob("*.jpg")) if stage_dir.is_dir() else []
+    return {"stages": names}
+
+
+@router.get("/targetless-stage/{name}/{stage}")
+def targetless_stage_image(request: Request, name: str, stage: str) -> FileResponse:
+    """Serve one annotated key-stage image (pair/matches/scale_refs/triangulation/result)."""
+    if not re.match(r"^[A-Za-z0-9_\-]+$", stage):
+        raise HTTPException(status_code=404, detail="not found")
+    d = project_dir(request, name)
+    base = (d / _STAGE_DIR_REL).resolve()
+    target = (base / f"{stage}.jpg").resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(str(target), media_type="image/jpeg")
 
 
 @router.get("/shots/{name}/{phase}/{cam}/{file}")

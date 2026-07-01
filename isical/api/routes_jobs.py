@@ -7,14 +7,32 @@ from functools import partial
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..core.runners import run_export, run_extrinsic, run_intrinsic
+from ..core.project import load_project
+from ..core.runners import (
+    run_export,
+    run_extrinsic,
+    run_extrinsic_targetless,
+    run_intrinsic,
+)
 from .deps import project_dir
 
 router = APIRouter()
 
+
+def _extrinsic_runner(d, body):
+    """Dispatch the extrinsic solve on the project's configured method.
+
+    AprilGrid (default/fallback) → run_extrinsic; targetless (experimental) →
+    run_extrinsic_targetless. The method persists in calib.yaml (extrinsic_method).
+    """
+    method = load_project(d).extrinsic_method
+    fn = run_extrinsic_targetless if method == "targetless" else run_extrinsic
+    return partial(fn, d)
+
+
 _PHASES = {
     "intrinsic": lambda d, body: partial(run_intrinsic, d),
-    "extrinsic": lambda d, body: partial(run_extrinsic, d),
+    "extrinsic": _extrinsic_runner,
     "export": lambda d, body: partial(run_export, d,
                                       install=bool(body and body.install)),
 }
