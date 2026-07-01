@@ -176,3 +176,24 @@ def test_calibration_summary(tmp_path):
 
 def test_calibration_summary_none_before_solve(tmp_path):
     assert runners.calibration_summary(_proj(tmp_path)) is None
+
+
+def test_extrinsic_summary_empty_before_solve(tmp_path):
+    assert runners.extrinsic_summary(_proj(tmp_path)) == {"cameras": {}}
+
+
+def test_extrinsic_summary_shape_after_solve(tmp_path):
+    pdir = _proj(tmp_path)
+    R_a = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    R_b = [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
+    (pdir / "calibration.json").write_text(json.dumps({
+        "cameras": {
+            "cam_a": {"reprojection_rms_px": 1.62, "R": R_a, "t": [0.0, 0.0, 0.0]},
+            "cam_b": {"reprojection_rms_px": 1.62, "R": R_b, "t": [1.5, 0.0, 0.0]}}}))
+    s = runners.extrinsic_summary(pdir)
+    assert set(s["cameras"]) == {"cam_a", "cam_b"}
+    assert s["cameras"]["cam_a"]["R"] == R_a          # 3x3 rotation echoed back
+    assert s["cameras"]["cam_b"]["t"] == [1.5, 0.0, 0.0]
+    assert s["cameras"]["cam_a"]["rms"] == 1.62
+    assert s["baseline_m"] == 1.5                      # ||t_b - t_a||
+    assert s["rms_gate_px"] == 2.0                     # KPI-aligned extrinsic gate

@@ -22,6 +22,7 @@ from ..core.project import (
 from ..core.runners import (
     calibration_matrices,
     calibration_summary,
+    extrinsic_summary,
     intrinsic_summary,
     phase_status,
     targetless_report,
@@ -94,6 +95,17 @@ async def intr_summary(request: Request, name: str) -> dict:
     """
     d = project_dir(request, name)
     return intrinsic_summary(d)
+
+
+@router.get("/api/p/{name}/extrinsic-summary")
+async def extr_summary(request: Request, name: str) -> dict:
+    """Per-camera extrinsics ([R | t] pose) from calibration.json (after solve).
+
+    Returns ``{"rms_gate_px", "baseline_m"?, "cameras": {cam: {R, t, rms}}}``
+    when solved, or ``{"cameras": {}}`` when not (the UI hides the panel).
+    """
+    d = project_dir(request, name)
+    return extrinsic_summary(d)
 
 
 @router.get("/api/p/{name}/calibration-summary")

@@ -171,10 +171,11 @@ document.getElementById("refresh-board")?.addEventListener("click", render);
 // ---- intrinsic results panel (per-camera K + distortion + RMS) ----
 function _fmtNum(v, dec) { return v == null ? "?" : Number(v).toFixed(dec); }
 
-function _matrixHtml(K) {
-  // 3×3 matrix rendered as a monospace grid with bracket borders.
+function _matrixHtml(K, dec = 2) {
+  // matrix rendered as a monospace grid with bracket borders (K uses 2 dp;
+  // the extrinsic [R|t] passes 4 dp so the near-±1 rotation stays readable).
   const rows = K.map((row) =>
-    `<tr>${row.map((v) => `<td class="kmat-cell">${_fmtNum(v, 2)}</td>`).join("")}</tr>`
+    `<tr>${row.map((v) => `<td class="kmat-cell">${_fmtNum(v, dec)}</td>`).join("")}</tr>`
   ).join("");
   return `<div class="kmat-wrap">
     <span class="kmat-bracket">[</span>
@@ -260,6 +261,79 @@ async function loadIntrinsicResults() {
   } catch { card.hidden = true; }
 }
 
+// ---- extrinsic results panel (per-camera [R|t] pose — same format as K) ----
+function _renderExtrinsicCamera(cam, gate, baseline) {
+  const rmsOk = cam.rms != null && cam.rms <= gate;
+  const rmsBadgeClass = cam.rms == null ? "msg" : (rmsOk ? "ok" : "bad");
+  const rmsTxt = cam.rms == null
+    ? "? (re-solve to populate)"
+    : `${Number(cam.rms).toFixed(4)} px ${rmsOk ? "✓" : "✗"} (gate ${gate} px)`;
+  // [R | t] as a 3×4 extrinsic matrix (rotation columns + translation column).
+  const Rt = cam.R.map((row, i) => [...row, cam.t[i]]);
+  const tTxt = (cam.t || []).map((v) => _fmtNum(v, 4)).join(", ");
+  const baseTxt = baseline != null ? `${_fmtNum(baseline, 3)} m` : "—";
+  return `
+    <div class="intr-cam-body">
+      <div class="intr-section">
+        <div class="intr-label">Extrinsic matrix [R | t] <span class="msg">world → camera</span></div>
+        ${_matrixHtml(Rt, 4)}
+      </div>
+      <table class="cal-table intr-detail">
+        <tbody>
+          <tr><td class="intr-key">translation t (m)</td>
+              <td><code>${tTxt}</code></td></tr>
+          <tr><td class="intr-key">camera baseline</td>
+              <td>${baseTxt}</td></tr>
+          <tr><td class="intr-key">reproj RMS</td>
+              <td><b class="${rmsBadgeClass}">${rmsTxt}</b></td></tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
+let _extr_active_tab = null;
+
+function _switchExtrTab(cid) {
+  _extr_active_tab = cid;
+  document.querySelectorAll(".extr-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.cam === cid);
+  });
+  document.querySelectorAll(".extr-panel").forEach((panel) => {
+    panel.hidden = panel.dataset.cam !== cid;
+  });
+}
+
+async function loadExtrinsicResults() {
+  const card = document.getElementById("extrinsic-results-card");
+  const tabsEl = document.getElementById("extr-tabs");
+  const panelsEl = document.getElementById("extr-panels");
+  if (!card) return;
+  try {
+    const data = await getJSON(`/api/p/${project}/extrinsic-summary`);
+    const cams = data.cameras || {};
+    const camKeys = Object.keys(cams);
+    if (camKeys.length === 0) { card.hidden = true; return; }
+    card.hidden = false;
+    const gate = data.rms_gate_px;
+    const baseline = data.baseline_m;
+
+    tabsEl.innerHTML = camKeys.map((cid) =>
+      `<button class="cam-tab extr-tab" data-cam="${cid}">${cid}</button>`
+    ).join("");
+
+    panelsEl.innerHTML = camKeys.map((cid) =>
+      `<div class="extr-panel" data-cam="${cid}" hidden>${_renderExtrinsicCamera(cams[cid], gate, baseline)}</div>`
+    ).join("");
+
+    tabsEl.querySelectorAll(".extr-tab").forEach((btn) => {
+      btn.addEventListener("click", () => _switchExtrTab(btn.dataset.cam));
+    });
+
+    const toShow = (camKeys.includes(_extr_active_tab) ? _extr_active_tab : camKeys[0]);
+    _switchExtrTab(toShow);
+  } catch { card.hidden = true; }
+}
+
 // ---- cameras editor (always visible, pre-filled; add cam_b later / fix a URL) ----
 const camsForm = document.getElementById("cams-form");
 async function loadCams() {
@@ -295,4 +369,7 @@ camsForm?.addEventListener("submit", async (ev) => {
 render();
 loadResults();
 loadIntrinsicResults();
-setInterval(() => { render(); loadResults(); loadIntrinsicResults(); }, 5000);
+loadExtrinsicResults();
+setInterval(() => {
+  render(); loadResults(); loadIntrinsicResults(); loadExtrinsicResults();
+}, 5000);

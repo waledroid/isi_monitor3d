@@ -362,6 +362,41 @@ def intrinsic_summary(project_dir: Path) -> dict:
     return {"rms_gate_px": INTRINSIC_RMS_GATE_PX, "cameras": out_cams}
 
 
+def extrinsic_summary(project_dir: Path) -> dict:
+    """Per-camera extrinsics (the [R | t] pose) from calibration.json — the SOLVE
+    output, shown as a matrix panel below the intrinsics.
+
+    Returns ``{"rms_gate_px": <float>, "baseline_m": <float?>, "cameras":
+    {<cam>: {R (3x3), t (3-vector), rms}}}`` when calibration.json exists, or
+    ``{"cameras": {}}`` when it does not (UI hides the panel).
+    ``R``/``t`` are the world→camera extrinsic (``P = K[R|t]``).
+    """
+    from calibration.calibrate import EXTRINSIC_REPROJECTION_RMS_HARD_LIMIT_PX
+
+    src = Path(project_dir) / _CALIBRATION_JSON
+    if not src.exists():
+        return {"cameras": {}}
+    data = json.loads(src.read_text())
+    out_cams: dict = {}
+    centers: dict = {}
+    for cid, c in (data.get("cameras") or {}).items():
+        R = c.get("R") or [[0, 0, 0]] * 3
+        t = c.get("t") or [0, 0, 0]
+        centers[cid] = t
+        out_cams[cid] = {
+            "R": [[round(float(v), 4) for v in row] for row in R],
+            "t": [round(float(v), 4) for v in t],
+            "rms": c.get("reprojection_rms_px"),
+        }
+    out: dict = {"rms_gate_px": EXTRINSIC_REPROJECTION_RMS_HARD_LIMIT_PX,
+                 "cameras": out_cams}
+    if len(centers) == 2:
+        import math
+        a, b = list(centers)
+        out["baseline_m"] = round(math.dist(centers[a], centers[b]), 3)
+    return out
+
+
 def calibration_summary(project_dir: Path) -> dict | None:
     """Vital calibration facts from calibration.json (the SOLVE output): per-camera
     reprojection RMS + focal length / principal point / distortion / world position,
