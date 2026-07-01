@@ -14,12 +14,15 @@
   </h1>
   {% if phase == "extrinsic" %}
   <div class="toolbar" id="method-tools">
-    <label class="method-label">Extrinsic method:
-      <select id="extrinsic-method">
-        <option value="aprilgrid">AprilGrid (target)</option>
-        <option value="targetless">SuperPoint+LightGlue (targetless, experimental)</option>
-      </select>
-    </label>
+    <span class="method-title">Extrinsic method</span>
+    <div class="method-toggle" id="method-toggle" role="tablist" aria-label="Extrinsic method">
+      <button type="button" class="method-opt" data-method="aprilgrid" role="tab">Boards</button>
+      <button type="button" class="method-opt" data-method="targetless" role="tab">Targetless</button>
+    </div>
+    <select id="extrinsic-method" hidden>
+      <option value="aprilgrid">AprilGrid (target)</option>
+      <option value="targetless">SuperPoint+LightGlue (targetless, experimental)</option>
+    </select>
     <span id="method-msg" class="msg"></span>
   </div>
   {% endif %}
@@ -78,26 +81,79 @@
     </div>
   </div>
   <div id="targetless-panel" class="targetless-panel" hidden>
-    <h2>Targetless extrinsics (experimental)</h2>
-    <p class="msg">Capture synchronized stereo pairs (above), then mark <b>≥3 measured floor
-      point-pairs</b> for metric scale: click the same floor landmark on cam_a and cam_b for each of
-      two points, enter the tape-measured distance in metres, and add the reference. Then Solve on the board.</p>
-    <div class="toolbar" id="scale-mark-tools">
-      <label>distance (m): <input id="scale-dist" type="number" min="0.01" step="0.01"></label>
-      <span id="scale-click-hint" class="msg">click: p1 cam_a → p1 cam_b → p2 cam_a → p2 cam_b</span>
-      <button id="scale-add" disabled>Add reference</button>
-      <button id="scale-clear">Clear all</button>
-      <span id="scale-count" class="msg"></span>
+    <h2>Targetless extrinsics <span class="tag-exp">experimental</span></h2>
+    <p class="msg">Aim BOTH cameras so their views overlap on a textured floor, capture synchronized
+      stereo pairs, mark <b>≥3 measured floor point-pairs</b> for metric scale, then Solve. Each stage
+      below fills in as the solve runs.</p>
+
+    <!-- Top: both live views side by side + capture/solve controls -->
+    <div class="tl-live" id="tl-live">
+      <div class="tl-live-views fourup" id="tl-live-views"></div>
+      <div class="toolbar" id="tl-live-tools">
+        <button id="tl-capture">Capture pairs</button>
+        <button id="tl-stop" disabled>Stop</button>
+        <button id="tl-solve" class="primary">Solve</button>
+        <span id="tl-live-msg" class="msg"></span>
+      </div>
     </div>
-    <div id="scale-mark-views" class="fourup"></div>
-    <ol id="scale-ref-list" class="scale-ref-list"></ol>
-    <div id="targetless-stages" class="targetless-stages" hidden>
-      <h3>Key stages</h3>
-      <div id="stage-imgs" class="stage-imgs"></div>
-    </div>
-    <div id="targetless-report" class="targetless-report" hidden>
-      <h3>Validation report</h3>
-      <pre id="report-body" class="report-body"></pre>
+
+    <!-- Notebook cells -->
+    <div class="nb" id="tl-notebook">
+      <!-- Cell ① captured stereo pairs -->
+      <section class="nb-cell" id="cell-pair" data-stage="pair">
+        <div class="nb-head"><span class="nb-num">1</span><h3>Captured stereo pairs</h3>
+          <span class="nb-status msg">awaiting capture</span></div>
+        <div class="nb-out"><div class="nb-placeholder">cam_a | cam_b frames used will appear here</div></div>
+      </section>
+
+      <!-- Cell ② feature matches -->
+      <section class="nb-cell" id="cell-matches" data-stage="matches">
+        <div class="nb-head"><span class="nb-num">2</span><h3>Feature matches</h3>
+          <span class="nb-status msg">awaiting solve</span></div>
+        <div class="nb-out"><div class="nb-placeholder">inliers (green) vs outliers (red) + match count</div></div>
+      </section>
+
+      <!-- Cell ③ scale references (interactive marking lives here) -->
+      <section class="nb-cell" id="cell-scale" data-stage="scale_refs">
+        <div class="nb-head"><span class="nb-num">3</span><h3>Scale references</h3>
+          <span id="scale-count" class="nb-status msg"></span></div>
+        <div class="nb-out">
+          <p class="msg">Click the same floor landmark on cam_a and cam_b for each of two points, enter the
+            tape-measured distance, and add the reference (≥3 needed).</p>
+          <div class="toolbar" id="scale-mark-tools">
+            <label>distance (m): <input id="scale-dist" type="number" min="0.01" step="0.01"></label>
+            <span id="scale-click-hint" class="msg"></span>
+            <button id="scale-add" disabled>Add reference</button>
+            <button id="scale-clear">Clear all</button>
+          </div>
+          <div id="scale-mark-views" class="fourup"></div>
+          <ol id="scale-ref-list" class="scale-ref-list"></ol>
+          <figure class="stage-fig" id="scale-stage-fig" hidden>
+            <figcaption>solve output — marked references</figcaption>
+            <img id="scale-stage-img" alt="scale references">
+          </figure>
+        </div>
+      </section>
+
+      <!-- Cell ④ triangulation + floor fit -->
+      <section class="nb-cell" id="cell-triangulation" data-stage="triangulation">
+        <div class="nb-head"><span class="nb-num">4</span><h3>Triangulated points + floor-plane fit</h3>
+          <span class="nb-status msg">awaiting solve</span></div>
+        <div class="nb-out"><div class="nb-placeholder">triangulation / floor overlay</div></div>
+      </section>
+
+      <!-- Cell ⑤ result -->
+      <section class="nb-cell" id="cell-result" data-stage="result">
+        <div class="nb-head"><span class="nb-num">5</span><h3>Result</h3>
+          <span class="nb-status msg">awaiting solve</span></div>
+        <div class="nb-out">
+          <pre id="result-matrices" class="result-matrices"></pre>
+          <div id="targetless-report" class="targetless-report" hidden>
+            <h4>Validation summary</h4>
+            <pre id="report-body" class="report-body"></pre>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
   {% endif %}

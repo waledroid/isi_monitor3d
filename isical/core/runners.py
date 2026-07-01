@@ -237,6 +237,36 @@ def targetless_report(project_dir: Path) -> dict | None:
         return None
 
 
+def calibration_matrices(project_dir: Path) -> dict | None:
+    """Per-camera pose matrices from ``calibration.json`` for the Result cell.
+
+    Returns ``{"floor_anchor_method", "calibration_mode", "cameras": {cam:
+    {"R": 3x3, "t": [3], "reprojection_rms_px"}}}`` after the Extrinsic solve, or
+    ``None`` when ``calibration.json`` doesn't exist yet (the notebook Result cell
+    then stays in its "awaiting solve" placeholder). Read-only, never raises into
+    the request.
+    """
+    path = Path(project_dir) / _CALIBRATION_JSON
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    cams: dict[str, dict] = {}
+    for cid, cam in (data.get("cameras") or {}).items():
+        cams[cid] = {
+            "R": cam.get("R"),
+            "t": cam.get("t"),
+            "reprojection_rms_px": cam.get("reprojection_rms_px"),
+        }
+    return {
+        "floor_anchor_method": data.get("floor_anchor_method"),
+        "calibration_mode": data.get("calibration_mode"),
+        "cameras": cams,
+    }
+
+
 def run_export(project_dir: Path, *, install: bool = False) -> dict:
     """Phase 3 — present the calibration.json; optionally INSTALL it to the live system.
 

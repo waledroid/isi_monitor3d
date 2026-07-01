@@ -20,6 +20,7 @@ from ..core.project import (
     save_project,
 )
 from ..core.runners import (
+    calibration_matrices,
     calibration_summary,
     intrinsic_summary,
     phase_status,
@@ -186,6 +187,16 @@ async def get_targetless_report(request: Request, name: str) -> dict:
     """The 3-level targetless validation report (or null when not yet solved)."""
     d = project_dir(request, name)
     return {"report": targetless_report(d)}
+
+
+@router.get("/api/p/{name}/calibration-matrices")
+async def get_calibration_matrices(request: Request, name: str) -> dict:
+    """Per-camera R (3x3) / t (3x1) + reprojection RMS from calibration.json.
+
+    Feeds the targetless notebook's Result cell (prints the solved matrices as
+    text). ``matrices`` is null until the Extrinsic phase has been solved."""
+    d = project_dir(request, name)
+    return {"matrices": calibration_matrices(d)}
 
 
 class CamerasBody(BaseModel):

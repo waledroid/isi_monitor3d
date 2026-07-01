@@ -104,6 +104,58 @@ def test_stage_image_path_traversal_guarded():
         assert c.get("/targetless-stage/rig/..%2f..%2fcalib").status_code == 404
 
 
+# --- result matrices (Result cell) ------------------------------------------
+
+
+def test_calibration_matrices_null_before_solve():
+    with _client() as c:
+        _mk_rig(c)
+        assert c.get("/api/p/rig/calibration-matrices").json() == {"matrices": None}
+
+
+def test_calibration_matrices_after_solve():
+    """calibration.json on disk → per-camera R/t/RMS + anchor exposed for the
+    notebook Result cell."""
+    with _client() as c:
+        _mk_rig(c)
+        data_dir = c.app.state.settings.data_dir
+        calib = {
+            "version": 1, "created_at": "2026-01-01T00:00:00",
+            "floor_anchor_method": "planefit", "floor_origin_note": "",
+            "calibration_mode": "multical_full",
+            "cameras": {
+                "cam_a": {"camera_id": "cam_a", "image_size_wh": [1280, 960],
+                          "K": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "D": [0, 0, 0, 0, 0],
+                          "R": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "t": [0, 0, 0],
+                          "H": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                          "P": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]],
+                          "reprojection_rms_px": 0.9},
+                "cam_b": {"camera_id": "cam_b", "image_size_wh": [1280, 960],
+                          "K": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "D": [0, 0, 0, 0, 0],
+                          "R": [[0, -1, 0], [1, 0, 0], [0, 0, 1]], "t": [0.5, 0, 0.1],
+                          "H": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                          "P": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]],
+                          "reprojection_rms_px": 1.3},
+            },
+        }
+        (data_dir / "rig" / "calibration.json").write_text(json.dumps(calib))
+        m = c.get("/api/p/rig/calibration-matrices").json()["matrices"]
+        assert m["floor_anchor_method"] == "planefit"
+        assert m["calibration_mode"] == "multical_full"
+        assert set(m["cameras"]) == {"cam_a", "cam_b"}
+        assert m["cameras"]["cam_b"]["t"] == [0.5, 0, 0.1]
+        assert m["cameras"]["cam_b"]["R"] == [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
+        assert m["cameras"]["cam_a"]["reprojection_rms_px"] == 0.9
+
+
+def test_calibration_matrices_tolerates_garbage_json():
+    with _client() as c:
+        _mk_rig(c)
+        data_dir = c.app.state.settings.data_dir
+        (data_dir / "rig" / "calibration.json").write_text("{ not json")
+        assert c.get("/api/p/rig/calibration-matrices").json() == {"matrices": None}
+
+
 # --- extrinsic job dispatch --------------------------------------------------
 
 
