@@ -298,15 +298,25 @@ def test_floor_shots_empty_then_present():
         r = c.get("/api/p/rig/floor-shots").json()
         assert set(r["cameras"]) == {"cam_a", "cam_b"}
         assert r["cameras"]["cam_a"]["present"] is False
-        assert r["cameras"]["cam_a"]["file"] is None
+        assert r["cameras"]["cam_a"]["count"] == 0
+        assert r["cameras"]["cam_a"]["files"] == []
+        assert "target" in r
 
         floor = Settings().data_dir / "rig" / "floor"
-        floor.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(floor / "cam_a.jpg"), np.zeros((48, 64, 3), np.uint8))
+        # cam_a: NEW multi-shot dir layout (synchronized floor pairs)
+        (floor / "cam_a").mkdir(parents=True, exist_ok=True)
+        for i in range(2):
+            cv2.imwrite(str(floor / "cam_a" / f"cam_a_{i:03d}.jpg"),
+                        np.zeros((48, 64, 3), np.uint8))
+        # cam_b: LEGACY single flat file (back-compat)
+        cv2.imwrite(str(floor / "cam_b.jpg"), np.zeros((48, 64, 3), np.uint8))
         r = c.get("/api/p/rig/floor-shots").json()
-        assert r["cameras"]["cam_a"] == {"present": True, "file": "cam_a.jpg"}
-        assert r["cameras"]["cam_b"]["present"] is False
-        assert c.get("/floor-shot/rig/cam_a.jpg").status_code == 200
+        assert r["cameras"]["cam_a"]["present"] is True
+        assert r["cameras"]["cam_a"]["count"] == 2
+        assert set(r["cameras"]["cam_a"]["files"]) == {"cam_a/cam_a_000.jpg", "cam_a/cam_a_001.jpg"}
+        assert r["cameras"]["cam_b"] == {"present": True, "count": 1, "files": ["cam_b.jpg"]}
+        assert c.get("/floor-shot/rig/cam_a/cam_a_000.jpg").status_code == 200   # dir layout
+        assert c.get("/floor-shot/rig/cam_b.jpg").status_code == 200             # legacy
 
 
 def test_floor_shot_serve_path_guarded():

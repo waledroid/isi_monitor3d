@@ -206,6 +206,37 @@ def delete_project(data_dir: Path, name: str, runs_dir: Path | None = None) -> N
             f.unlink(missing_ok=True)
 
 
+# ---- floor-anchor storage (multi-shot, back-compat) -----------------------------
+#
+# Floor-anchor shots live under ``floor/``. Two layouts are recognised:
+#   * NEW  — ``floor/<cam>/NNN.jpg`` : a per-camera DIRECTORY of synchronized floor
+#            pairs (one flat ChArUco placement per index NNN, snapped as a both-cam
+#            pair). Multiple coplanar placements refine the floor-plane fit.
+#   * OLD  — ``floor/<cam>.jpg``     : a single flat file (the pre-multishot layout).
+#
+# A camera's floor anchor is "present" if EITHER layout yields ≥1 shot for it.
+
+
+def floor_shots(project_dir: Path, camera_id: str) -> list[Path]:
+    """All floor-anchor jpgs for a camera, newest layout first then legacy.
+
+    Returns ``floor/<cam>/*.jpg`` (sorted) followed by the legacy ``floor/<cam>.jpg``
+    if it exists. Empty list ⇒ no floor shot for this camera yet.
+    """
+    floor = Path(project_dir) / "floor"
+    cam_dir = floor / camera_id
+    shots = sorted(cam_dir.glob("*.jpg")) if cam_dir.is_dir() else []
+    legacy = floor / f"{camera_id}.jpg"
+    if legacy.is_file():
+        shots.append(legacy)
+    return shots
+
+
+def floor_present(project_dir: Path, camera_id: str) -> bool:
+    """True if a camera has ≥1 floor-anchor shot (new dir layout or legacy file)."""
+    return bool(floor_shots(project_dir, camera_id))
+
+
 # ---- board-spec adapters (CalibConfig.board → calibration.calibrate dataclasses) ----
 
 def charuco_spec(board: BoardSpec):

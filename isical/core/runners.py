@@ -21,6 +21,8 @@ from . import progress
 from .project import (
     aprilgrid_target,
     charuco_spec,
+    floor_present,
+    floor_shots,
     load_project,
 )
 
@@ -126,11 +128,11 @@ def run_extrinsic(project_dir: Path) -> dict:
     if len(extr) < len(cams):
         raise ValueError(f"extrinsic shots missing for some cameras (have {list(extr)}, "
                          f"need {cams})")
-    floors = {cid: project_dir / "floor" / f"{cid}.jpg" for cid in cams}
-    missing = [cid for cid, p in floors.items() if not p.exists()]
+    floors = {cid: floor_shots(project_dir, cid) for cid in cams}
+    missing = [cid for cid, shots in floors.items() if not shots]
     if missing:
-        raise ValueError(f"floor shots missing for {missing} — capture one ChArUco-on-floor "
-                         f"shot per camera into floor/<cam>.jpg")
+        raise ValueError(f"floor shots missing for {missing} — use the [FLOOR] button to "
+                         f"auto-snap synchronized ChArUco-on-floor pairs (floor/<cam>/*.jpg)")
 
     board = charuco_spec(cfg.board)
     target = aprilgrid_target(cfg.board)
@@ -408,7 +410,7 @@ def phase_status(project_dir: Path) -> dict:
     cams = cfg.configured_cameras()
     intr = {cid: len(list((project_dir / "intrinsic" / cid).glob("*.jpg"))) for cid in cams}
     extr = {cid: len(list((project_dir / "extrinsic" / cid).glob("*.jpg"))) for cid in cams}
-    floors = {cid: (project_dir / "floor" / f"{cid}.jpg").exists() for cid in cams}
+    floors = {cid: floor_present(project_dir, cid) for cid in cams}
     intrinsic_done = (project_dir / _INTRINSIC_JSON).exists()
     calibration = project_dir / _CALIBRATION_JSON
     extrinsic_done = calibration.exists()

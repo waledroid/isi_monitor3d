@@ -24,7 +24,17 @@ export function initBoards(root) {
   const phase = root.dataset.phase;
   if (phase !== "extrinsic") return;
   const cameras = JSON.parse(root.dataset.cameras || "[]");
-  if (!document.getElementById("boards-panel")) return;
+  const panel = document.getElementById("boards-panel");
+  if (!panel) return;
+
+  // Re-host the Cam A | Cam B live views at the TOP of the Boards panel, directly
+  // above the heading (vertical order: [cam views] → title → notebook cells). The
+  // views keep the same class-based wiring capture.js drives (streams/showOnly), so
+  // this DOM move is transparent to the capture loop. Idempotent.
+  const capViews = document.getElementById("cap-views");
+  if (capViews && capViews.parentElement !== panel) {
+    panel.insertBefore(capViews, panel.firstChild);
+  }
 
   const refresh = () => {
     refreshPairs(project, cameras);
@@ -98,17 +108,21 @@ async function refreshFloor(project, cameras) {
   catch { return; }
   const present = cameras.filter((c) => cams[c]?.present);
   if (!present.length) {
-    out.innerHTML = `<div class="nb-placeholder">awaiting floor shots — lay the ChArUco FLAT on the floor
-      and capture one per camera (the floor controls above)</div>`;
+    out.innerHTML = `<div class="nb-placeholder">awaiting floor pairs — press [FLOOR] above and lay the
+      ChArUco FLAT on the floor in the overlap; synchronized pairs auto-snap for both cameras</div>`;
     if (status) { status.textContent = `0/${cameras.length} floor shots`; status.classList.remove("ok"); }
     return;
   }
   out.innerHTML = cameras.map((cam) => {
     const info = cams[cam];
-    if (info?.present) {
+    const files = info?.files || [];
+    if (files.length) {
+      const grid = files.map((f) => `<figure class="shot">
+        <img loading="lazy" src="/floor-shot/${project}/${f}?t=${Date.now()}" alt="${cam} floor">
+      </figure>`).join("");
       return `<figure class="stage-fig">
-        <figcaption>${cam} — floor anchor ✓</figcaption>
-        <img loading="lazy" src="/floor-shot/${project}/${info.file}?t=${Date.now()}" alt="${cam} floor">
+        <figcaption>${cam} — floor anchor ✓ (${files.length} placement${files.length > 1 ? "s" : ""})</figcaption>
+        <div class="shot-grid">${grid}</div>
       </figure>`;
     }
     return `<figure class="stage-fig">
@@ -118,7 +132,7 @@ async function refreshFloor(project, cameras) {
   }).join("");
   if (status) {
     const ok = present.length === cameras.length;
-    status.textContent = `${present.length}/${cameras.length} floor shots${ok ? " ✓" : ""}`;
+    status.textContent = `${present.length}/${cameras.length} cameras with floor pairs${ok ? " ✓" : ""}`;
     status.classList.toggle("ok", ok);
   }
   revealCell("bcell-floor");

@@ -212,6 +212,97 @@ def test_intrinsic_disk_image_stays_raw(tmp_path, monkeypatch):
     assert out.ndim == 3 and out is raw        # intrinsic untouched (raw BGR)
 
 
+def _two_cam_project(tmp_path, floor_target=2):
+    from isical.core.project import CameraSpec, create_project, load_project
+    cams = {"cam_a": CameraSpec(id="cam_a", url="rtsp://x/a"),
+            "cam_b": CameraSpec(id="cam_b", url="rtsp://x/b")}
+    pdir = create_project(tmp_path / "data", "rig", cams)
+    return pdir, load_project(pdir)
+
+
+def test_floor_autosnaps_synchronized_pairs(tmp_path, monkeypatch):
+    """[FLOOR]: both cams gate-pass (≥4 ChArUco corners) within the window → a
+    synchronized floor PAIR is written into floor/<cam>/; a novel placement each
+    time; per-cam counts stay equal (never a lone-camera floor shot)."""
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    pdir, cfg = _two_cam_project(tmp_path)
+    s = sess_mod.CaptureSession(pdir, cfg, "floor",
+                                source_factory=lambda spec, cid: _StubSource(60))
+    s.floor_target = 2
+    for w in s.workers.values():
+        w.target = 2
+    s.start()
+    for _ in range(300):
+        if s.pair_count >= 2:
+            break
+        time.sleep(0.02)
+    s.stop()
+    a = sorted((pdir / "floor" / "cam_a").glob("*.jpg"))
+    b = sorted((pdir / "floor" / "cam_b").glob("*.jpg"))
+    assert len(a) == 2 and len(b) == 2          # synchronized pairs, distinct placements
+    assert s.pair_count == 2
+
+
+def test_floor_gate_waits_for_both_cameras(tmp_path, monkeypatch):
+    """If only ONE camera detects the board, no pair is committed (the both-cam
+    sync gate). cam_b sees nothing ⇒ zero floor pairs, never a solo floor shot."""
+    from isical.capture.detect import Detection
+
+    # First detector built → cam_a (well-detected); the rest → blank (no board).
+    seq = {"i": 0}
+
+    class _PerCam:
+        def __init__(self, *_a, **_k):
+            self._blank = seq["i"] > 0
+            seq["i"] += 1
+            self._charuco = _StubCharuco()
+
+        def detect(self, frame):
+            return Detection(n=0) if self._blank else self._charuco.detect(frame)
+
+        def annotate(self, frame, det):
+            return frame
+
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _PerCam)
+    pdir, cfg = _two_cam_project(tmp_path)
+    s = sess_mod.CaptureSession(pdir, cfg, "floor",
+                                source_factory=lambda spec, cid: _StubSource(30))
+    s.start()
+    time.sleep(0.5)
+    s.stop()
+    assert s.pair_count == 0                     # never a solo floor shot
+    assert not list((pdir / "floor" / "cam_a").glob("*.jpg"))
+
+
+def test_floor_shots_helper_multishot_and_legacy(tmp_path):
+    from isical.core.project import floor_present, floor_shots
+    pdir, _cfg = _two_cam_project(tmp_path)
+    # new dir layout
+    (pdir / "floor" / "cam_a").mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        (pdir / "floor" / "cam_a" / f"cam_a_{i:03d}.jpg").write_bytes(b"x")
+    # legacy single file for cam_b
+    (pdir / "floor" / "cam_b.jpg").write_bytes(b"x")
+    assert len(floor_shots(pdir, "cam_a")) == 3 and floor_present(pdir, "cam_a")
+    assert len(floor_shots(pdir, "cam_b")) == 1 and floor_present(pdir, "cam_b")
+    # both layouts for the same cam → dir shots first, legacy appended
+    (pdir / "floor" / "cam_b").mkdir(parents=True, exist_ok=True)
+    (pdir / "floor" / "cam_b" / "cam_b_000.jpg").write_bytes(b"x")
+    assert len(floor_shots(pdir, "cam_b")) == 2
+
+
+def test_wipe_floor_leaves_legacy_file(tmp_path):
+    from isical.capture.session import wipe_phase_captures
+    pdir, _cfg = _two_cam_project(tmp_path)
+    (pdir / "floor" / "cam_a").mkdir(parents=True, exist_ok=True)
+    (pdir / "floor" / "cam_a" / "cam_a_000.jpg").write_bytes(b"x")
+    (pdir / "floor" / "cam_a.jpg").write_bytes(b"x")           # legacy — must survive
+    removed = wipe_phase_captures(pdir, "floor", ["cam_a"])
+    assert removed == 1
+    assert not list((pdir / "floor" / "cam_a").glob("*.jpg"))
+    assert (pdir / "floor" / "cam_a.jpg").exists()             # additive: never lost
+
+
 def test_wipe_phase_captures(tmp_path):
     from isical.capture.session import wipe_phase_captures
     pdir, _cfg = _project(tmp_path)

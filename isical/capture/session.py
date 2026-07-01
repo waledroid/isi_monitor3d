@@ -33,6 +33,7 @@ from .detect import (
 )
 
 _PAIR_WINDOW_S = 0.5      # both cameras must gate-pass within this window for a pair
+FLOOR_TARGET = 3          # distinct flat ChArUco placements (synchronized pairs) wanted
 
 
 def _charuco_detector(charuco_spec, cap) -> CharucoBoardDetector:
@@ -60,8 +61,12 @@ def _open_source(cam_spec, camera_id: str):
 
 
 def wipe_phase_captures(project_dir: Path, phase: str, cameras: list[str]) -> int:
-    """Delete captured images for a phase (used by Restart). Returns files removed."""
-    sub = "intrinsic" if phase == "intrinsic" else "extrinsic"
+    """Delete captured images for a phase (used by Restart). Returns files removed.
+
+    Floor restart wipes only the NEW ``floor/<cam>/*.jpg`` dir layout — a legacy
+    single ``floor/<cam>.jpg`` file is left untouched (additive: never lose data).
+    """
+    sub = {"intrinsic": "intrinsic", "floor": "floor"}.get(phase, "extrinsic")
     removed = 0
     for cid in cameras:
         for f in (Path(project_dir) / sub / cid).glob("*.jpg"):
@@ -245,6 +250,13 @@ class _CamWorker:
             self._detector = _charuco_detector(session.charuco_spec, cap)
             self._min = cap.min_charuco_corners
             self.target = cap.target_per_camera
+        elif session.phase == "floor":
+            # Floor anchor: synchronized ChArUco pairs (board flat on the floor,
+            # both cams see the SAME placement). Gate on ≥4 ChArUco corners (the
+            # floor-anchor solve's requirement), snap a novel placement each time.
+            self._detector = _charuco_detector(session.charuco_spec, cap)
+            self._min = max(4, cap.min_charuco_corners)
+            self.target = session.floor_target
         else:
             self._detector = AprilTagDetector(
                 quad_decimate=getattr(cap, "tag_quad_decimate", 1.0),
@@ -327,7 +339,8 @@ class _CamWorker:
                         with self._lock:
                             self._ready = (time.time(), raw)
                         self.session.try_snap_pair()
-                        status = f"ready ({det.n} tags)"
+                        unit = "corners" if self.session.phase == "floor" else "tags"
+                        status = f"ready ({det.n} {unit})"
                 else:
                     status = "captured ✓" if done else verdict.reason
                 annotated = self._detector.annotate(raw, det)
@@ -357,19 +370,21 @@ class CaptureSession:
         from ..core.project import charuco_spec
         self.project_dir = Path(project_dir)
         self.cfg = cfg
-        self.phase = phase                                  # "intrinsic" | "extrinsic"
+        self.phase = phase                                  # "intrinsic" | "extrinsic" | "floor"
         self.charuco_spec = charuco_spec(cfg.board)
+        # Small target of distinct flat placements for the floor plane fit (both cams).
+        self.floor_target = FLOOR_TARGET
         self._pair_lock = threading.Lock()
         self.pair_count = 0
         configured = cfg.configured_cameras()
         cams = [c for c in (cameras or configured) if c in configured]
-        sub = "intrinsic" if phase == "intrinsic" else "extrinsic"
+        sub = {"intrinsic": "intrinsic", "floor": "floor"}.get(phase, "extrinsic")
         self.workers: dict[str, _CamWorker] = {
             cid: _CamWorker(self, cid, cfg.cameras[cid],
                             self.project_dir / sub / cid, source_factory)
             for cid in cams
         }
-        if phase == "extrinsic":
+        if phase in ("extrinsic", "floor"):
             self.pair_count = min((w.count for w in self.workers.values()), default=0)
 
     def start(self) -> None:
@@ -385,8 +400,8 @@ class CaptureSession:
         return w.latest_jpeg() if w else None
 
     def try_snap_pair(self) -> None:
-        """Extrinsic: if ALL cameras are staged within the window, commit the pair."""
-        if self.phase != "extrinsic" or len(self.workers) < 2:
+        """Extrinsic/floor: if ALL cameras are staged within the window, commit the pair."""
+        if self.phase not in ("extrinsic", "floor") or len(self.workers) < 2:
             # single-camera extrinsic is degenerate; treat each ready as a solo save
             for w in self.workers.values():
                 r = w.take_ready()

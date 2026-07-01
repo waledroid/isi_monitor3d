@@ -19,18 +19,22 @@ from .deps import project_cfg, project_dir
 
 router = APIRouter()
 
-_PHASES = ("intrinsic", "extrinsic")
+# Capture phases. "floor" is the single-button, both-camera synchronized
+# ChArUco-on-floor auto-snap (the world anchor for the AprilGrid extrinsics).
+_PHASES = ("intrinsic", "extrinsic", "floor")
+_PAIR_PHASES = ("extrinsic", "floor")
 
 
 def _resolve_cameras(cfg, phase: str, cam: str | None) -> list[str]:
     """Which cameras a capture run covers. Intrinsic → the chosen single camera
-    (or all if none given); extrinsic → always both (synchronized pairs)."""
+    (or all if none given); extrinsic/floor → always both (synchronized pairs)."""
     configured = cfg.configured_cameras()
     if not configured:
         raise HTTPException(status_code=422, detail="no cameras configured")
-    if phase == "extrinsic":
+    if phase in _PAIR_PHASES:
         if len(configured) < 2:
-            raise HTTPException(status_code=422, detail="extrinsic needs both cameras configured")
+            raise HTTPException(status_code=422,
+                                detail=f"{phase} needs both cameras configured")
         return configured
     if cam is not None:
         if cam not in configured:
@@ -208,8 +212,8 @@ def _shot_meta(jpg: Path, cfg) -> dict:
 
 @router.get("/api/p/{name}/shots/{phase}/{cam}")
 def list_shots(request: Request, name: str, phase: str, cam: str) -> dict:
-    if phase not in _PHASES:
-        raise HTTPException(status_code=404, detail=f"phase must be one of {_PHASES}")
+    if phase not in ("intrinsic", "extrinsic"):
+        raise HTTPException(status_code=404, detail="phase must be intrinsic|extrinsic")
     d, cfg = project_cfg(request, name)
     if cam not in cfg.configured_cameras():
         raise HTTPException(status_code=404, detail=f"camera {cam!r} not configured")
@@ -388,40 +392,50 @@ def targetless_stage_image(request: Request, name: str, stage: str) -> FileRespo
 
 @router.get("/api/p/{name}/floor-shots")
 def list_floor_shots(request: Request, name: str) -> dict:
-    """Read-only presence of the per-camera floor-anchor ChArUco shots.
+    """Read-only presence of the per-camera floor-anchor ChArUco shots (multi-shot).
 
-    Each configured camera writes ONE ``floor/<cam>.jpg`` (a flat file, not a
-    sub-dir like intrinsic/extrinsic). Returns ``{cameras: {cam: {present: bool,
-    file: "<cam>.jpg"|None}}}`` — the Boards notebook's Floor-anchor cell reads
-    this to show either the captured shots or an "awaiting floor shots" placeholder.
+    The single-button [FLOOR] flow auto-snaps synchronized ChArUco pairs into
+    ``floor/<cam>/NNN.jpg`` (a per-camera DIR, one flat placement per index). A
+    legacy single ``floor/<cam>.jpg`` file is still recognised. Returns
+    ``{target, cameras: {cam: {present, count, files:[...]}}}`` — the Floor-anchor
+    cell shows the captured placements or an "awaiting floor shots" placeholder.
     Never writes.
     """
+    from ..capture.session import FLOOR_TARGET
+    from ..core.project import floor_shots
     d, cfg = project_cfg(request, name)
-    floor_dir = d / "floor"
     cams: dict[str, dict] = {}
     for cam in cfg.configured_cameras():
-        jpg = floor_dir / f"{cam}.jpg"
-        present = jpg.is_file()
-        cams[cam] = {"present": present, "file": f"{cam}.jpg" if present else None}
-    return {"cameras": cams}
+        shots = floor_shots(d, cam)
+        # files are addressed relative to floor/ so the image server can find them
+        files = [str(p.relative_to(d / "floor")) for p in shots]
+        cams[cam] = {"present": bool(shots), "count": len(shots), "files": files}
+    return {"target": FLOOR_TARGET, "cameras": cams}
 
 
-@router.get("/floor-shot/{name}/{file}")
+_FLOOR_FILE_RE = re.compile(r"^[A-Za-z0-9_\-]+(/[A-Za-z0-9_\-]+)?\.jpg$")
+
+
+@router.get("/floor-shot/{name}/{file:path}")
 def floor_shot_image(request: Request, name: str, file: str) -> FileResponse:
-    """Serve one captured floor-anchor jpg (floor/<cam>.jpg). Read-only, path-guarded."""
-    if not _SHOT_FILE_RE.match(file):
+    """Serve one captured floor-anchor jpg. Read-only, path-guarded.
+
+    Accepts both the legacy flat ``<cam>.jpg`` and the new ``<cam>/NNN.jpg`` layout
+    (one level deep). Resolved-path containment guards against traversal.
+    """
+    if not _FLOOR_FILE_RE.match(file):
         raise HTTPException(status_code=404, detail="not found")
     d = project_dir(request, name)
     base = (d / "floor").resolve()
     target = (base / file).resolve()
-    if base not in target.parents or not target.is_file():
+    if not (target == base or base in target.parents) or not target.is_file():
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(str(target), media_type="image/jpeg")
 
 
 @router.get("/shots/{name}/{phase}/{cam}/{file}")
 def shot_image(request: Request, name: str, phase: str, cam: str, file: str) -> FileResponse:
-    if phase not in _PHASES or not _SHOT_FILE_RE.match(file):
+    if phase not in ("intrinsic", "extrinsic") or not _SHOT_FILE_RE.match(file):
         raise HTTPException(status_code=404, detail="not found")
     d = project_dir(request, name)
     base = (d / phase / cam).resolve()

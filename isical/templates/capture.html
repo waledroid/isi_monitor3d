@@ -56,28 +56,27 @@
   </div>
   {% if phase == "extrinsic" %}
   <div id="floor-prompt" class="floor-prompt" hidden>
-    <p class="floor-prompt-head">Captures complete — lay the <b>ChArUco</b> board <b>FLAT</b> on the floor
-      (it defines the ground plane — keep it flat, well-lit and glare-free; move it closer if not detected)
-      and capture one shot per camera (the world anchor for extrinsics).</p>
-    <p id="floor-prompt-done" class="msg ok" hidden>Floor shots ready — go to the board and Solve.</p>
+    <p class="floor-prompt-head">Captures complete — press <b>[FLOOR]</b> and lay the <b>ChArUco</b> board
+      <b>FLAT</b> on the floor <b>in the overlap</b> (both cameras must see it). It defines the ground
+      plane — keep it flat, well-lit and glare-free. When both cameras detect it a synchronized floor
+      PAIR auto-snaps; move/rotate the board for the next placement.</p>
+    <p id="floor-prompt-done" class="msg ok" hidden>Floor pairs ready — go to the board and Solve.</p>
   </div>
   <div class="toolbar" id="floor-tools">
-    <span class="msg">Floor anchor (one ChArUco-on-floor shot per camera):</span>
-    {% for c in cameras %}
-    <button class="floor-btn" data-cam="{{ c }}">floor {{ c }}</button>
-    <span class="msg floor-status" data-cam="{{ c }}"></span>
-    {% endfor %}
+    <span class="msg">Floor anchor — single-button, both-camera synchronized auto-snap:</span>
+    <button id="floor-run" class="floor-btn primary">[FLOOR]</button>
+    <span id="floor-run-status" class="msg floor-status"></span>
   </div>
-  <div id="floor-preview" class="floor-preview" hidden>
-    <figure class="cap-figure">
-      <figcaption>floor aim — <b id="floor-preview-cam"></b>
-        <span class="msg">lay the ChArUco FLAT on the floor (it defines the ground plane), then capture</span></figcaption>
-      <div class="canvas-wrap"><img id="floor-preview-img" alt="floor live"></div>
-    </figure>
-    <div class="toolbar">
-      <button id="floor-capture">Capture floor shot</button>
-      <button id="floor-preview-close">Close preview</button>
-      <span id="floor-preview-msg" class="msg"></span>
+  <div id="floor-live" class="floor-preview" hidden>
+    <p class="msg">Lay the ChArUco FLAT on the floor <b>in the shared view</b>; a synchronized pair
+      auto-snaps when <b>both</b> cameras detect it (≥4 corners). Move/rotate for the next placement.</p>
+    <div class="cap-live-views" id="floor-live-views">
+      {% for c in cameras %}
+      <figure class="cap-figure" data-cam="{{ c }}">
+        <figcaption>{{ c }} <span class="msg floor-live-counts" data-cam="{{ c }}"></span></figcaption>
+        <div class="canvas-wrap"><img class="floor-stream" data-cam="{{ c }}" alt="{{ c }} floor live"></div>
+      </figure>
+      {% endfor %}
     </div>
   </div>
   <div id="boards-panel" class="targetless-panel" hidden>

@@ -491,62 +491,161 @@ def _detect_charuco_in_image(
     return ch_corners.reshape(-1, 2), object_points.reshape(-1, 3)
 
 
+def _board_pose_in_rig(
+    shot_path: Path,
+    cam: CameraInRig,
+    board: CharucoBoardSpec,
+) -> tuple[np.ndarray, np.ndarray]:
+    """One floor shot → the board's (R, t) pose in the rig frame via solvePnP.
+
+    ``cv2.solvePnP`` recovers the board pose in the camera frame; composing with the
+    camera's rig-frame pose (from Multical) lifts it into rig coordinates.
+    """
+    corners_uv, object_xyz = _detect_charuco_in_image(shot_path, board)
+    ok, rvec, tvec = cv2.solvePnP(object_xyz, corners_uv, cam.K, cam.D)
+    if not ok:
+        raise RuntimeError(f"cv2.solvePnP failed for floor shot {shot_path}")
+    R_cam_board, _ = cv2.Rodrigues(rvec)
+    t_cam_board = tvec.reshape(3)
+    # Board pose in camera frame is (R_cam_board, t_cam_board).
+    # Camera pose in rig frame is (cam.R_in_rig, cam.t_in_rig) [world←camera convention].
+    #   R_rig_board = R_rig_cam @ R_cam_board
+    #   t_rig_board = R_rig_cam @ t_cam_board + t_rig_cam
+    R_rig_board = cam.R_in_rig @ R_cam_board
+    t_rig_board = cam.R_in_rig @ t_cam_board + cam.t_in_rig
+    return R_rig_board, t_rig_board
+
+
+def _normalize_floor_shots(
+    floor_shots_by_camera: dict[str, Path | list[Path]],
+) -> dict[str, list[Path]]:
+    """Accept either one shot per camera (legacy) or a list (multi-placement)."""
+    out: dict[str, list[Path]] = {}
+    for cam_id, shots in floor_shots_by_camera.items():
+        if isinstance(shots, (str, Path)):
+            out[cam_id] = [Path(shots)]
+        else:
+            out[cam_id] = [Path(s) for s in shots]
+    return out
+
+
 def estimate_floor_anchor_charuco(
-    floor_shot_by_camera: dict[str, Path],
+    floor_shots_by_camera: dict[str, Path | list[Path]],
     solution: MultiCalSolution,
     board: CharucoBoardSpec,
 ) -> FloorAnchor:
-    """Recover the rig → world transform from a ChArUco board on the floor.
+    """Recover the rig → world transform from ChArUco board(s) on the floor.
 
-    Each camera takes one shot of a ChArUco board placed flat on the floor.
-    ``cv2.solvePnP`` recovers the board's pose in that camera's frame; combined
-    with the rig-frame pose from Multical, every camera independently estimates
-    the board's pose in rig coordinates. We average them (a few cameras' worth
-    of votes is enough) and invert to get rig → world.
+    Each camera contributes one OR MORE shots of a ChArUco board laid flat on the
+    floor (``floor_shots_by_camera[cam]`` may be a single ``Path`` — the legacy
+    single-placement layout — or a ``list[Path]`` of distinct coplanar placements).
+    ``cv2.solvePnP`` recovers each board's pose in its camera frame; composed with
+    the camera's rig-frame pose (Multical) that becomes a board pose in rig coords.
 
-    The world frame ends up with its origin at the board's anchor corner,
-    Z=0 the floor plane, X/Y aligned with the board's axes.
+    * **One placement total** (legacy): average the per-camera board poses and invert
+      — the world frame IS that board (origin at its anchor corner, Z=0 the floor,
+      X/Y along the board's axes). Unchanged from the original single-shot behaviour.
+    * **Multiple placements**: every flat placement lies on the SAME floor plane, so
+      ALL board-corner points (every camera, every placement, in rig coords) feed a
+      robust RANSAC plane fit → the consensus floor normal (world +Z). The origin and
+      in-plane X/Y are gauge-fixed from the FIRST placement's (cam-averaged) board
+      pose, projected onto the consensus plane — so the world axes stay aligned to a
+      physical board just like the single-shot case, but the plane is the consensus
+      across all placements (lower floor-plane residual than any single shot).
+
+    The emitted ``FloorAnchor`` shape is unchanged, so ``compose_camera_in_world`` /
+    ``assemble_calibration`` are untouched.
     """
-    if not floor_shot_by_camera:
+    shots_by_cam = _normalize_floor_shots(floor_shots_by_camera)
+    shots_by_cam = {c: s for c, s in shots_by_cam.items() if s}
+    if not shots_by_cam:
         raise RuntimeError("floor anchor needs at least one floor shot")
 
-    board_in_rig_R: list[np.ndarray] = []
-    board_in_rig_t: list[np.ndarray] = []
-
-    for cam_id, shot_path in floor_shot_by_camera.items():
+    n_placements = max(len(s) for s in shots_by_cam.values())
+    for cam_id in shots_by_cam:
         if cam_id not in solution.cameras:
             raise RuntimeError(
                 f"floor shot references unknown camera {cam_id!r}; "
                 f"Multical solution has {sorted(solution.cameras)}"
             )
-        cam = solution.cameras[cam_id]
-        corners_uv, object_xyz = _detect_charuco_in_image(shot_path, board)
-        ok, rvec, tvec = cv2.solvePnP(object_xyz, corners_uv, cam.K, cam.D)
-        if not ok:
-            raise RuntimeError(f"cv2.solvePnP failed for floor shot {shot_path}")
-        R_cam_board, _ = cv2.Rodrigues(rvec)
-        t_cam_board = tvec.reshape(3)
 
-        # Board pose in camera frame is (R_cam_board, t_cam_board).
-        # Camera pose in rig frame is (cam.R_in_rig, cam.t_in_rig)  [world←camera convention].
-        # Board pose in rig frame:
-        #   R_rig_board = R_rig_cam @ R_cam_board
-        #   t_rig_board = R_rig_cam @ t_cam_board + t_rig_cam
-        R_rig_board = cam.R_in_rig @ R_cam_board
-        t_rig_board = cam.R_in_rig @ t_cam_board + cam.t_in_rig
-        board_in_rig_R.append(R_rig_board)
-        board_in_rig_t.append(t_rig_board)
+    # Board-in-rig pose PER PLACEMENT INDEX, cam-averaged (index i = same physical
+    # placement across cameras, as guaranteed by the synchronized floor-pair capture).
+    poses_by_placement: list[tuple[np.ndarray, np.ndarray]] = []
+    for i in range(n_placements):
+        Rs: list[np.ndarray] = []
+        ts: list[np.ndarray] = []
+        for cam_id, shots in shots_by_cam.items():
+            if i >= len(shots):
+                continue
+            cam = solution.cameras[cam_id]
+            R_rig_board, t_rig_board = _board_pose_in_rig(shots[i], cam, board)
+            Rs.append(R_rig_board)
+            ts.append(t_rig_board)
+        if not Rs:
+            continue
+        poses_by_placement.append((_average_rotation(Rs), np.mean(np.stack(ts), axis=0)))
 
-    R_avg = _average_rotation(board_in_rig_R)
-    t_avg = np.mean(np.stack(board_in_rig_t), axis=0)
+    if not poses_by_placement:
+        raise RuntimeError("floor anchor: no usable floor placements detected")
 
-    # world ← rig is the inverse of board-in-rig (the world frame IS the board).
-    R_world_rig = R_avg.T
-    t_world_rig = -R_world_rig @ t_avg
+    # ---- single placement (legacy): the world frame IS that board ----
+    if len(poses_by_placement) == 1:
+        R_board, t_board = poses_by_placement[0]
+        R_world_rig = R_board.T
+        t_world_rig = -R_world_rig @ t_board
+        return FloorAnchor(
+            method="charuco_floor",
+            note=f"ChArUco floor board across {len(shots_by_cam)} cameras",
+            R_world_from_rig=R_world_rig,
+            t_world_from_rig=t_world_rig,
+        )
+
+    # ---- multiple coplanar placements: consensus plane + gauge from placement 0 ----
+    from calibration.floor_planefit import ransac_plane_fit
+
+    object_xyz = board.board().getChessboardCorners().reshape(-1, 3)
+    floor_pts: list[np.ndarray] = []
+    for R_board, t_board in poses_by_placement:
+        floor_pts.append(object_xyz @ R_board.T + t_board)   # board corners in rig coords
+    pts = np.vstack(floor_pts)
+
+    normal, offset, _centroid, _inliers = ransac_plane_fit(pts, threshold_m=0.03)
+
+    # Gauge: origin + in-plane X from the first placement's board pose, so the world
+    # frame stays anchored to a physical board (matches the single-shot convention).
+    R0, t0 = poses_by_placement[0]
+    board_x = R0[:, 0]            # board +X axis in rig coords
+    # Orient the plane normal to the same hemisphere as the first board's +Z.
+    if float(normal @ R0[:, 2]) < 0:
+        normal = -normal
+        offset = -offset
+    z_axis = normal / (np.linalg.norm(normal) + 1e-12)
+    # Project the board +X onto the plane for world +X; complete a right-handed frame.
+    x_axis = board_x - (board_x @ z_axis) * z_axis
+    if np.linalg.norm(x_axis) < 1e-6:                        # board X ~parallel to normal
+        alt = R0[:, 1]
+        x_axis = alt - (alt @ z_axis) * z_axis
+    x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-12)
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis = y_axis / (np.linalg.norm(y_axis) + 1e-12)
+    x_axis = np.cross(y_axis, z_axis)
+    x_axis = x_axis / (np.linalg.norm(x_axis) + 1e-12)
+
+    # Origin: the first board's origin projected onto the consensus plane.
+    signed = float(z_axis @ t0 + offset)
+    origin = t0 - signed * z_axis
+
+    R_world_rig = np.vstack([x_axis, y_axis, z_axis])
+    if np.linalg.det(R_world_rig) < 0:                       # guarantee a proper rotation
+        y_axis = -y_axis
+        R_world_rig = np.vstack([x_axis, y_axis, z_axis])
+    t_world_rig = -R_world_rig @ origin
 
     return FloorAnchor(
         method="charuco_floor",
-        note=f"ChArUco floor board across {len(floor_shot_by_camera)} cameras",
+        note=(f"ChArUco floor plane across {len(poses_by_placement)} placements, "
+              f"{len(shots_by_cam)} cameras (consensus plane fit)"),
         R_world_from_rig=R_world_rig,
         t_world_from_rig=t_world_rig,
     )
