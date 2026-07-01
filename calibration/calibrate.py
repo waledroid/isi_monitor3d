@@ -452,7 +452,7 @@ class FloorAnchor:
     span the floor plane. The anchor specifies where the world origin sits.
     """
 
-    method: str           # "charuco_floor" | "tape_measured_points"
+    method: str           # "charuco_floor" | "planefit" | "tape_measured_points"
     note: str
     R_world_from_rig: np.ndarray  # 3x3 rotation, rig → world
     t_world_from_rig: np.ndarray  # 3-vector translation, rig → world

@@ -81,7 +81,7 @@ class CalibrationFile:
 
     version: int
     created_at: str
-    floor_anchor_method: str        # "charuco_floor" | "tape_measured_points" | "4pt_floor"
+    floor_anchor_method: str        # "charuco_floor" | "planefit" | "tape_measured_points" | "4pt_floor"
     floor_origin_note: str          # human-readable, e.g. "ChArUco board, lower-left corner"
     cameras: dict[str, CameraCalibration] = field(default_factory=dict)
     calibration_mode: str = CALIBRATION_MODE_MULTICAL_FULL
