@@ -12,7 +12,7 @@ async function render() {
       const mode = p.mode2 ? "Mode 2 (2 cams)" : "Mode 1 (1 cam)";
       row.innerHTML = `<a href="/p/${p.name}"><b>${p.name}</b></a>
         <span class="msg">${(p.cameras || []).join(", ") || "no cameras"} · ${mode}</span>
-        <button class="reset-btn" data-name="${p.name}">✕ delete</button>`;
+        <button class="project-del" data-name="${p.name}" title="Delete ${p.name}">✕</button>`;
       row.querySelector("button").onclick = async () => {
         if (!confirm(`Delete calibration "${p.name}" and all its captures?`)) return;
         await sendJSON(`/api/projects/${p.name}`, "DELETE", {});
