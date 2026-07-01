@@ -87,6 +87,63 @@ def test_scale_reference_rejects_nonpositive_distance():
         assert c.put("/api/p/rig/scale-references", json={"references": bad}).status_code == 422
 
 
+# --- feature matches (snap-assist source) ------------------------------------
+
+
+def test_feature_matches_empty_without_pair_or_weights():
+    """No captured pair (and no weights) → count:0 with a reason; UI falls back to
+    manual marking. Never raises."""
+    with _client() as c:
+        _mk_rig(c)
+        r = c.get("/api/p/rig/feature-matches").json()
+        assert r["count"] == 0
+        assert r["matches"] == []
+        assert isinstance(r.get("reason"), str) and r["reason"]
+
+
+def test_feature_matches_serves_stored_synthetic_set():
+    """A stored work/feature_matches.json is served verbatim (hermetic snap demo).
+
+    The returned coordinates are exactly the ones snap would auto-fill the
+    ScaleReference b-points from — a round-trip of the snap-relevant coords."""
+    with _client() as c:
+        _mk_rig(c)
+        data_dir = c.app.state.settings.data_dir
+        work = data_dir / "rig" / "work"
+        work.mkdir(parents=True, exist_ok=True)
+        synthetic = {"matches": [
+            {"a": [100.0, 200.0], "b": [110.0, 205.0], "score": 0.9},
+            {"a": [300.0, 400.0], "b": [312.0, 402.0], "score": 0.8},
+        ]}
+        (work / "feature_matches.json").write_text(json.dumps(synthetic))
+        r = c.get("/api/p/rig/feature-matches").json()
+        assert r["count"] == 2
+        assert r["matches"][0]["a"] == [100.0, 200.0]
+        assert r["matches"][0]["b"] == [110.0, 205.0]
+        assert r["matches"][1]["b"] == [312.0, 402.0]
+
+
+def test_feature_matches_404_for_unknown_project():
+    with _client() as c:
+        assert c.get("/api/p/nope/feature-matches").status_code == 404
+
+
+def test_scale_reference_snapped_flag_roundtrips():
+    """The display-only `snapped` flag persists but doesn't alter the solve-relevant
+    shape (p1_a,p1_b,p2_a,p2_b,distance_m)."""
+    with _client() as c:
+        _mk_rig(c)
+        refs = _refs(3)
+        refs[0]["snapped"] = True
+        r = c.put("/api/p/rig/scale-references", json={"references": refs})
+        assert r.json()["ok"] is True
+        got = c.get("/api/p/rig/scale-references").json()["references"]
+        assert got[0]["snapped"] is True
+        assert got[1]["snapped"] is False
+        # solve-relevant coordinates untouched
+        assert got[0]["p1_a"] == [10.0, 20.0]
+
+
 # --- stage images + report ---------------------------------------------------
 
 

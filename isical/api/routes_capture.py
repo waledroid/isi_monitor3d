@@ -232,6 +232,10 @@ class ScaleRefIn(BaseModel):
     p2_a: tuple[float, float]
     p2_b: tuple[float, float]
     distance_m: float
+    # display-only: whether the b-points were auto-filled from a matched keypoint
+    # (snap-assist) vs clicked manually. The calibration runner ignores it — the
+    # solve-relevant shape (p1_a,p1_b,p2_a,p2_b,distance_m) is unchanged.
+    snapped: bool = False
 
 
 class ScaleRefsBody(BaseModel):
@@ -240,6 +244,100 @@ class ScaleRefsBody(BaseModel):
 
 _SCALE_REFS_REL = "work/scale_references.json"
 _STAGE_DIR_REL = "work/targetless_stages"
+_FEATURE_MATCHES_REL = "work/feature_matches.json"
+
+
+def _load_stereo_pair_paths(d: Path) -> tuple[Path, Path] | None:
+    """First captured synchronized (cam_a, cam_b) jpg pair, or None if incomplete."""
+    a_dir, b_dir = d / "extrinsic" / "cam_a", d / "extrinsic" / "cam_b"
+    a = sorted(a_dir.glob("*.jpg")) if a_dir.is_dir() else []
+    b = sorted(b_dir.glob("*.jpg")) if b_dir.is_dir() else []
+    if not a or not b:
+        return None
+    return a[0], b[0]
+
+
+def _compute_feature_matches(d: Path) -> dict:
+    """Run the SuperPoint+LightGlue matcher on the first captured stereo pair.
+
+    Returns ``{matches: [{a:[x,y], b:[x,y], score}], count, reason}``. This is the
+    snap-assist source for cell ③: each entry is a verified cam_a↔cam_b pixel
+    correspondence the operator can snap a landmark click to.
+
+    Graceful degradation (the manual marking path never breaks): if the pair isn't
+    captured yet, the ONNX weights aren't vendored, or the matcher errors, returns
+    ``count: 0`` with a human ``reason`` so the UI shows "snap unavailable — mark
+    manually" and falls back to the full 4-click flow.
+
+    A stored synthetic set (``work/feature_matches.json``) — if present — is served
+    verbatim, so hermetic tests / offline demos can exercise snap without weights.
+    """
+    cached = d / _FEATURE_MATCHES_REL
+    if cached.exists():
+        try:
+            data = json.loads(cached.read_text())
+            ms = data.get("matches", [])
+            return {"matches": ms, "count": len(ms),
+                    "reason": data.get("reason", "cached synthetic matches")}
+        except (OSError, ValueError):
+            pass  # fall through to a live compute
+
+    pair = _load_stereo_pair_paths(d)
+    if pair is None:
+        return {"matches": [], "count": 0,
+                "reason": "no captured stereo pair yet — mark landmarks manually"}
+
+    try:
+        import cv2
+
+        from calibration.feature_extrinsics import (
+            MatcherWeightsMissing,
+            OnnxSuperPointLightGlue,
+        )
+    except Exception as exc:  # pragma: no cover - import guard
+        return {"matches": [], "count": 0,
+                "reason": f"matcher unavailable ({exc}) — mark landmarks manually"}
+
+    img_a = cv2.imread(str(pair[0]))
+    img_b = cv2.imread(str(pair[1]))
+    if img_a is None or img_b is None:
+        return {"matches": [], "count": 0,
+                "reason": "captured pair unreadable — mark landmarks manually"}
+
+    models_dir = Path(__file__).resolve().parents[2] / "models"
+    try:
+        matcher = OnnxSuperPointLightGlue(models_dir=models_dir)
+        pa, pb, scores = matcher.match(img_a, img_b)
+    except MatcherWeightsMissing:
+        return {"matches": [], "count": 0,
+                "reason": "snap unavailable — matcher ONNX weights not vendored; "
+                          "mark landmarks manually"}
+    except Exception as exc:
+        return {"matches": [], "count": 0,
+                "reason": f"matcher failed ({exc}) — mark landmarks manually"}
+
+    matches = []
+    for i in range(len(pa)):
+        matches.append({
+            "a": [float(pa[i][0]), float(pa[i][1])],
+            "b": [float(pb[i][0]), float(pb[i][1])],
+            "score": float(scores[i]) if scores is not None and i < len(scores) else 1.0,
+        })
+    return {"matches": matches, "count": len(matches),
+            "reason": "" if matches else "no correspondences found — mark landmarks manually"}
+
+
+@router.get("/api/p/{name}/feature-matches")
+def get_feature_matches(request: Request, name: str) -> dict:
+    """Verified cam_a↔cam_b correspondences for snap-assisted scale-reference marking.
+
+    Sync def → the (on-rig) ONNX matcher runs in the threadpool, off the event loop.
+    Hermetically (no weights / no captured pair) it returns ``count: 0`` with a
+    ``reason`` and cell ③ falls back to the manual 4-click marking. The stored
+    ``ScaleReference`` shape is unchanged — these coordinates only auto-fill points.
+    """
+    d = project_dir(request, name)
+    return _compute_feature_matches(d)
 
 
 @router.get("/api/p/{name}/scale-references")

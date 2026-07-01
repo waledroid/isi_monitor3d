@@ -122,10 +122,13 @@
             tape-measured distance, and add the reference (≥3 needed).</p>
           <div class="toolbar" id="scale-mark-tools">
             <label>distance (m): <input id="scale-dist" type="number" min="0.01" step="0.01"></label>
+            <label><input id="scale-snap-toggle" type="checkbox" checked disabled> snap to matched feature</label>
+            <span id="scale-snap-status" class="msg"></span>
             <span id="scale-click-hint" class="msg"></span>
             <button id="scale-add" disabled>Add reference</button>
             <button id="scale-clear">Clear all</button>
           </div>
+          <p id="scale-pending" class="msg"></p>
           <div id="scale-mark-views" class="fourup"></div>
           <ol id="scale-ref-list" class="scale-ref-list"></ol>
           <figure class="stage-fig" id="scale-stage-fig" hidden>

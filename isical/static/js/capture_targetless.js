@@ -160,6 +160,10 @@ async function waitForJob(project, msg) {
 
 // --- cell ③: interactive scale-reference marking ----------------------------
 
+// Snap radius (source-frame pixels): a cam-A click within this distance of a
+// matched keypoint snaps to it and auto-fills the cam-B point from its match.
+const SNAP_RADIUS_PX = 24;
+
 function setupScaleMarking(project, cameras) {
   const views = document.getElementById("scale-mark-views");
   const list = document.getElementById("scale-ref-list");
@@ -184,15 +188,69 @@ function setupScaleMarking(project, cameras) {
     imgs[c] = fig.querySelector("img");
   });
 
-  // Click sequence: p1@cam_a, p1@cam_b, p2@cam_a, p2@cam_b.
+  // --- snap assist: fetch verified cam_a↔cam_b correspondences ----------------
+  // Snap is a COMPLEMENT to manual marking: a cam-A click near a matched keypoint
+  // snaps sub-pixel-exact and auto-fills its cam-B match (one click per landmark).
+  // If matches are unavailable (no weights / no pair / matcher off) OR no match is
+  // near the click, we fall back to the current manual 4-click flow untouched.
+  let matches = [];            // [{a:[x,y], b:[x,y], score}]
+  let snapEnabled = true;
+  const snapToggle = document.getElementById("scale-snap-toggle");
+  const snapStatus = document.getElementById("scale-snap-status");
+  const setSnapStatus = (txt) => { if (snapStatus) snapStatus.textContent = txt; };
+  if (snapToggle) {
+    snapToggle.addEventListener("change", () => { snapEnabled = snapToggle.checked; updateHint(); });
+  }
+  getJSON(`/api/p/${project}/feature-matches`)
+    .then((r) => {
+      matches = r.matches || [];
+      if (r.count > 0) {
+        setSnapStatus(`snap ready — ${r.count} matched features`);
+        if (snapToggle) snapToggle.disabled = false;
+      } else {
+        snapEnabled = false;
+        if (snapToggle) { snapToggle.checked = false; snapToggle.disabled = true; }
+        setSnapStatus(r.reason || "snap unavailable — mark manually");
+      }
+      updateHint();
+    })
+    .catch(() => {
+      snapEnabled = false;
+      if (snapToggle) { snapToggle.checked = false; snapToggle.disabled = true; }
+      setSnapStatus("snap unavailable — mark manually");
+    });
+
+  // Nearest matched keypoint (in cam A) to a click, within the snap radius.
+  const nearestMatch = (x, y) => {
+    let best = null;
+    let bestD = SNAP_RADIUS_PX;
+    for (const m of matches) {
+      const d = Math.hypot(m.a[0] - x, m.a[1] - y);
+      if (d <= bestD) { bestD = d; best = m; }
+    }
+    return best;
+  };
+
+  // Click sequence for the MANUAL path: p1@cam_a, p1@cam_b, p2@cam_a, p2@cam_b.
+  // A snapped cam-A click auto-fills the paired cam-B point, so the sequence
+  // advances by two (skipping the cam-B click) for that landmark.
   const order = ["p1_a", "p1_b", "p2_a", "p2_b"];
   const camForStep = [cameras[0], cameras[1], cameras[0], cameras[1]];
   let step = 0;
   let pending = {};
+  const snapped = {};          // per-point: true=snapped ●, false=manual ○
+
+  const canAdd = () => step >= order.length && distIn.value > 0;
 
   const updateHint = () => {
-    if (step >= order.length) { hint.textContent = "all 4 points marked — enter distance + Add"; return; }
-    hint.textContent = `click ${order[step]} on ${camForStep[step]}`;
+    if (step >= order.length) { hint.textContent = "both points marked — enter distance + Add"; return; }
+    const key = order[step];
+    const cam = camForStep[step];
+    if (key.endsWith("_a") && snapEnabled && matches.length) {
+      hint.textContent = `click ${key} on ${cam} (near a landmark → snaps + auto-fills ${cam === cameras[0] ? cameras[1] : ""} cam-B)`;
+    } else {
+      hint.textContent = `click ${key} on ${cam}`;
+    }
   };
   updateHint();
 
@@ -202,22 +260,51 @@ function setupScaleMarking(project, cameras) {
       const rect = imgs[c].getBoundingClientRect();
       const x = (ev.clientX - rect.left) / rect.width * imgs[c].naturalWidth;
       const y = (ev.clientY - rect.top) / rect.height * imgs[c].naturalHeight;
-      pending[order[step]] = [x, y];
-      step += 1;
-      addBtn.disabled = step < order.length || !(distIn.value > 0);
-      updateHint();
+      const key = order[step];
+
+      // Snap only engages on a cam-A click when enabled and a match is near it.
+      const m = (key.endsWith("_a") && snapEnabled) ? nearestMatch(x, y) : null;
+      if (m) {
+        pending[key] = [m.a[0], m.a[1]];        // sub-pixel exact cam-A keypoint
+        const bKey = key.replace("_a", "_b");
+        pending[bKey] = [m.b[0], m.b[1]];        // auto-filled cam-B match
+        snapped[key] = true; snapped[bKey] = true;
+        step += 2;                               // cam-B point already placed
+      } else {
+        pending[key] = [x, y];
+        snapped[key] = false;
+        step += 1;
+      }
+      addBtn.disabled = !canAdd();
+      updatePendingRow(); updateHint();
     });
   });
 
-  distIn.addEventListener("input", () => {
-    addBtn.disabled = step < order.length || !(distIn.value > 0);
-  });
+  distIn.addEventListener("input", () => { addBtn.disabled = !canAdd(); });
 
   let refs = [];
+  const marker = (key) => snapped[key] ? "● snapped" : "○ manual";
+  const updatePendingRow = () => {
+    const row = document.getElementById("scale-pending");
+    if (!row) return;
+    const parts = order
+      .filter((k) => pending[k])
+      .map((k) => `${k}: [${pending[k].map(Math.round)}] ${marker(k)}`);
+    row.textContent = parts.length ? `pending — ${parts.join("  ·  ")}` : "";
+  };
+
   const render = () => {
-    list.innerHTML = refs.map((r, i) =>
-      `<li>#${i}: ${r.distance_m} m (p1 [${r.p1_a.map(Math.round)}]…)</li>`).join("");
+    list.innerHTML = refs.map((r, i) => {
+      const tag = r.snapped ? "●" : "○";
+      return `<li>#${i}: ${r.distance_m} m ${tag} (p1 [${r.p1_a.map(Math.round)}]…)</li>`;
+    }).join("");
     count.textContent = `${refs.length} reference(s)${refs.length >= 3 ? " ✓" : " (need ≥3)"}`;
+  };
+
+  const resetPending = () => {
+    pending = {}; step = 0;
+    for (const k of order) delete snapped[k];
+    updatePendingRow();
   };
 
   getJSON(`/api/p/${project}/scale-references`)
@@ -225,16 +312,22 @@ function setupScaleMarking(project, cameras) {
 
   addBtn.addEventListener("click", async () => {
     if (step < order.length) return;
-    refs.push({ ...pending, distance_m: parseFloat(distIn.value) });
+    // snapped flag is display-only; the stored ScaleReference shape is unchanged.
+    const wasSnapped = !!(snapped.p1_a && snapped.p2_a);
+    refs.push({
+      p1_a: pending.p1_a, p1_b: pending.p1_b,
+      p2_a: pending.p2_a, p2_b: pending.p2_b,
+      distance_m: parseFloat(distIn.value), snapped: wasSnapped,
+    });
     try {
       await sendJSON(`/api/p/${project}/scale-references`, "PUT", { references: refs });
-      pending = {}; step = 0; distIn.value = ""; addBtn.disabled = true;
+      resetPending(); distIn.value = ""; addBtn.disabled = true;
       render(); updateHint();
     } catch (e) { flash(count, e.message, false); }
   });
 
   clearBtn.addEventListener("click", async () => {
-    refs = []; pending = {}; step = 0; addBtn.disabled = true;
+    refs = []; resetPending(); addBtn.disabled = true;
     await sendJSON(`/api/p/${project}/scale-references`, "PUT", { references: [] }).catch(() => {});
     render(); updateHint();
   });
