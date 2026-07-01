@@ -165,21 +165,44 @@ class OnnxSuperPointLightGlue:
             outs = sess.run(None, {sess.get_inputs()[0].name: t})
             names = [o.name for o in sess.get_outputs()]
             by = dict(zip(names, outs, strict=False))
-            kpts = by.get("keypoints", outs[0])
-            desc = by.get("descriptors", outs[-1])
-            return np.asarray(kpts), np.asarray(desc)
+            kpts = np.asarray(by.get("keypoints", outs[0]))       # (1, N, 2)
+            desc = np.asarray(by.get("descriptors", outs[-1]))    # (1, N, 256)
+            scores = by.get("scores")
+            scores = (np.asarray(scores).reshape(-1) if scores is not None
+                      else np.ones(kpts.shape[1], dtype=np.float32))
+            # SuperPoint returns every detected keypoint (~10k+ on a 1080p frame);
+            # LightGlue's cross-attention is O(N^2), so an uncapped set OOMs
+            # (a 1.6 GB softmax). Keep only the strongest ``max_keypoints``.
+            n = kpts.shape[1]
+            if n > self.max_keypoints:
+                keep = np.argsort(scores)[-self.max_keypoints:]
+                keep.sort()
+                kpts = kpts[:, keep]
+                desc = desc[:, keep]
+            return kpts, desc
 
         kpts_a, desc_a = _run_superpoint(ta)
         kpts_b, desc_b = _run_superpoint(tb)
+
+        # LightGlue's positional encoding expects keypoints normalized to ~[-1,1]
+        # ((kpts - size/2) / (max_side/2)); the decoupled v0.1.x export does NOT
+        # normalize internally, so feed raw pixels and it matches poorly.
+        def _norm(kpts: np.ndarray, img: np.ndarray) -> np.ndarray:
+            h, w = np.asarray(img).shape[:2]
+            size = np.array([w, h], dtype=np.float32)
+            return ((kpts.astype(np.float32) - size / 2.0) / (size.max() / 2.0))
+
+        kpts_a_n = _norm(kpts_a, img_a)
+        kpts_b_n = _norm(kpts_b, img_b)
 
         sess = self._lightglue
         feed = {}
         for inp in sess.get_inputs():
             n = inp.name
             if "kpts0" in n or "keypoints0" in n:
-                feed[n] = kpts_a.astype(np.float32)
+                feed[n] = kpts_a_n.astype(np.float32)
             elif "kpts1" in n or "keypoints1" in n:
-                feed[n] = kpts_b.astype(np.float32)
+                feed[n] = kpts_b_n.astype(np.float32)
             elif "desc0" in n or "descriptors0" in n:
                 feed[n] = desc_a.astype(np.float32)
             elif "desc1" in n or "descriptors1" in n:
@@ -189,16 +212,33 @@ class OnnxSuperPointLightGlue:
         by = dict(zip(names, outs, strict=False))
         matches = np.asarray(by.get("matches", by.get("matches0", outs[0])))
         mscores = by.get("scores", by.get("mscores0"))
+        mscores = None if mscores is None else np.asarray(mscores, dtype=np.float64).reshape(-1)
 
         kpts_a2 = kpts_a.reshape(-1, 2)
         kpts_b2 = kpts_b.reshape(-1, 2)
-        matches = matches.reshape(-1, 2)
-        pts_a = kpts_a2[matches[:, 0].astype(int)]
-        pts_b = kpts_b2[matches[:, 1].astype(int)]
-        if mscores is None:
-            scores = np.ones(pts_a.shape[0], dtype=np.float64)
+
+        # Two LightGlue-ONNX output conventions:
+        #  * assignment ((1, N0)): matches0[i] = index in view B for keypoint i
+        #    of view A, or -1 if unmatched (v0.1.x superpoint_lightglue.onnx).
+        #  * index-pairs ((M, 2)): explicit [i0, i1] rows (fused/end2end exports).
+        # Disambiguate on the trailing dim + the -1 sentinel (pairs are all >=0).
+        is_pairs = matches.ndim >= 2 and matches.shape[-1] == 2 and not (matches < 0).any()
+        if is_pairs:
+            pairs = matches.reshape(-1, 2)
+            idx0 = pairs[:, 0].astype(int)
+            idx1 = pairs[:, 1].astype(int)
+            scores = (mscores[:idx0.size] if mscores is not None
+                      else np.ones(idx0.size, dtype=np.float64))
         else:
-            scores = np.asarray(mscores, dtype=np.float64).reshape(-1)
+            assign = matches.reshape(-1)                 # (N0,), value = B-index or -1
+            valid = assign >= 0
+            idx0 = np.nonzero(valid)[0]
+            idx1 = assign[valid].astype(int)
+            scores = (mscores[valid] if mscores is not None
+                      else np.ones(idx0.size, dtype=np.float64))
+
+        pts_a = kpts_a2[idx0]
+        pts_b = kpts_b2[idx1]
         keep = scores >= self.match_threshold
         return (
             pts_a[keep].astype(np.float64),
