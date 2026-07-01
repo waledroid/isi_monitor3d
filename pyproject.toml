@@ -56,5 +56,5 @@ select = ["E", "F", "I", "B", "UP", "RUF"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "calibration/tests"]
 addopts = "-ra --strict-markers"
