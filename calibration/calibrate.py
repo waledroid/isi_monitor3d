@@ -61,6 +61,7 @@ from calibration.multical_io import (
     UNKNOWN_RMS_PX,
     CameraInRig,
     MultiCalSolution,
+    parse_joint_rms_from_log,
     parse_rms_from_log,
 )
 from calibration.multical_io import (
@@ -73,7 +74,13 @@ from calibration.schema import (
 )
 
 REPROJECTION_RMS_HARD_LIMIT_PX = 0.5
-"""Per-camera reprojection RMS above which we refuse to write calibration.json."""
+"""Per-camera intrinsic reprojection RMS above which we refuse calibration.json."""
+
+EXTRINSIC_REPROJECTION_RMS_HARD_LIMIT_PX = 2.0
+"""Joint-BA reprojection RMS limit for the extrinsic solve — matches the
+homography reprojection KPI (<=2 px). The joint solve reports one overall RMS
+(not per-camera, and inherently looser than the intrinsic-only fit), so it gets
+its own, KPI-aligned gate rather than the strict 0.5 px intrinsic limit."""
 
 DEFAULT_VENV_MULTICAL = Path(__file__).resolve().parent / ".venv-multical"
 
@@ -135,13 +142,43 @@ class AprilGridBoardSpec:
     tag_spacing: float = 0.3
     tag_family: str = "t36h11"
     start_id: int = 0
+    # Solver-side pose gate overrides (None → board-size-aware auto, see
+    # ``pose_gates``). Rarely set by hand; auto is correct for small targets.
+    min_rows: int | None = None
+    min_points: int | None = None
 
     def tag_count(self) -> int:
         return self.tags_x * self.tags_y
 
+    def pose_gates(self) -> tuple[int, int]:
+        """Multical's per-board pose gate ``(min_rows, min_points)``.
+
+        Multical (``board/common.py:has_min_detections_grid``) rejects a board's
+        PnP pose unless the detected tags span ``>= min_rows`` unique indices in
+        **both** grid dimensions AND total ``>= min_points`` detected corners
+        (4 per tag). Its AprilConfig defaults — ``min_rows=2, min_points=12`` —
+        assume a large grid and make a small target's pose **unsolvable**:
+        a 1x2 board has only 1 column (never 2 unique cols) and at most 8
+        corners (< 12), so every pose is silently dropped → no stereo overlap →
+        the extrinsic BA fails with an empty reprojection array. We scale the
+        gate to the board: ``min_rows`` to the smaller grid side (capped at 2 so
+        it stays satisfiable), and ``min_points`` to require up to two full tags
+        (8 corners — enough to break the single-tag planar-pose ambiguity),
+        never more than the board's own corner count.
+        """
+        n = self.tag_count()
+        min_rows = self.min_rows if self.min_rows is not None \
+            else max(1, min(2, self.tags_x, self.tags_y))
+        min_points = self.min_points if self.min_points is not None \
+            else min(4 * n, 8)
+        return min_rows, min_points
+
     def multical_yaml_block(self, name: str) -> str:
         # Keys must match Multical's AprilConfig schema (size, start_id,
-        # tag_family, tag_length, tag_spacing) — extra keys are rejected.
+        # tag_family, tag_length, tag_spacing, min_rows, min_points) — extra
+        # keys are rejected. min_rows/min_points are board-size-aware so small
+        # targets (e.g. a 1x2 board) can actually estimate a pose.
+        min_rows, min_points = self.pose_gates()
         return (
             f"  {name}:\n"
             f"    _type_: aprilgrid\n"
@@ -150,6 +187,8 @@ class AprilGridBoardSpec:
             f"    tag_spacing: {self.tag_spacing}\n"
             f"    tag_family: {self.tag_family}\n"
             f"    start_id: {self.start_id}\n"
+            f"    min_rows: {min_rows}\n"
+            f"    min_points: {min_points}\n"
         )
 
 
@@ -219,15 +258,38 @@ def _write_multical_boards_yaml(board: CharucoBoardSpec, out_dir: Path) -> Path:
     return write_boards_yaml({"charuco_main": board}, out_dir / "boards.yaml")
 
 
-def _stage_image_dirs(image_dirs_by_camera: dict[str, Path], out_dir: Path) -> Path:
-    """Symlink per-camera image directories under one root for Multical."""
+def _stage_image_dirs(
+    image_dirs_by_camera: dict[str, Path],
+    out_dir: Path,
+    *,
+    match_names: bool = False,
+) -> Path:
+    """Symlink per-camera image directories under one root for Multical.
+
+    ``match_names=True`` is required for the multi-camera *extrinsic* solve:
+    Multical pairs synchronized frames by **identical basename** across the
+    camera dirs (``find_matching_files`` intersects the basename sets). Our
+    capture names each shot ``<cam>_<NNN>.jpg``, so the raw basenames never
+    intersect (``cam_a_000.jpg`` ≠ ``cam_b_000.jpg``) → "0 matching images".
+    With ``match_names`` we symlink each image under the camera-prefix-stripped
+    name (``<NNN>.jpg``) so pair ``NNN`` shares a basename in both cameras.
+    The default (per-camera intrinsic) path symlinks whole dirs unchanged.
+    """
     image_root = out_dir / "images"
-    image_root.mkdir(parents=True, exist_ok=True)
+    if image_root.exists() or image_root.is_symlink():
+        shutil.rmtree(image_root)
+    image_root.mkdir(parents=True)
     for cam_id, src in image_dirs_by_camera.items():
+        src = Path(src).resolve()
         link = image_root / cam_id
-        if link.exists() or link.is_symlink():
-            link.unlink()
-        link.symlink_to(Path(src).resolve())
+        if not match_names:
+            link.symlink_to(src)
+            continue
+        link.mkdir()
+        prefix = f"{cam_id}_"
+        for img in sorted(src.glob("*.jpg")):
+            name = img.name[len(prefix):] if img.name.startswith(prefix) else img.name
+            (link / name).symlink_to(img)
     return image_root
 
 
@@ -322,6 +384,12 @@ def run_multical_calibration(
 
     sol = parse_multical_output(output_json)
     rms = parse_rms_from_log(log_text, sol.camera_ids)
+    # The joint BA logs one overall RMS (no per-camera lines). Share it across
+    # any camera the per-camera parse didn't cover, so the joint solve is
+    # RMS-gated instead of failing "RMS not parsed".
+    joint = parse_joint_rms_from_log(log_text)
+    if joint is not None:
+        rms = {cid: rms.get(cid, joint) for cid in sol.camera_ids}
     return sol.with_rms(rms)
 
 
@@ -394,7 +462,8 @@ def run_multical_extrinsics(
     """
     work_dir.mkdir(parents=True, exist_ok=True)
     boards_yaml = write_boards_yaml(boards, work_dir / "extrinsic_boards.yaml")
-    image_root = _stage_image_dirs(image_dirs_by_camera, work_dir / "extrinsic_images")
+    image_root = _stage_image_dirs(
+        image_dirs_by_camera, work_dir / "extrinsic_images", match_names=True)
 
     binary = multical_binary or find_multical_binary()
     cmd = [
@@ -413,13 +482,27 @@ def run_multical_extrinsics(
     log_text = (result.stdout or "") + "\n" + (result.stderr or "")
     print(log_text, flush=True)
 
-    output_json = work_dir / f"{name}.json"
-    if not output_json.exists():
+    # Multical 0.4.0 exports to `image_path or output_path` (app/calibrate.py:28),
+    # i.e. it PREFERS --image_path, so the json lands under image_root, not
+    # work_dir. Accept either (mirrors run_multical_intrinsics' dual-location check).
+    output_json = next(
+        (p for p in (work_dir / f"{name}.json", image_root / f"{name}.json")
+         if p.exists()),
+        None,
+    )
+    if output_json is None:
         raise FileNotFoundError(
-            f"Multical did not produce {output_json}; check the log above."
+            f"Multical did not produce {name}.json under {work_dir} or "
+            f"{image_root}; check the log above."
         )
     sol = parse_multical_output(output_json)
     rms = parse_rms_from_log(log_text, sol.camera_ids)
+    # The joint BA logs one overall RMS (no per-camera lines). Share it across
+    # any camera the per-camera parse didn't cover, so the joint solve is
+    # RMS-gated instead of failing "RMS not parsed".
+    joint = parse_joint_rms_from_log(log_text)
+    if joint is not None:
+        rms = {cid: rms.get(cid, joint) for cid in sol.camera_ids}
     return sol.with_rms(rms)
 
 
@@ -688,10 +771,13 @@ def assemble_calibration(
     anchor: FloorAnchor,
     *,
     allow_unknown_rms: bool = False,
+    rms_limit_px: float = REPROJECTION_RMS_HARD_LIMIT_PX,
 ) -> CalibrationFile:
     """Combine a parsed Multical solution + a floor anchor into the on-disk schema.
 
-    Refuses to assemble if any camera's reprojection RMS exceeds the hard limit.
+    Refuses to assemble if any camera's reprojection RMS exceeds ``rms_limit_px``
+    (default the strict intrinsic limit; the extrinsic joint solve passes the
+    looser, KPI-aligned :data:`EXTRINSIC_REPROJECTION_RMS_HARD_LIMIT_PX`).
     If a camera's RMS is unknown (Multical's log was unparseable), the call
     fails unless ``allow_unknown_rms=True`` — the rest of the system trusts
     ``calibration.json`` blindly, and "we don't know how accurate this is"
@@ -706,10 +792,10 @@ def assemble_calibration(
                     f"{cam_id}: per-camera RMS not parsed from Multical log. "
                     f"Pass allow_unknown_rms=True if you accept an un-gated calibration."
                 )
-        elif rms > REPROJECTION_RMS_HARD_LIMIT_PX:
+        elif rms > rms_limit_px:
             raise RuntimeError(
                 f"{cam_id}: reprojection RMS {rms:.3f} px exceeds "
-                f"hard limit {REPROJECTION_RMS_HARD_LIMIT_PX} px — refusing to write calibration.json"
+                f"hard limit {rms_limit_px} px — refusing to write calibration.json"
             )
 
         R_world, t_world = compose_camera_in_world(cam, anchor)

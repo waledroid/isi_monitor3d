@@ -114,6 +114,7 @@ def run_extrinsic(project_dir: Path) -> dict:
     (K, D, R, t, H, P per camera), RMS-gated at 0.5 px by ``assemble_calibration``.
     """
     from calibration.calibrate import (
+        EXTRINSIC_REPROJECTION_RMS_HARD_LIMIT_PX,
         assemble_calibration,
         estimate_floor_anchor_charuco,
         run_multical_extrinsics,
@@ -143,7 +144,8 @@ def run_extrinsic(project_dir: Path) -> dict:
     progress.report(1, 3, "extrinsic:floor-anchor")
     anchor = estimate_floor_anchor_charuco(floors, solution, board)
     progress.report(2, 3, "extrinsic:assemble")
-    calibration = assemble_calibration(solution, anchor)
+    calibration = assemble_calibration(
+        solution, anchor, rms_limit_px=EXTRINSIC_REPROJECTION_RMS_HARD_LIMIT_PX)
     out = project_dir / _CALIBRATION_JSON
     calibration.write(out)
     rms = {cid: round(float(c.reprojection_rms_px), 4)

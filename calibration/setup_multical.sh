@@ -15,9 +15,13 @@
 #     here is 3.13, so PYTHON must point at a 3.10 interpreter (the `monitor3d`
 #     conda env has one). This venv stays isolated regardless of which 3.10
 #     interpreter seeds it — it gets its own site-packages + OpenCV 4.6.
-#   * numpy < 2 — Multical's opencv-contrib-python 4.6 wheels are built against
-#     the numpy 1.x ABI; numpy 2.x triggers "numpy.core.multiarray failed to
-#     import". The resolver pulls numpy 2.x unless we pin it down afterwards.
+#   * numpy < 1.24 — two reasons. (a) Multical's opencv-contrib-python 4.6
+#     wheels are built against the numpy 1.x ABI; numpy 2.x triggers
+#     "numpy.core.multiarray failed to import". (b) Multical 0.4.0 uses the
+#     `np.bool` alias (transform/matrix.py, tables.py), REMOVED in numpy 1.24 —
+#     with 1.24+ the joint `calibrate` BA dies mid-solve with
+#     "module 'numpy' has no attribute 'bool'". numpy 1.23.x satisfies both.
+#     The resolver pulls numpy 2.x unless we pin it down afterwards.
 #
 # Usage:
 #     PYTHON=/path/to/python3.10 ./calibration/setup_multical.sh
@@ -66,9 +70,10 @@ echo "[setup_multical] upgrading pip"
 echo "[setup_multical] installing multical==${MULTICAL_VERSION}"
 "${VENV_DIR}/bin/pip" install "multical==${MULTICAL_VERSION}"
 
-# opencv-contrib-python 4.6 is built against the numpy 1.x ABI; force numpy<2.
-echo "[setup_multical] pinning numpy<2 (opencv-contrib 4.6 ABI)"
-"${VENV_DIR}/bin/pip" install "numpy<2"
+# opencv-contrib 4.6 needs the numpy 1.x ABI AND Multical uses np.bool (gone in
+# numpy 1.24) — pin numpy<1.24 so the joint calibrate BA doesn't crash mid-solve.
+echo "[setup_multical] pinning numpy<1.24 (opencv-contrib 4.6 ABI + Multical np.bool)"
+"${VENV_DIR}/bin/pip" install "numpy<1.24"
 
 # AprilGrid support (the `calibrate-2cam` extrinsic target) is OPTIONAL. It needs
 # `apriltags2-ethz`, a C++/pybind11 package with NO usable PyPI wheel — it builds
@@ -118,8 +123,8 @@ fi
 # The optional installs above (apriltags / interactive) can pull numpy>=2 or a second
 # OpenCV; re-assert the working pins LAST (opencv-contrib has the cv2.aruco multical
 # needs; numpy<2 for its 4.6 ABI). --no-deps so it only fixes these two.
-echo "[setup_multical] re-asserting numpy<2 + opencv-contrib pins (final)"
-"${VENV_DIR}/bin/pip" install --no-deps "numpy<2" "opencv-contrib-python<=4.7.0" >/dev/null 2>&1 || true
+echo "[setup_multical] re-asserting numpy<1.24 + opencv-contrib pins (final)"
+"${VENV_DIR}/bin/pip" install --no-deps "numpy<1.24" "opencv-contrib-python<=4.7.0" >/dev/null 2>&1 || true
 
 # Patch a Multical 0.4.0 bug: the `multical intrinsic` subcommand
 # (app/intrinsic.py) calls calibrate_cameras() WITHOUT the `intrinsic_error_limit`

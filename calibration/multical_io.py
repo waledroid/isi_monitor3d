@@ -205,6 +205,27 @@ _RMS_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The joint `multical calibrate` BA logs a single overall figure per iteration
+# (`... reprojection RMS=1.621 (1.621), n=768 ...`) rather than the per-camera
+# `<cam> - RMS:` lines the intrinsic solve emits. We take the final occurrence.
+_JOINT_RMS_LINE_RE = re.compile(
+    r"reprojection\s+RMS=(?P<rms>[0-9]+\.?[0-9]*)",
+    re.IGNORECASE,
+)
+
+
+def parse_joint_rms_from_log(log_text: str) -> float | None:
+    """Return the final overall reprojection RMS from a joint `calibrate` log.
+
+    Multical's joint bundle adjustment reports one overall RMS (not per-camera),
+    so the extrinsic solve shares this figure across cameras. Returns ``None`` if
+    no joint-RMS line is present (e.g. an intrinsic-only log).
+    """
+    last: float | None = None
+    for m in _JOINT_RMS_LINE_RE.finditer(log_text):
+        last = float(m.group("rms"))
+    return last
+
 
 def parse_rms_from_log(log_text: str, camera_ids: tuple[str, ...]) -> dict[str, float]:
     """Best-effort extraction of per-camera reprojection RMS from Multical's log.
