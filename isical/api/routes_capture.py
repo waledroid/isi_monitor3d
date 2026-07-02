@@ -164,6 +164,55 @@ def targetless_shot_image(request: Request, name: str, cam: str, file: str) -> F
     return FileResponse(str(target), media_type="image/jpeg")
 
 
+_TARGETLESS_DIAG_REL = "work/targetless_diag"
+
+
+@router.get("/api/p/{name}/targetless-match-preview")
+def list_targetless_match_preview(request: Request, name: str) -> dict:
+    """List the rendered per-pair feature-match DIAGNOSTIC previews (cell ②).
+
+    Read-only. Reads ``work/targetless_diag/`` (populated by the ``targetless-diag``
+    job) and returns, per pair, the match + keypoints image filenames and the
+    ``N matches, M RANSAC inliers`` counts from the sidecar. Never triggers the
+    matcher and never touches board files.
+    """
+    d = project_dir(request, name)
+    diag = d / _TARGETLESS_DIAG_REL
+    pairs: list[dict] = []
+    if diag.is_dir():
+        labels = sorted({p.name[len("pair_"):-len("_matches.jpg")]
+                         for p in diag.glob("pair_*_matches.jpg")})
+        for label in labels:
+            match_name = f"pair_{label}_matches.jpg"
+            kp_name = f"pair_{label}_keypoints.jpg"
+            meta_path = diag / f"pair_{label}.json"
+            meta = {}
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                except (OSError, ValueError):
+                    meta = {}
+            entry = {"pair": label, "matches": match_name,
+                     "n_matches": meta.get("n_matches"), "n_inliers": meta.get("n_inliers")}
+            if (diag / kp_name).is_file():
+                entry["keypoints"] = kp_name
+            pairs.append(entry)
+    return {"count": len(pairs), "pairs": pairs}
+
+
+@router.get("/targetless-diag/{name}/{file}")
+def targetless_diag_image(request: Request, name: str, file: str) -> FileResponse:
+    """Serve one rendered feature-match diagnostic jpg. Read-only, path-guarded."""
+    if not _SHOT_FILE_RE.match(file):
+        raise HTTPException(status_code=404, detail="not found")
+    d = project_dir(request, name)
+    base = (d / _TARGETLESS_DIAG_REL).resolve()
+    target = (base / file).resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(str(target), media_type="image/jpeg")
+
+
 @router.get("/api/p/{name}/sync-probe")
 def sync_probe(request: Request, name: str, seconds: float = 4.0) -> dict:
     """LIVE stream-sync probe (NOT a calibration output): per-camera FPS + the

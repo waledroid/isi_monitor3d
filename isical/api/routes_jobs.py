@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from ..core.project import load_project
 from ..core.runners import (
+    preview_targetless_matches,
     run_export,
     run_extrinsic,
     run_extrinsic_targetless,
@@ -35,6 +36,9 @@ _PHASES = {
     "extrinsic": _extrinsic_runner,
     "export": lambda d, body: partial(run_export, d,
                                       install=bool(body and body.install)),
+    # DIAGNOSTIC only — renders per-pair feature-match previews under work/ scratch.
+    # Never solves / writes calibration_targetless.json / needs scale references.
+    "targetless-diag": lambda d, body: partial(preview_targetless_matches, d),
 }
 
 

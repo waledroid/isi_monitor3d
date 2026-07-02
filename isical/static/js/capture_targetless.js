@@ -91,8 +91,10 @@ export function initTargetless(root) {
 
   setupLiveControls(project);
   setupScaleMarking(project, cameras);
+  setupMatchPreview(project);
   refreshPairs(project);
   refreshStages(project);
+  refreshMatchPreview(project);
   refreshReport(project);
   refreshResult(project);
 }
@@ -257,6 +259,77 @@ async function waitForJob(project, msg) {
     await new Promise((r) => setTimeout(r, 500));
   }
   flash(msg, "solve still running — check the jobs panel", true);
+}
+
+// --- cell ②: on-demand per-pair feature-match DIAGNOSTIC preview -------------
+
+// Runs the matcher on EVERY captured targetless pair as a background job, then shows
+// a thumbnail gallery (match/RANSAC image + counts + SuperPoint keypoints image) so
+// the operator can tell good pairs (many consistent inliers) from junk at a glance.
+// Diagnostic only — never solves, never writes calibration_targetless.json.
+function setupMatchPreview(project) {
+  const btn = document.getElementById("tl-preview-matches");
+  const msg = document.getElementById("tl-preview-msg");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    // Capture is exclusive with the (ONNX-heavy) matcher — stop any live session.
+    await sendJSON(`/api/p/${project}/targetless/capture/stop`, "POST", {}).catch(() => {});
+    btn.disabled = true;
+    flash(msg, "matching every captured pair… (SuperPoint+LightGlue per pair)", true);
+    try {
+      await sendJSON(`/api/p/${project}/run/targetless-diag`, "POST", {});
+      await waitForDiagJob(project, msg);
+    } catch (e) {
+      flash(msg, e.message, false);
+    } finally {
+      btn.disabled = false;
+      refreshMatchPreview(project);
+    }
+  });
+}
+
+async function waitForDiagJob(project, msg) {
+  for (let i = 0; i < 600; i += 1) {
+    let jobs = [];
+    try { jobs = (await getJSON(`/api/jobs`)).jobs || []; } catch { /* */ }
+    const j = jobs.find((x) => x.phase === "targetless-diag" && x.project === project);
+    if (j && (j.state === "done" || j.state === "failed")) {
+      flash(msg, j.state === "done" ? "match preview ready ✓"
+            : `preview failed: ${j.error || ""}`, j.state === "done");
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  flash(msg, "still matching — check the jobs panel", true);
+}
+
+async function refreshMatchPreview(project) {
+  const cell = document.getElementById("cell-matches");
+  const out = cell?.querySelector(".nb-preview-out");
+  const status = cell?.querySelector(".nb-status");
+  if (!out) return;
+  let data;
+  try { data = await getJSON(`/api/p/${project}/targetless-match-preview`); }
+  catch { return; }
+  const pairs = data.pairs || [];
+  if (!pairs.length) return;   // keep the placeholder until a preview is rendered
+  const t = Date.now();
+  const rows = pairs.map((p) => {
+    const counts = (p.n_matches == null) ? ""
+      : `${p.n_matches} matches, ${p.n_inliers} RANSAC inliers`;
+    const figs = [
+      `<figure class="stage-fig"><figcaption>pair #${p.pair} — ${counts}</figcaption>
+        <img src="/targetless-diag/${project}/${p.matches}?t=${t}" alt="pair ${p.pair} matches"></figure>`,
+    ];
+    if (p.keypoints) {
+      figs.push(`<figure class="stage-fig"><figcaption>keypoints</figcaption>
+        <img src="/targetless-diag/${project}/${p.keypoints}?t=${t}" alt="pair ${p.pair} keypoints"></figure>`);
+    }
+    return `<div class="tl-pair-row">${figs.join("")}</div>`;
+  });
+  out.innerHTML = `<div class="tl-pair-gallery tl-diag-gallery">${rows.join("")}</div>`;
+  if (status) { status.textContent = `${pairs.length} pair(s) matched ✓`; status.classList.add("ok"); }
+  revealCell("cell-matches");
 }
 
 // --- cell ③: interactive scale-reference marking ----------------------------
@@ -471,7 +544,9 @@ async function refreshStages(project) {
       const img = document.getElementById("scale-stage-img");
       if (fig && img) { img.src = src; fig.hidden = false; }
     } else {
-      const out = cell.querySelector(".nb-out");
+      // Cell ② owns an interactive "Preview matches" gallery (.nb-preview-out); the
+      // solve's single matches stage image goes there without clobbering the toolbar.
+      const out = cell.querySelector(".nb-preview-out") || cell.querySelector(".nb-out");
       if (out) {
         out.innerHTML = `<figure class="stage-fig"><img src="${src}" alt="${stage}"></figure>`;
       }

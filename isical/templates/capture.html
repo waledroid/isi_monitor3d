@@ -159,7 +159,13 @@
       <section class="nb-cell" id="cell-matches" data-stage="matches">
         <div class="nb-head"><span class="nb-num">2</span><h3>Feature matches</h3>
           <span class="nb-status msg">awaiting solve</span></div>
-        <div class="nb-out"><div class="nb-placeholder">inliers (green) vs outliers (red) + match count</div></div>
+        <div class="nb-out">
+          <div class="toolbar" id="tl-matches-tools">
+            <button id="tl-preview-matches">Preview matches</button>
+            <span id="tl-preview-msg" class="msg">runs the matcher on every captured pair — inliers (green) vs outliers (red) + counts, so you can spot junk pairs before solving</span>
+          </div>
+          <div class="nb-preview-out"><div class="nb-placeholder">inliers (green) vs outliers (red) + match count</div></div>
+        </div>
       </section>
 
       <!-- Cell ③ scale references (interactive marking lives here) -->

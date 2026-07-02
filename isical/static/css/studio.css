@@ -1500,6 +1500,13 @@ button:disabled:hover {
 .tl-pair-row .stage-fig img { width: 100%; border-radius: 6px; }
 .tl-pair-row .stage-fig figcaption { font-size: .7rem; margin-bottom: .2rem; }
 
+/* cell ②: the feature-match DIAGNOSTIC preview. Each pair's match + keypoints
+   images are already cam_a|cam_b side-by-side renders, so give them a full-width
+   column (one pair per row) instead of the compact thumbnail sizing above. */
+.tl-diag-gallery { flex-direction: column; }
+.tl-diag-gallery .tl-pair-row { width: 100%; flex-wrap: wrap; }
+.tl-diag-gallery .tl-pair-row .stage-fig { width: 100%; max-width: 640px; }
+
 /* result cell: matrices printed monospace, notebook-style */
 .result-matrices {
   background: #0a0d14; color: #d7e2ef; padding: .8rem 1rem; border-radius: 8px;

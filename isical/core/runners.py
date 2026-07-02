@@ -242,6 +242,184 @@ def run_extrinsic_targetless(project_dir: Path) -> dict:
             "report_json": str(report), "method": "targetless"}
 
 
+# The per-pair feature-match DIAGNOSTIC preview renders under work/ scratch — never
+# a data/<name>/ root artifact and never a board file. It's a look-only aid so the
+# operator can judge match quality per captured targetless pair BEFORE solving; it
+# NEVER solves, writes calibration_targetless.json, or requires scale references.
+_TARGETLESS_DIAG_DIR = "work/targetless_diag"
+
+
+def _build_diag_matcher(models_dir: Path):
+    """Construct the ONNX SuperPoint+LightGlue matcher for the diagnostic preview.
+
+    Indirection so hermetic tests can monkeypatch in a FakeMatcher (no ONNX/weights).
+    Raises MatcherWeightsMissing when the weights aren't vendored — the runner turns
+    that into a clean, surfaced error rather than a crash.
+    """
+    from calibration.feature_extrinsics import OnnxSuperPointLightGlue
+    # Lower match_threshold than the default (0.2) so the DIAGNOSTIC preview shows
+    # denser matches — the operator judges pair quality from the RANSAC inlier
+    # count, and more raw matches make good-vs-junk pairs easier to see.
+    return OnnxSuperPointLightGlue(models_dir=models_dir, match_threshold=0.05)
+
+
+def _stereo_pairs_by_index(project_dir: Path) -> list[tuple[str, Path, Path]]:
+    """Sorted (pair_label, cam_a_jpg, cam_b_jpg) for the captured targetless pairs.
+
+    Reads the targetless method's OWN captures (targetless/{cam}/*.jpg), pairing
+    cam_a[i] with cam_b[i] by filename order — the same pairing the gallery + solve
+    use. Trailing unmatched frames are dropped.
+    """
+    a_dir = project_dir / "targetless" / "cam_a"
+    b_dir = project_dir / "targetless" / "cam_b"
+    a = sorted(a_dir.glob("*.jpg")) if a_dir.is_dir() else []
+    b = sorted(b_dir.glob("*.jpg")) if b_dir.is_dir() else []
+    out: list[tuple[str, Path, Path]] = []
+    for i, (pa, pb) in enumerate(zip(a, b, strict=False)):
+        out.append((f"{i:03d}", pa, pb))
+    return out
+
+
+def preview_targetless_matches(project_dir: Path) -> dict:
+    """DIAGNOSTIC — render per-pair feature-match previews for every targetless pair.
+
+    For each captured stereo pair (``targetless/{cam}/*.jpg``) this runs the
+    SuperPoint+LightGlue matcher + RANSAC (Essential-matrix) and renders two aids into
+    ``work/targetless_diag/`` (scratch — never a root artifact, never a board file):
+
+      * ``pair_<i>_matches.jpg`` — LightGlue matches with RANSAC inliers (green) vs
+        outliers (red) + an "N matches, M RANSAC inliers" banner
+        (:func:`calibration.feature_viz.draw_feature_matches`).
+      * ``pair_<i>_keypoints.jpg`` — the matched keypoints drawn per camera, cam_a |
+        cam_b side by side.
+
+    It NEVER solves, writes ``calibration_targetless.json``, or needs scale references.
+    Per-pair caching: a pair whose diag images already exist and are newer than BOTH
+    its capture jpgs is skipped, so re-previewing after adding pairs only renders the
+    new ones. If the matcher ONNX weights aren't vendored, raises MatcherWeightsMissing
+    (surfaced by the JobRunner as a clean error, not a crash).
+    """
+    import cv2
+    import numpy as np
+
+    from calibration import feature_viz as viz
+    from calibration.calibrate import _load_intrinsics_kd
+
+    project_dir = Path(project_dir)
+    cfg = load_project(project_dir)
+    cams = cfg.configured_cameras()
+    if len(cams) < 2:
+        raise ValueError("targetless match preview needs both cameras configured")
+    intrinsic_json = project_dir / _INTRINSIC_JSON
+    if not intrinsic_json.exists():
+        raise ValueError("no work/intrinsic.json — run the Intrinsic phase first")
+    pairs = _stereo_pairs_by_index(project_dir)
+    if not pairs:
+        raise ValueError("no targetless stereo pairs captured — capture textured-scene "
+                         "pairs on the targetless page first (targetless/<cam>/*.jpg)")
+
+    kd = _load_intrinsics_kd(intrinsic_json)
+    if "cam_a" not in kd:
+        raise ValueError(f"cam_a intrinsics missing in {intrinsic_json}")
+    K_a = np.asarray(kd["cam_a"][0], dtype=np.float64)
+
+    diag = project_dir / _TARGETLESS_DIAG_DIR
+    diag.mkdir(parents=True, exist_ok=True)
+
+    def _fresh(dst: Path, *srcs: Path) -> bool:
+        if not dst.exists():
+            return False
+        dmt = dst.stat().st_mtime
+        return all(s.exists() and s.stat().st_mtime <= dmt for s in srcs)
+
+    # Lazily build the (ONNX-heavy) matcher only when at least one pair needs rendering.
+    matcher = None
+    models_dir = Path(__file__).resolve().parents[2] / "models"
+
+    rendered: list[dict] = []
+    for label, pa_path, pb_path in pairs:
+        match_name = f"pair_{label}_matches.jpg"
+        kp_name = f"pair_{label}_keypoints.jpg"
+        match_dst = diag / match_name
+        kp_dst = diag / kp_name
+
+        if _fresh(match_dst, pa_path, pb_path) and _fresh(kp_dst, pa_path, pb_path):
+            meta_path = diag / f"pair_{label}.json"
+            meta = {}
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text())
+                except (OSError, ValueError):
+                    meta = {}
+            rendered.append({"pair": label, "matches": match_name, "keypoints": kp_name,
+                             "n_matches": meta.get("n_matches"),
+                             "n_inliers": meta.get("n_inliers"), "cached": True})
+            continue
+
+        img_a = cv2.imread(str(pa_path))
+        img_b = cv2.imread(str(pb_path))
+        if img_a is None or img_b is None:
+            logger.warning("targetless-diag: unreadable pair %s (%s / %s)", label, pa_path, pb_path)
+            continue
+
+        if matcher is None:
+            matcher = _build_diag_matcher(models_dir)
+
+        pts_a, pts_b, _scores = matcher.match(img_a, img_b)
+        pts_a = np.asarray(pts_a, dtype=np.float64).reshape(-1, 2)
+        pts_b = np.asarray(pts_b, dtype=np.float64).reshape(-1, 2)
+        n_matches = len(pts_a)
+        if n_matches >= 5:
+            _E, inl = cv2.findEssentialMat(pts_a, pts_b, K_a, method=cv2.RANSAC,
+                                           prob=0.999, threshold=1.5)
+            mask = (inl.reshape(-1).astype(bool) if inl is not None
+                    else np.zeros(n_matches, dtype=bool))
+        else:
+            mask = np.zeros(n_matches, dtype=bool)
+        n_inliers = int(mask.sum())
+
+        match_img = viz.draw_feature_matches(img_a, img_b, pts_a, pts_b, mask)
+        cv2.imwrite(str(match_dst), match_img)
+        kp_img = _draw_matched_keypoints(img_a, img_b, pts_a, pts_b, mask)
+        cv2.imwrite(str(kp_dst), kp_img)
+        try:
+            (diag / f"pair_{label}.json").write_text(
+                json.dumps({"n_matches": n_matches, "n_inliers": n_inliers}))
+        except OSError:
+            pass
+
+        logger.info("targetless-diag[%s]: %d matches, %d RANSAC inliers",
+                    label, n_matches, n_inliers)
+        rendered.append({"pair": label, "matches": match_name, "keypoints": kp_name,
+                         "n_matches": n_matches, "n_inliers": n_inliers, "cached": False})
+        progress.report(len(rendered), len(pairs), f"targetless-diag:{label}")
+
+    return {"pairs": rendered, "count": len(rendered),
+            "diag_dir": str(diag), "method": "targetless_match_preview"}
+
+
+def _draw_matched_keypoints(img_a, img_b, pts_a, pts_b, mask):
+    """SuperPoint/LightGlue keypoints drawn per camera, cam_a | cam_b side by side.
+
+    Reuses feature_viz's side-by-side canvas + banner; inlier keypoints are green,
+    RANSAC outliers red (matching the match view's colour code)."""
+    import cv2
+    import numpy as np
+
+    from calibration import feature_viz as viz
+
+    canvas, xb = viz._hstack_pair(img_a, img_b)
+    pa = np.asarray(pts_a, dtype=np.float64).reshape(-1, 2)
+    pb = np.asarray(pts_b, dtype=np.float64).reshape(-1, 2)
+    m = np.asarray(mask).reshape(-1).astype(bool)
+    n = min(len(pa), len(pb), len(m))
+    for i in range(n):
+        color = viz._GREEN if m[i] else viz._RED
+        cv2.circle(canvas, (round(pa[i, 0]), round(pa[i, 1])), 3, color, 1, cv2.LINE_AA)
+        cv2.circle(canvas, (round(pb[i, 0]) + xb, round(pb[i, 1])), 3, color, 1, cv2.LINE_AA)
+    return viz._banner(canvas, [f"keypoints: {n} (cam_a | cam_b)"])
+
+
 def targetless_calibration_matrices(project_dir: Path) -> dict | None:
     """Per-camera R/t/RMS from the TARGETLESS output (calibration_targetless.json).
 
