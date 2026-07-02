@@ -126,28 +126,33 @@
   </div>
   <div id="targetless-panel" class="targetless-panel" hidden>
     <h2>Targetless extrinsics <span class="tag-exp">experimental</span></h2>
-    <p class="msg">Aim BOTH cameras so their views overlap on a textured floor, capture synchronized
-      stereo pairs, mark <b>≥3 measured floor point-pairs</b> for metric scale, then Solve. Each stage
-      below fills in as the solve runs.</p>
+    <p class="msg">Fully self-contained (its own textured-scene captures + its own result — the
+      Boards method is untouched). Start capture, aim BOTH cameras so their views overlap on a
+      <b>textured</b> scene (watch the live feature readout), press <b>Capture pair</b> for each
+      placement (move the rig / change scene between snaps), mark <b>≥3 measured floor point-pairs</b>
+      for metric scale, then Solve. Each stage below fills in as the solve runs.</p>
 
-    <!-- Top: both live views side by side + capture/solve controls -->
+    <!-- Top: both live views side by side + capture/solve controls. Self-contained:
+         these drive the targetless session + its own targetless/ captures (NOT the
+         board extrinsic/ captures). -->
     <div class="tl-live" id="tl-live">
       <div class="tl-live-views fourup" id="tl-live-views"></div>
       <div class="toolbar" id="tl-live-tools">
-        <button id="tl-capture">Capture pairs</button>
+        <button id="tl-start" class="primary">Start capture</button>
+        <button id="tl-capture" disabled>Capture pair</button>
         <button id="tl-stop" disabled>Stop</button>
-        <button id="tl-solve" class="primary">Solve</button>
+        <button id="tl-solve">Solve</button>
         <span id="tl-live-msg" class="msg"></span>
       </div>
     </div>
 
     <!-- Notebook cells -->
     <div class="nb" id="tl-notebook">
-      <!-- Cell ① captured stereo pairs -->
+      <!-- Cell ① captured stereo pairs — gallery of the ACTUAL targetless/ captures -->
       <section class="nb-cell" id="cell-pair" data-stage="pair">
         <div class="nb-head"><span class="nb-num">1</span><h3>Captured stereo pairs</h3>
           <span class="nb-status msg">awaiting capture</span></div>
-        <div class="nb-out"><div class="nb-placeholder">cam_a | cam_b frames used will appear here</div></div>
+        <div class="nb-out"><div class="nb-placeholder">cam_a | cam_b captured pairs will appear here — capture some pairs above</div></div>
       </section>
 
       <!-- Cell ② feature matches -->

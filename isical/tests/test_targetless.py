@@ -253,9 +253,10 @@ def test_targetless_runner_missing_scale_refs_errors(tiny_project):
                   "image_size": [1280, 960]}}}))
     import cv2
     import numpy as np
+    # targetless reads its OWN captures (targetless/), not the board extrinsic/ ones
     for cid in ("cam_a", "cam_b"):
-        d = pdir / "extrinsic" / cid
+        d = pdir / "targetless" / cid
         d.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(d / "000.jpg"), np.zeros((960, 1280, 3), np.uint8))
+        cv2.imwrite(str(d / f"{cid}_000.jpg"), np.zeros((960, 1280, 3), np.uint8))
     with pytest.raises(ValueError, match="scale references"):
         run_extrinsic_targetless(pdir)

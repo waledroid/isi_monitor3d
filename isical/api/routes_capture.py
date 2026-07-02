@@ -80,6 +80,90 @@ async def stop(request: Request, name: str, phase: str) -> dict:
     return {"ok": True}
 
 
+# ---------------------------------------------------------------------------
+# Targetless capture — self-contained textured-scene stereo-pair capture.
+# Wholly separate from the board 'extrinsic' phase above: its own session, its own
+# targetless/{cam}/ storage, a manual (no-board-gate) capture-pair trigger + live
+# texture readout. Never touches extrinsic/ or the board calibration.json.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/api/p/{name}/targetless/capture/start")
+async def targetless_start(request: Request, name: str) -> dict:
+    """Open BOTH cameras for targetless capture (live texture readout, manual pairs)."""
+    d, cfg = project_cfg(request, name)
+    if len(cfg.configured_cameras()) < 2:
+        raise HTTPException(status_code=422, detail="targetless needs both cameras configured")
+    try:
+        st = request.app.state.capture.start_targetless(name, d, cfg)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"targetless start failed: {exc}") from exc
+    return {"ok": True, "status": st}
+
+
+@router.post("/api/p/{name}/targetless/capture/stop")
+async def targetless_stop(request: Request, name: str) -> dict:
+    project_dir(request, name)
+    request.app.state.capture.stop_targetless()
+    return {"ok": True}
+
+
+@router.post("/api/p/{name}/targetless/capture-pair")
+async def targetless_capture_pair(request: Request, name: str) -> dict:
+    """Manually snap one synchronized stereo pair into targetless/{cam}/."""
+    project_dir(request, name)
+    sess = request.app.state.capture.targetless(name)
+    if sess is None:
+        raise HTTPException(status_code=409, detail="targetless capture not running — start it first")
+    return sess.capture_pair()
+
+
+@router.get("/api/p/{name}/targetless/capture/status")
+async def targetless_status(request: Request, name: str) -> dict:
+    project_dir(request, name)
+    sess = request.app.state.capture.targetless(name)
+    if sess is None:
+        return {"active": False}
+    return {"active": True, **sess.status()}
+
+
+@router.get("/targetless-stream/{name}/{cam}")
+def targetless_stream(request: Request, name: str, cam: str) -> StreamingResponse:
+    project_dir(request, name)
+    gen = request.app.state.capture.targetless_mjpeg(name, cam)
+    return StreamingResponse(gen, media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+@router.get("/api/p/{name}/targetless-shots")
+def list_targetless_shots(request: Request, name: str) -> dict:
+    """The captured targetless stereo pairs (both cameras), for the notebook gallery.
+
+    Read-only. Returns ``{pair_count, cameras: {cam: {count, files:[...]}}}`` — the
+    gallery pairs cam_a[i] with cam_b[i] side by side, refreshing as pairs land.
+    """
+    d, cfg = project_cfg(request, name)
+    cams: dict[str, dict] = {}
+    for cam in cfg.configured_cameras():
+        cam_dir = d / "targetless" / cam
+        files = sorted(p.name for p in cam_dir.glob("*.jpg")) if cam_dir.is_dir() else []
+        cams[cam] = {"count": len(files), "files": files}
+    pair_count = min((v["count"] for v in cams.values()), default=0)
+    return {"pair_count": pair_count, "cameras": cams}
+
+
+@router.get("/targetless-shot/{name}/{cam}/{file}")
+def targetless_shot_image(request: Request, name: str, cam: str, file: str) -> FileResponse:
+    """Serve one captured targetless jpg. Read-only, path-guarded."""
+    if not _SHOT_FILE_RE.match(file):
+        raise HTTPException(status_code=404, detail="not found")
+    d = project_dir(request, name)
+    base = (d / "targetless" / cam).resolve()
+    target = (base / file).resolve()
+    if base not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(str(target), media_type="image/jpeg")
+
+
 @router.get("/api/p/{name}/sync-probe")
 def sync_probe(request: Request, name: str, seconds: float = 4.0) -> dict:
     """LIVE stream-sync probe (NOT a calibration output): per-camera FPS + the
@@ -252,8 +336,13 @@ _FEATURE_MATCHES_REL = "work/feature_matches.json"
 
 
 def _load_stereo_pair_paths(d: Path) -> tuple[Path, Path] | None:
-    """First captured synchronized (cam_a, cam_b) jpg pair, or None if incomplete."""
-    a_dir, b_dir = d / "extrinsic" / "cam_a", d / "extrinsic" / "cam_b"
+    """First captured synchronized (cam_a, cam_b) jpg pair, or None if incomplete.
+
+    Reads the targetless method's OWN captures (targetless/) — the snap-assist
+    matcher must match on the same textured scenes the targetless solve uses, not
+    the board AprilGrid captures.
+    """
+    a_dir, b_dir = d / "targetless" / "cam_a", d / "targetless" / "cam_b"
     a = sorted(a_dir.glob("*.jpg")) if a_dir.is_dir() else []
     b = sorted(b_dir.glob("*.jpg")) if b_dir.is_dir() else []
     if not a or not b:

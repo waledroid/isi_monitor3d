@@ -158,6 +158,15 @@ def run_extrinsic(project_dir: Path) -> dict:
 _SCALE_REFS_JSON = "work/scale_references.json"
 _TARGETLESS_REPORT_JSON = "work/targetless_report.json"
 _TARGETLESS_STAGE_DIR = "work/targetless_stages"
+# The targetless method OWNS its output — separate from the board calibration.json,
+# so a targetless solve can never clobber a trusted AprilGrid result (and vice versa).
+_CALIBRATION_TARGETLESS_JSON = "calibration_targetless.json"
+
+
+def _import_run_targetless():
+    """Indirection so tests can monkeypatch the (ONNX-heavy) targetless solver."""
+    from calibration.calibrate import run_targetless
+    return run_targetless
 
 
 def _load_scale_references(project_dir: Path):
@@ -181,14 +190,16 @@ def _load_scale_references(project_dir: Path):
 def run_extrinsic_targetless(project_dir: Path) -> dict:
     """Phase 2 (targetless) — SuperPoint+LightGlue extrinsics + plane-fit floor.
 
-    Uses Phase 1's ``work/intrinsic.json`` (K, D), the captured synchronized stereo
-    pairs (``extrinsic/{cam}/*.jpg``), and the operator's ≥3 measured floor
-    scale-references (``work/scale_references.json``) to solve stereo extrinsics
-    without a physical target. Writes ``calibration.json``, the 3-level validation
-    report, and the 5 key-stage images. The ONNX matcher weights must be vendored
-    into ``models/`` — absent them this raises a clear MatcherWeightsMissing (on-rig).
+    Fully self-contained + isolated from the board method: it reads its OWN captured
+    textured-scene stereo pairs (``targetless/{cam}/*.jpg`` — NEVER the board
+    ``extrinsic/`` captures) and writes its OWN output
+    (``calibration_targetless.json`` — NEVER the board ``calibration.json``). It only
+    SHARES the read-only intrinsics (``work/intrinsic.json``, K + D) and the operator's
+    ≥3 measured floor scale-references (``work/scale_references.json``). Writes the
+    3-level validation report + the 5 key-stage images too. The ONNX matcher weights
+    must be vendored into ``models/`` — absent them this raises MatcherWeightsMissing.
     """
-    from calibration.calibrate import run_targetless
+    run_targetless = _import_run_targetless()
     project_dir = Path(project_dir)
     cfg = load_project(project_dir)
     cams = cfg.configured_cameras()
@@ -197,11 +208,12 @@ def run_extrinsic_targetless(project_dir: Path) -> dict:
     intrinsic_json = project_dir / _INTRINSIC_JSON
     if not intrinsic_json.exists():
         raise ValueError("no work/intrinsic.json — run the Intrinsic phase first")
-    pair_a = project_dir / "extrinsic" / "cam_a"
-    pair_b = project_dir / "extrinsic" / "cam_b"
+    pair_a = project_dir / "targetless" / "cam_a"
+    pair_b = project_dir / "targetless" / "cam_b"
     if not (pair_a.is_dir() and any(pair_a.glob("*.jpg"))
             and pair_b.is_dir() and any(pair_b.glob("*.jpg"))):
-        raise ValueError("no synchronized stereo pairs captured for targetless extrinsics")
+        raise ValueError("no targetless stereo pairs captured — capture textured-scene "
+                         "pairs on the targetless page first (targetless/<cam>/*.jpg)")
 
     references = _load_scale_references(project_dir)
     # Optional: diff against a prior AprilGrid calibration.json if one is present.
@@ -210,7 +222,7 @@ def run_extrinsic_targetless(project_dir: Path) -> dict:
     if apr.exists():
         ref_calib = json.loads(apr.read_text())
 
-    out = project_dir / _CALIBRATION_JSON
+    out = project_dir / _CALIBRATION_TARGETLESS_JSON
     report = project_dir / _TARGETLESS_REPORT_JSON
     stages = project_dir / _TARGETLESS_STAGE_DIR
     logger.info("extrinsic(targetless): solving rig %s (%d scale refs)", cams, len(references))
@@ -230,6 +242,16 @@ def run_extrinsic_targetless(project_dir: Path) -> dict:
             "report_json": str(report), "method": "targetless"}
 
 
+def targetless_calibration_matrices(project_dir: Path) -> dict | None:
+    """Per-camera R/t/RMS from the TARGETLESS output (calibration_targetless.json).
+
+    Mirrors :func:`calibration_matrices` but reads the targetless method's own file,
+    so the targetless Result cell never reads (or depends on) the board result.
+    Returns None when the targetless solve hasn't run yet. Read-only, never raises.
+    """
+    return _matrices_from(Path(project_dir) / _CALIBRATION_TARGETLESS_JSON)
+
+
 def targetless_report(project_dir: Path) -> dict | None:
     """The persisted 3-level validation report (or None if not solved)."""
     path = Path(project_dir) / _TARGETLESS_REPORT_JSON
@@ -241,16 +263,8 @@ def targetless_report(project_dir: Path) -> dict | None:
         return None
 
 
-def calibration_matrices(project_dir: Path) -> dict | None:
-    """Per-camera pose matrices from ``calibration.json`` for the Result cell.
-
-    Returns ``{"floor_anchor_method", "calibration_mode", "cameras": {cam:
-    {"R": 3x3, "t": [3], "reprojection_rms_px"}}}`` after the Extrinsic solve, or
-    ``None`` when ``calibration.json`` doesn't exist yet (the notebook Result cell
-    then stays in its "awaiting solve" placeholder). Read-only, never raises into
-    the request.
-    """
-    path = Path(project_dir) / _CALIBRATION_JSON
+def _matrices_from(path: Path) -> dict | None:
+    """Per-camera R/t/RMS + anchor from a calibration.json-shaped file, or None."""
     if not path.exists():
         return None
     try:
@@ -269,6 +283,13 @@ def calibration_matrices(project_dir: Path) -> dict | None:
         "calibration_mode": data.get("calibration_mode"),
         "cameras": cams,
     }
+
+
+def calibration_matrices(project_dir: Path) -> dict | None:
+    """Per-camera pose matrices from the BOARD ``calibration.json`` for the Result
+    cell. Returns ``None`` when the board Extrinsic solve hasn't run. Read-only.
+    """
+    return _matrices_from(Path(project_dir) / _CALIBRATION_JSON)
 
 
 def run_export(project_dir: Path, *, install: bool = False) -> dict:

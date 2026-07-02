@@ -25,6 +25,7 @@ from ..core.runners import (
     extrinsic_summary,
     intrinsic_summary,
     phase_status,
+    targetless_calibration_matrices,
     targetless_report,
 )
 from .deps import project_cfg, project_dir
@@ -209,6 +210,16 @@ async def get_calibration_matrices(request: Request, name: str) -> dict:
     text). ``matrices`` is null until the Extrinsic phase has been solved."""
     d = project_dir(request, name)
     return {"matrices": calibration_matrices(d)}
+
+
+@router.get("/api/p/{name}/targetless-matrices")
+async def get_targetless_matrices(request: Request, name: str) -> dict:
+    """Per-camera R/t + RMS from the TARGETLESS output (calibration_targetless.json).
+
+    Feeds the targetless notebook's Result cell — independent of the board
+    calibration.json. ``matrices`` is null until the targetless solve has run."""
+    d = project_dir(request, name)
+    return {"matrices": targetless_calibration_matrices(d)}
 
 
 class CamerasBody(BaseModel):

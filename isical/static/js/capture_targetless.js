@@ -4,17 +4,20 @@
 // untouched; this module toggles a targetless notebook panel when the method
 // selector is "targetless". Layout (top → bottom, like Jupyter cells):
 //
-//   top   : BOTH live cam views (cam_a | cam_b) + Capture pairs / Stop / Solve.
-//   cell ①: captured stereo pairs   (stage image "pair")
+//   top   : BOTH live cam views (cam_a | cam_b) + live texture readout +
+//           Capture pair / Stop / Solve.
+//   cell ①: captured stereo pairs   (gallery of the actual targetless/ captures)
 //   cell ②: feature matches         (stage image "matches")
 //   cell ③: scale references        (interactive ≥3-point marking + "scale_refs")
 //   cell ④: triangulation + floor   (stage image "triangulation")
 //   cell ⑤: result                  (R/t matrices text + validation summary)
 //
-// Session lifecycle (capturing sync pairs, floor prompt, status polling) stays
-// owned by capture.js — the targetless top controls delegate to its hidden
-// #cap-start / #cap-stop buttons so nothing is duplicated. Solve POSTs the
-// extrinsic job then polls /api/jobs; on completion the cells refresh.
+// The targetless method is FULLY SELF-CONTAINED: it captures its OWN textured-scene
+// stereo pairs (targetless/{cam}/, separate from the board extrinsic/ captures) via
+// its own /targetless/capture/{start,stop} + /targetless/capture-pair routes, and
+// solves to its OWN calibration_targetless.json. It never touches the board method's
+// capture, session, or result. Solve POSTs the extrinsic job (dispatched to the
+// targetless runner) then polls /api/jobs; on completion the cells refresh.
 
 import { getJSON, sendJSON, flash } from "./api.js";
 
@@ -88,6 +91,7 @@ export function initTargetless(root) {
 
   setupLiveControls(project);
   setupScaleMarking(project, cameras);
+  refreshPairs(project);
   refreshStages(project);
   refreshReport(project);
   refreshResult(project);
@@ -95,16 +99,17 @@ export function initTargetless(root) {
 
 // --- top: both live views + capture/solve controls --------------------------
 
-// Re-host cam_a | cam_b live streams at the top of the notebook so the operator
-// aims for overlap/texture. Uses the same MJPEG /stream transport the cam views
-// use; the <img>s only carry a src while a capture session is running.
+// Host cam_a | cam_b live streams at the top of the notebook so the operator aims
+// for overlap/texture. Uses the DEDICATED /targetless-stream transport (the frames
+// carry a live texture readout HUD); the <img>s only carry a src while the
+// targetless capture session is running.
 function mirrorLiveViews(project, cameras) {
   const wrap = document.getElementById("tl-live-views");
   if (!wrap || wrap.dataset.built) return;
   wrap.dataset.built = "1";
   wrap.innerHTML = cameras.map((c) => `
     <figure class="cap-figure" data-cam="${c}">
-      <figcaption>${c} <span class="counts" data-cam="${c}">—</span></figcaption>
+      <figcaption>${c} <span class="tl-texture" data-cam="${c}">—</span></figcaption>
       <div class="canvas-wrap">
         <div class="stream-placeholder">
           <svg class="placeholder-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4zM14 13h-3v3H9v-3H6v-2h3V8h2v3h3v2z"/></svg>
@@ -117,41 +122,81 @@ function mirrorLiveViews(project, cameras) {
 
 function tlStreams(project, on) {
   document.querySelectorAll(".tl-stream").forEach((img) => {
-    img.src = on ? `/stream/${project}/${img.dataset.cam}?t=${Date.now()}` : "";
+    img.src = on ? `/targetless-stream/${project}/${img.dataset.cam}?t=${Date.now()}` : "";
   });
+}
+
+let _statusTimer = null;
+function stopStatusPoll() { if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = null; } }
+
+// Poll the targetless session for the live per-view texture readout so the operator
+// knows the scene is rich enough BEFORE snapping (cheap FAST-feature count, NOT the
+// heavy SuperPoint matcher).
+function startStatusPoll(project) {
+  stopStatusPoll();
+  _statusTimer = setInterval(async () => {
+    let st;
+    try { st = await getJSON(`/api/p/${project}/targetless/capture/status`); }
+    catch { return; }
+    if (!st.active) return;
+    for (const [cam, info] of Object.entries(st.cameras || {})) {
+      const el = document.querySelector(`.tl-texture[data-cam="${cam}"]`);
+      if (!el) continue;
+      const t = info.texture || {};
+      el.textContent = `${t.ok ? "✓" : "⚠"} ${t.features ?? "—"} features`;
+      el.classList.toggle("ok", !!t.ok);
+      el.classList.toggle("warn", !t.ok);
+    }
+  }, 500);
 }
 
 function setupLiveControls(project) {
   const capBtn = document.getElementById("tl-capture");
   const stopBtn = document.getElementById("tl-stop");
   const solveBtn = document.getElementById("tl-solve");
+  const startBtn = document.getElementById("tl-start");
   const msg = document.getElementById("tl-live-msg");
-  // Delegate session lifecycle to capture.js's hidden main buttons.
-  const mainStart = document.getElementById("cap-start");
-  const mainStop = document.getElementById("cap-stop");
   if (!capBtn) return;
 
-  capBtn.addEventListener("click", () => {
-    mainStart?.click();
-    tlStreams(project, true);
-    capBtn.disabled = true;
-    if (stopBtn) stopBtn.disabled = false;
-    flash(msg, "capturing sync pairs — aim for floor overlap + texture", true);
+  const setLive = (on) => {
+    tlStreams(project, on);
+    if (startBtn) startBtn.disabled = on;
+    capBtn.disabled = !on;
+    if (stopBtn) stopBtn.disabled = !on;
+    if (on) startStatusPoll(project); else stopStatusPoll();
+  };
+
+  startBtn?.addEventListener("click", async () => {
+    startBtn.disabled = true;
+    try {
+      await sendJSON(`/api/p/${project}/targetless/capture/start`, "POST", {});
+      setLive(true);
+      flash(msg, "capturing — aim both cams at an overlapping, textured scene; Capture pair", true);
+    } catch (e) { startBtn.disabled = false; flash(msg, e.message, false); }
   });
-  stopBtn?.addEventListener("click", () => {
-    mainStop?.click();
-    tlStreams(project, false);
-    capBtn.disabled = false;
-    stopBtn.disabled = true;
+
+  capBtn.addEventListener("click", async () => {
+    try {
+      const r = await sendJSON(`/api/p/${project}/targetless/capture-pair`, "POST", {});
+      if (r.captured) {
+        flash(msg, `pair #${r.pair_count} captured — move the rig / change scene, then capture again`, true);
+        refreshPairs(project);
+      } else {
+        flash(msg, r.reason || "no frame yet — wait for the live view", false);
+      }
+    } catch (e) { flash(msg, e.message, false); }
+  });
+
+  stopBtn?.addEventListener("click", async () => {
+    await sendJSON(`/api/p/${project}/targetless/capture/stop`, "POST", {}).catch(() => {});
+    setLive(false);
     flash(msg, "stopped", true);
   });
 
   solveBtn?.addEventListener("click", async () => {
     // Capture is exclusive with solving — stop any live session first.
-    mainStop?.click();
-    tlStreams(project, false);
-    if (stopBtn) stopBtn.disabled = true;
-    capBtn.disabled = false;
+    await sendJSON(`/api/p/${project}/targetless/capture/stop`, "POST", {}).catch(() => {});
+    setLive(false);
     solveBtn.disabled = true;
     flash(msg, "solving… (SuperPoint+LightGlue → BA → floor fit)", true);
     try {
@@ -167,6 +212,36 @@ function setupLiveControls(project) {
       refreshResult(project);
     }
   });
+}
+
+// --- cell ①: gallery of the ACTUAL captured targetless stereo pairs ----------
+
+async function refreshPairs(project) {
+  const out = document.querySelector("#cell-pair .nb-out");
+  const status = document.querySelector("#cell-pair .nb-status");
+  if (!out) return;
+  let data;
+  try { data = await getJSON(`/api/p/${project}/targetless-shots`); }
+  catch { return; }
+  const cams = Object.keys(data.cameras || {});
+  const n = data.pair_count || 0;
+  if (!n) {
+    out.innerHTML = `<div class="nb-placeholder">cam_a | cam_b captured pairs will appear here — capture some pairs above</div>`;
+    if (status) status.textContent = "awaiting capture";
+    return;
+  }
+  const rows = [];
+  for (let i = 0; i < n; i += 1) {
+    const cells = cams.map((c) => {
+      const f = (data.cameras[c].files || [])[i];
+      return f ? `<figure class="stage-fig"><figcaption>${c}</figcaption>
+        <img src="/targetless-shot/${project}/${c}/${f}?t=${Date.now()}" alt="${c} pair ${i}"></figure>` : "";
+    }).join("");
+    rows.push(`<div class="tl-pair-row">${cells}</div>`);
+  }
+  out.innerHTML = `<div class="tl-pair-gallery">${rows.join("")}</div>`;
+  if (status) { status.textContent = `${n} pair(s) ✓`; status.classList.add("ok"); }
+  revealCell("cell-pair");
 }
 
 async function waitForJob(project, msg) {
@@ -209,7 +284,7 @@ function setupScaleMarking(project, cameras) {
     fig.className = "cap-figure";
     fig.innerHTML = `<figcaption>${c} — click floor landmarks</figcaption>
       <div class="canvas-wrap"><img class="scale-stream" data-cam="${c}"
-        src="/stream/${project}/${c}" alt="${c} live"></div>`;
+        src="/targetless-stream/${project}/${c}" alt="${c} live"></div>`;
     views.appendChild(fig);
     imgs[c] = fig.querySelector("img");
   });
@@ -361,9 +436,10 @@ function setupScaleMarking(project, cameras) {
 
 // --- cells: stage images fill in as the solve runs --------------------------
 
-// Map each stage image to its notebook cell + status label.
+// Map each solve stage image to its notebook cell + status label. Cell ① (pairs)
+// is NOT here — it shows the live gallery of the actual targetless/ captures
+// (refreshPairs), not a solve-time stage render.
 const _STAGE_CELL = {
-  pair: "cell-pair",
   matches: "cell-matches",
   scale_refs: "cell-scale",
   triangulation: "cell-triangulation",
@@ -410,7 +486,7 @@ async function refreshResult(project) {
   const status = document.querySelector("#cell-result .nb-status");
   if (!pre) return;
   let m = null;
-  try { m = (await getJSON(`/api/p/${project}/calibration-matrices`)).matrices; }
+  try { m = (await getJSON(`/api/p/${project}/targetless-matrices`)).matrices; }
   catch { return; }
   if (!m || !m.cameras || !Object.keys(m.cameras).length) return;
   pre.textContent = formatMatrices(m);

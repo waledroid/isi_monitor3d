@@ -35,6 +35,33 @@ from .detect import (
 _PAIR_WINDOW_S = 0.5      # both cameras must gate-pass within this window for a pair
 FLOOR_TARGET = 3          # distinct flat ChArUco placements (synchronized pairs) wanted
 
+# Targetless texture-quality readout tunables (cheap per-frame; NOT SuperPoint).
+_TEXTURE_MIN_FEATURES = 150   # below this a view is flagged low-texture
+_TEXTURE_MIN_BLUR_VAR = 60.0  # Laplacian variance floor (sharpness)
+
+
+def texture_score(frame_bgr: np.ndarray, *, max_features: int = 800) -> dict:
+    """Cheap per-frame texture/feature readout for the targetless live view.
+
+    A rich, sharp scene gives the SuperPoint+LightGlue solve something to match, so
+    the operator needs feedback WHILE aiming — but running the heavy ONNX matcher per
+    live frame is far too slow. Instead we use OpenCV FAST corner count (feature
+    density) + Laplacian variance (sharpness), both microsecond-cheap. Returns
+    ``{"features": int, "blur_var": float, "ok": bool}`` where ``ok`` means the view
+    looks textured + sharp enough to be worth capturing.
+    """
+    gray = (cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+            if frame_bgr.ndim == 3 else frame_bgr)
+    blur_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    try:
+        fast = cv2.FastFeatureDetector_create(threshold=20, nonmaxSuppression=True)
+        kps = fast.detect(gray, None)
+        features = min(len(kps), max_features)
+    except Exception:                                    # pragma: no cover - cv2 guard
+        features = 0
+    ok = features >= _TEXTURE_MIN_FEATURES and blur_var >= _TEXTURE_MIN_BLUR_VAR
+    return {"features": int(features), "blur_var": round(blur_var, 1), "ok": bool(ok)}
+
 
 def _charuco_detector(charuco_spec, cap) -> CharucoBoardDetector:
     """Build a ChArUco detector with the capture spec's CLAHE knobs (default ON).
@@ -435,6 +462,150 @@ class _Stub:
     centroid = None
 
 
+class _TargetlessWorker:
+    """One camera's live thread for the targetless flow: stream → texture readout.
+
+    Unlike the board ``_CamWorker`` there is NO board detector and NO auto-snap gate
+    — targetless scenes have no calibration target. The worker only keeps the latest
+    RAW frame (for the manual pair capture) and the latest ANNOTATED JPEG with a
+    live texture/feature readout HUD. Snapping is driven externally by
+    ``TargetlessSession.capture_pair`` (a manual, synchronized both-cam trigger).
+    """
+
+    def __init__(self, camera_id: str, cam_spec, out_dir: Path, source_factory) -> None:
+        self.camera_id = camera_id
+        self.cam_spec = cam_spec
+        self.out_dir = out_dir
+        self._source_factory = source_factory
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.count = len(list(self.out_dir.glob("*.jpg")))
+        self.status = "starting"
+        self.texture: dict = {"features": 0, "blur_var": 0.0, "ok": False}
+        self._latest_jpeg: bytes | None = None
+        self._latest_raw: np.ndarray | None = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name=f"isical-tl-{camera_id}")
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def latest_jpeg(self) -> bytes | None:
+        with self._lock:
+            return self._latest_jpeg
+
+    def latest_raw(self) -> np.ndarray | None:
+        with self._lock:
+            return None if self._latest_raw is None else self._latest_raw.copy()
+
+    def save(self, raw: np.ndarray) -> Path:
+        path = self.out_dir / f"{self.camera_id}_{self.count:03d}.jpg"
+        cv2.imwrite(str(path), raw)
+        self.count += 1
+        return path
+
+    def _run(self) -> None:
+        try:
+            source = self._source_factory(self.cam_spec, self.camera_id)
+            source.start()
+        except Exception as exc:
+            self.status = f"camera error: {exc}"
+            return
+        self.status = "live"
+        try:
+            for frame in source.frames():
+                if self._stop.is_set():
+                    break
+                raw = frame.image
+                tex = texture_score(raw)
+                label = (f"texture OK — {tex['features']} features"
+                         if tex["ok"] else
+                         f"low texture — {tex['features']} features (aim at a richer scene)")
+                annotated = draw_hud(raw.copy(), count=self.count, target=self.count,
+                                     status=label, ok=tex["ok"])
+                ok, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                with self._lock:
+                    self.texture = tex
+                    self._latest_raw = raw
+                    if ok:
+                        self._latest_jpeg = buf.tobytes()
+        except Exception as exc:                            # source died mid-stream
+            self.status = f"stream ended: {exc}"
+        finally:
+            try:
+                source.stop()
+            except Exception:
+                pass
+            if not self.status.startswith("camera error"):
+                self.status = "stopped"
+
+
+class TargetlessSession:
+    """A live targetless-extrinsics capture: both cameras live + manual pair snaps.
+
+    Fully independent of the board/AprilGrid ``CaptureSession`` — it never touches
+    ``extrinsic/``. Shows BOTH cameras with a live texture readout and, on a manual
+    ``capture_pair`` trigger, snaps the latest raw frame from every camera at once
+    into ``targetless/{cam}/`` (a synchronized stereo pair). Move the rig / change
+    the scene between snaps to build a set of textured pairs for the solve.
+    """
+
+    def __init__(self, project_dir: Path, cfg, *, source_factory=_open_source) -> None:
+        self.project_dir = Path(project_dir)
+        self.cfg = cfg
+        self.phase = "targetless"
+        self._pair_lock = threading.Lock()
+        configured = cfg.configured_cameras()
+        self.workers: dict[str, _TargetlessWorker] = {
+            cid: _TargetlessWorker(cid, cfg.cameras[cid],
+                                   self.project_dir / "targetless" / cid, source_factory)
+            for cid in configured
+        }
+        self.pair_count = min((w.count for w in self.workers.values()), default=0)
+
+    def start(self) -> None:
+        for w in self.workers.values():
+            w.start()
+
+    def stop(self) -> None:
+        for w in self.workers.values():
+            w.stop()
+
+    def latest_jpeg(self, camera_id: str) -> bytes | None:
+        w = self.workers.get(camera_id)
+        return w.latest_jpeg() if w else None
+
+    def capture_pair(self) -> dict:
+        """Snap the latest raw frame from every camera at once (one stereo pair).
+
+        Manual trigger (no board gate). If any camera has no frame yet, nothing is
+        written and a human ``reason`` is returned so the UI can prompt.
+        """
+        with self._pair_lock:
+            grabbed = {cid: w.latest_raw() for cid, w in self.workers.items()}
+            missing = [cid for cid, raw in grabbed.items() if raw is None]
+            if missing:
+                return {"captured": False, "pair_count": self.pair_count,
+                        "reason": f"no frame yet from {missing} — wait for the live view"}
+            files = {cid: str(self.workers[cid].save(raw))
+                     for cid, raw in grabbed.items()}
+            self.pair_count += 1
+            return {"captured": True, "pair_count": self.pair_count, "files": files}
+
+    def status(self) -> dict:
+        return {
+            "phase": self.phase,
+            "pair_count": self.pair_count,
+            "cameras": {cid: {"count": w.count, "status": w.status,
+                              "texture": w.texture}
+                        for cid, w in self.workers.items()},
+        }
+
+
 class CaptureManager:
     """Holds the single active CaptureSession (one rig calibrated at a time)."""
 
@@ -443,6 +614,8 @@ class CaptureManager:
         self._key: tuple[str, str] | None = None          # (project, phase)
         self._floor: FloorPreview | None = None
         self._floor_key: tuple[str, str] | None = None    # (project, camera_id)
+        self._targetless: TargetlessSession | None = None
+        self._targetless_key: str | None = None           # project
         self._lock = threading.Lock()
 
     def start(self, project: str, project_dir: Path, cfg, phase: str,
@@ -450,6 +623,7 @@ class CaptureManager:
         with self._lock:
             if self._session is not None:
                 self._session.stop()
+            self._stop_targetless_locked()
             self._session = CaptureSession(project_dir, cfg, phase, cameras=cameras, **kw)
             self._key = (project, phase)
             self._session.start()
@@ -465,6 +639,55 @@ class CaptureManager:
     def stop_all(self) -> None:
         self.stop_current()
         self.stop_floor()
+        self.stop_targetless()
+
+    # ---- targetless capture (self-contained textured-scene stereo pairs) ----
+    def start_targetless(self, project: str, project_dir: Path, cfg, **kw) -> dict:
+        """Open both cameras for targetless capture. Stops any board session /
+        floor preview first (cameras are exclusive)."""
+        with self._lock:
+            if self._session is not None:
+                self._session.stop()
+                self._session = None
+                self._key = None
+            if self._floor is not None:
+                self._floor.stop()
+                self._floor = None
+                self._floor_key = None
+            self._stop_targetless_locked()
+            self._targetless = TargetlessSession(project_dir, cfg, **kw)
+            self._targetless_key = project
+            self._targetless.start()
+            return self._targetless.status()
+
+    def _stop_targetless_locked(self) -> None:
+        if self._targetless is not None:
+            self._targetless.stop()
+        self._targetless = None
+        self._targetless_key = None
+
+    def stop_targetless(self) -> None:
+        with self._lock:
+            self._stop_targetless_locked()
+
+    def targetless(self, project: str) -> TargetlessSession | None:
+        with self._lock:
+            if self._targetless is None or self._targetless_key != project:
+                return None
+            return self._targetless
+
+    def targetless_mjpeg(self, project: str, camera_id: str) -> Iterator[bytes]:
+        """Multipart MJPEG generator for a targetless live view (annotated frames)."""
+        boundary = b"--frame"
+        while True:
+            sess = self.targetless(project)
+            if sess is None:
+                break
+            jpeg = sess.latest_jpeg(camera_id)
+            if jpeg:
+                yield (boundary + b"\r\nContent-Type: image/jpeg\r\n"
+                       + f"Content-Length: {len(jpeg)}\r\n\r\n".encode() + jpeg + b"\r\n")
+            time.sleep(0.05)
 
     # ---- floor-anchor live preview (extrinsic): a single-camera aiming view ----
     def start_floor(self, project: str, project_dir: Path, cfg, camera_id: str,
