@@ -1487,6 +1487,19 @@ button:disabled:hover {
 .stage-fig img { width: 100%; border: 1px solid var(--glass-border); border-radius: 8px; display: block; }
 .stage-fig figcaption { font-size: .8rem; color: var(--muted, #94a3b8); margin-bottom: .3rem; }
 
+/* cell ①: captured targetless pairs as a compact THUMBNAIL grid (each pair =
+   cam_a|cam_b side by side). Scoped to .tl-pair-* so the big stage images
+   (matches / triangulation) keep their full width. */
+.tl-pair-gallery { display: flex; flex-wrap: wrap; gap: 10px; }
+.tl-pair-row {
+  display: flex; gap: 4px; padding: 5px;
+  border: 1px solid var(--glass-border); border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.tl-pair-row .stage-fig { width: 132px; }
+.tl-pair-row .stage-fig img { width: 100%; border-radius: 6px; }
+.tl-pair-row .stage-fig figcaption { font-size: .7rem; margin-bottom: .2rem; }
+
 /* result cell: matrices printed monospace, notebook-style */
 .result-matrices {
   background: #0a0d14; color: #d7e2ef; padding: .8rem 1rem; border-radius: 8px;
