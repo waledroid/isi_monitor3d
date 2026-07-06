@@ -158,3 +158,21 @@ def make_config(
         zones=zones,
         calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=1),
     )
+
+
+def make_zone_state(
+    zone: str = "rack_a",
+    objects: list | None = None,
+    ts: float | None = None,
+):
+    from backbone.comms.schemas import ZoneObject, ZoneStateMessage
+    if objects is None:
+        objects = [
+            ZoneObject(track_id=1, cls="palette", confidence=0.9, xy_m=(1.0, 1.0)),
+        ]
+    return ZoneStateMessage(
+        ts=ts if ts is not None else time.time(),
+        zone=zone,
+        objects=tuple(objects),
+        count=len(objects),
+    )

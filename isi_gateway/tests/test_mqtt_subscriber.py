@@ -19,7 +19,7 @@ from tests.conftest import (
 
 @pytest.fixture
 def sub() -> MqttSubscriber:
-    return MqttSubscriber("127.0.0.1", 1884, "isi", passings_buffer=5)
+    return MqttSubscriber("127.0.0.1", 1884, "isiMonitor3D", passings_buffer=5)
 
 
 def test_track2d_cached_per_node(sub):
@@ -132,21 +132,21 @@ def test_stop_is_idempotent_without_start(sub):
 # ---------------------------------------------------------------------------
 
 def test_parse_topic_versioned(sub):
-    """isi/v1/zone_a/track2d/person → node_id=zone_a, version=v1."""
-    node_id, version = sub._parse_topic("isi/v1/zone_a/track2d/person")
+    """isiMonitor3D/v1/zone_a/track2d/person → node_id=zone_a, version=v1."""
+    node_id, version = sub._parse_topic("isiMonitor3D/v1/zone_a/track2d/person")
     assert node_id == "zone_a"
     assert version == "v1"
 
 
 def test_parse_topic_legacy_unversioned(sub):
-    """Legacy isi/zone_a/track2d/person → node_id=zone_a, version=v0."""
-    node_id, version = sub._parse_topic("isi/zone_a/track2d/person")
+    """Legacy isiMonitor3D/zone_a/track2d/person → node_id=zone_a, version=v0."""
+    node_id, version = sub._parse_topic("isiMonitor3D/zone_a/track2d/person")
     assert node_id == "zone_a"
     assert version == "v0"
 
 
 def test_parse_topic_malformed_returns_none(sub):
-    assert sub._parse_topic("isi") is None
+    assert sub._parse_topic("isiMonitor3D") is None
     assert sub._parse_topic("other/v1/zone_a/track2d") is None
 
 
@@ -179,7 +179,7 @@ def test_update_from_message_default_topic_version(sub):
 def test_tls_with_ca_cert_calls_tls_set_with_ca_certs():
     """tls=True + ca_cert → client.tls_set(ca_certs=<path>) called in start()."""
     from isi_gateway.mqtt_subscriber import MqttSubscriber
-    s = MqttSubscriber("127.0.0.1", 8883, "isi", tls=True, ca_cert="/c/ca.crt")
+    s = MqttSubscriber("127.0.0.1", 8883, "isiMonitor3D", tls=True, ca_cert="/c/ca.crt")
     s.start()
     client = s._client
     client.tls_set.assert_called_once_with(ca_certs="/c/ca.crt")
@@ -191,7 +191,7 @@ def test_tls_insecure_calls_tls_insecure_set():
     """tls=True + tls_insecure=True → client.tls_insecure_set(True) called in start()."""
     from isi_gateway.mqtt_subscriber import MqttSubscriber
     s = MqttSubscriber(
-        "127.0.0.1", 8883, "isi",
+        "127.0.0.1", 8883, "isiMonitor3D",
         tls=True, ca_cert="/c/ca.crt", tls_insecure=True,
     )
     s.start()
@@ -204,7 +204,7 @@ def test_tls_insecure_calls_tls_insecure_set():
 def test_tls_false_skips_tls_set_and_tls_insecure_set():
     """tls=False → neither tls_set nor tls_insecure_set is called in start()."""
     from isi_gateway.mqtt_subscriber import MqttSubscriber
-    s = MqttSubscriber("127.0.0.1", 1884, "isi", tls=False, tls_insecure=True)
+    s = MqttSubscriber("127.0.0.1", 1884, "isiMonitor3D", tls=False, tls_insecure=True)
     s.start()
     client = s._client
     client.tls_set.assert_not_called()
@@ -215,7 +215,7 @@ def test_tls_false_skips_tls_set_and_tls_insecure_set():
 def test_tls_no_ca_cert_uses_system_cas():
     """tls=True with default ca_cert=None → tls_set(ca_certs=None) for system CAs."""
     from isi_gateway.mqtt_subscriber import MqttSubscriber
-    s = MqttSubscriber("127.0.0.1", 8883, "isi", tls=True)
+    s = MqttSubscriber("127.0.0.1", 8883, "isiMonitor3D", tls=True)
     s.start()
     client = s._client
     client.tls_set.assert_called_once_with(ca_certs=None)

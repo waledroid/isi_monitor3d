@@ -15,8 +15,13 @@ v2 callback signatures.
 
 Topic scheme (defaults)::
 
-    {prefix}/track2d/{cls}   — Track2DMessage JSON
-    {prefix}/track3d/{cls}   — Track3DMessage JSON
+    {prefix}/track2d/{cls}              — Track2DMessage JSON
+    {prefix}/track3d/{cls}              — Track3DMessage JSON
+    {prefix}/zone/{zone}                — ZoneStateMessage JSON (retained, QoS 1)
+    {prefix}/zone/{zone}/passings       — PassingEventMessage JSON
+    {prefix}/zone/{zone}/images/{id}    — ImageRefMessage JSON
+    {prefix}/diagnostics/heartbeat      — DiagnosticsMessage JSON
+    {prefix}/config                     — ConfigMessage JSON (retained)
 
 The templates are user-configurable; ``{prefix}`` and ``{cls}`` are the only
 substitution tokens. ``track_id`` intentionally does NOT appear in the topic by
@@ -38,8 +43,10 @@ from .schemas import (
     DiagnosticsMessage,
     ImageRefMessage,
     PassingEventMessage,
+    ProximityMessage,
     Track2DMessage,
     Track3DMessage,
+    ZoneStateMessage,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +67,7 @@ class MqttSink(MetadataSink):
         self,
         host: str = "127.0.0.1",
         port: int = 1883,
-        prefix: str = "isi/monitor3d",
+        prefix: str = "isiMonitor3D/v1/node",
         qos: int = 0,
         retain: bool = False,
         keepalive: int = 60,
@@ -72,8 +79,11 @@ class MqttSink(MetadataSink):
         tls_insecure: bool = False,
         track2d_topic: str = "{prefix}/track2d/{cls}",
         track3d_topic: str = "{prefix}/track3d/{cls}",
-        event_topic: str = "{prefix}/zones/{zone}/passings",
-        image_topic: str = "{prefix}/images/{zone}/{track_id}",
+        event_topic: str = "{prefix}/zone/{zone}/passings",
+        image_topic: str = "{prefix}/zone/{zone}/images/{track_id}",
+        zone_state_topic: str = "{prefix}/zone/{zone}",
+        zone_state_qos: int = 1,
+        proximity_topic: str = "{prefix}/proximity",
         diag_topic: str = "{prefix}/diagnostics/heartbeat",
         config_topic: str = "{prefix}/config",
     ) -> None:
@@ -116,7 +126,16 @@ class MqttSink(MetadataSink):
             image_topic:   Topic template for ``ImageRefMessage``; supports
                            ``{prefix}``, ``{zone}``, and ``{track_id}`` tokens.
                            Zone is sanitised the same way as ``event_topic``.
-                           Default: ``"{prefix}/images/{zone}/{track_id}"``.
+                           Default: ``"{prefix}/zone/{zone}/images/{track_id}"``.
+            zone_state_topic: Topic template for the retained ``ZoneStateMessage``
+                           (one topic per zone — the WMS/FMS signal); supports
+                           ``{prefix}`` and ``{zone}`` tokens (zone sanitised).
+                           Always published with ``retain=True`` so late joiners
+                           read every zone's current contents immediately.
+                           Default: ``"{prefix}/zone/{zone}"``.
+            zone_state_qos: QoS for zone-state publishes (default 1 — low-rate,
+                           WMS-consequential; duplicates are harmless because
+                           the payload is absolute state, not a delta).
             diag_topic:    Topic for ``DiagnosticsMessage`` heartbeats; supports
                            ``{prefix}``.  Published at the instance qos/retain.
                            Default: ``"{prefix}/diagnostics/heartbeat"``.
@@ -133,6 +152,8 @@ class MqttSink(MetadataSink):
             raise ValueError(f"port must be in (0, 65535], got {port}")
         if qos not in (0, 1, 2):
             raise ValueError(f"qos must be 0, 1, or 2, got {qos}")
+        if zone_state_qos not in (0, 1, 2):
+            raise ValueError(f"zone_state_qos must be 0, 1, or 2, got {zone_state_qos}")
 
         self._host = host
         self._port = int(port)
@@ -143,6 +164,9 @@ class MqttSink(MetadataSink):
         self._track3d_topic = track3d_topic
         self._event_topic = event_topic
         self._image_topic = image_topic
+        self._zone_state_topic = zone_state_topic
+        self._zone_state_qos = zone_state_qos
+        self._proximity_topic = proximity_topic
         self._diag_topic = diag_topic
         self._config_topic = config_topic
         self._ca_cert = ca_cert
@@ -240,6 +264,46 @@ class MqttSink(MetadataSink):
             track_id=track_id,
         )
         self._publish(topic, msg.model_dump_json().encode("utf-8"))
+
+    def publish_zone_state(self, msg: object) -> None:
+        """Publish a ``ZoneStateMessage`` retained on the per-zone topic.
+
+        Retain is forced (like ``publish_config``) so the topic always holds
+        the zone's *current* contents — a late-joining WMS/FMS reads every
+        zone's occupancy immediately on subscribe. Published at
+        ``zone_state_qos`` (default 1) rather than the instance ``qos``.
+        """
+        assert isinstance(msg, ZoneStateMessage)
+        topic = self._zone_state_topic.format(
+            prefix=self._prefix,
+            zone=_sanitize_cls(msg.zone),
+        )
+        payload = msg.model_dump_json().encode("utf-8")
+        try:
+            self._client.publish(topic, payload, qos=self._zone_state_qos, retain=True)
+        except Exception:
+            logger.warning(
+                "MqttSink.publish_zone_state failed on topic %r", topic, exc_info=True
+            )
+
+    def publish_proximity(self, msg: object) -> None:
+        """Publish a ``ProximityMessage`` retained on ``{prefix}/proximity``.
+
+        Retained (like zone state): the topic always holds the CURRENT
+        proximity picture — a late-joining safety consumer reads it on
+        subscribe; the Backbone clears it with an explicit empty-``pairs``
+        message. Published at ``zone_state_qos`` (same low-rate, state-full
+        class of message).
+        """
+        assert isinstance(msg, ProximityMessage)
+        topic = self._proximity_topic.format(prefix=self._prefix)
+        payload = msg.model_dump_json().encode("utf-8")
+        try:
+            self._client.publish(topic, payload, qos=self._zone_state_qos, retain=True)
+        except Exception:
+            logger.warning(
+                "MqttSink.publish_proximity failed on topic %r", topic, exc_info=True
+            )
 
     def publish_diagnostics(self, msg: object) -> None:
         """Publish a ``DiagnosticsMessage`` to the diagnostics heartbeat topic."""

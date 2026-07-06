@@ -30,6 +30,7 @@ from backbone.comms.schemas import (
     SchemaVersionError,
     Track2DMessage,
     Track3DMessage,
+    ZoneStateMessage,
     parse_envelope,
 )
 
@@ -47,6 +48,7 @@ class NodeState:
     last_track2d_by_id: dict[int, Track2DMessage] = field(default_factory=dict)
     last_track3d_by_id: dict[int, Track3DMessage] = field(default_factory=dict)
     passings: deque = field(default_factory=deque)   # maxlen set at init
+    zone_state_by_zone: dict[str, ZoneStateMessage] = field(default_factory=dict)
     last_diagnostics: DiagnosticsMessage | None = None
     config: ConfigMessage | None = None
     last_seen: float = 0.0   # time.time() at last update
@@ -239,6 +241,7 @@ class MqttSubscriber:
             | Track3DMessage
             | PassingEventMessage
             | ImageRefMessage
+            | ZoneStateMessage
             | DiagnosticsMessage
             | ConfigMessage
         ),
@@ -268,6 +271,8 @@ class MqttSubscriber:
                 node.last_track3d_by_id[msg.track_id] = msg
             elif isinstance(msg, PassingEventMessage):
                 node.passings.append(msg)
+            elif isinstance(msg, ZoneStateMessage):
+                node.zone_state_by_zone[msg.zone] = msg
             elif isinstance(msg, DiagnosticsMessage):
                 node.last_diagnostics = msg
             elif isinstance(msg, ConfigMessage):
@@ -294,6 +299,7 @@ class MqttSubscriber:
                     last_track2d_by_id=dict(node.last_track2d_by_id),
                     last_track3d_by_id=dict(node.last_track3d_by_id),
                     passings=deque(node.passings),
+                    zone_state_by_zone=dict(node.zone_state_by_zone),
                     last_diagnostics=node.last_diagnostics,
                     config=node.config,
                     last_seen=node.last_seen,

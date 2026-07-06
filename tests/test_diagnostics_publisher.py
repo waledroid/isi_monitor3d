@@ -212,3 +212,32 @@ def test_stop_before_start_is_safe() -> None:
     pub = _RecordingPublisher()
     dp = DiagnosticsPublisher(orch, pub, node_id="z")
     dp.stop()   # must not raise
+
+
+def test_build_message_fps_by_camera() -> None:
+    """Per-camera ingest fps: zeroed on the first tick, ``delta/dt`` per camera
+    afterwards — the operator STATUS panel's camera-health signal."""
+    orch = _StubOrchestrator(frame_count=0,
+                             source_status={"cam_a": "alive", "cam_b": "alive"})
+    orch.frames_by_camera = {"cam_a": 0, "cam_b": 0}
+    pub = _RecordingPublisher()
+    dp = DiagnosticsPublisher(orch, pub, node_id="z")
+
+    first = dp.build_message()
+    assert first.fps_by_camera == {"cam_a": 0.0, "cam_b": 0.0}
+
+    time.sleep(0.05)
+    orch.frames_by_camera = {"cam_a": 10, "cam_b": 4}
+    msg = dp.build_message()
+    assert msg.fps_by_camera["cam_a"] > msg.fps_by_camera["cam_b"] > 0.0
+
+
+def test_build_message_without_per_camera_counters() -> None:
+    """An orchestrator lacking ``frames_by_camera`` (older/stub) must still
+    build — fps_by_camera just stays empty."""
+    orch = _StubOrchestrator(frame_count=5)
+    pub = _RecordingPublisher()
+    dp = DiagnosticsPublisher(orch, pub, node_id="z")
+    dp.build_message()
+    msg = dp.build_message()
+    assert msg.fps_by_camera == {}

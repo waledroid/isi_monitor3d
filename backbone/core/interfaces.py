@@ -117,6 +117,25 @@ class MetadataSink(ABC):
         """
         return None
 
+    def publish_zone_state(self, msg: object) -> None:
+        """Publish a ``ZoneStateMessage`` — one zone's current object list.
+
+        Non-abstract default no-op: existing sink implementations and test
+        mocks that don't override this still satisfy the ABC, and the
+        five-seam count is unchanged.  MQTT sinks override this to publish
+        retained on the per-zone topic.
+        """
+        return None
+
+    def publish_proximity(self, msg: object) -> None:
+        """Publish a ``ProximityMessage`` — person↔object floor distances.
+
+        Non-abstract default no-op (same rationale as ``publish_zone_state``):
+        existing sinks/mocks stay valid; the five-seam count is unchanged.
+        MQTT sinks override this to publish retained on ``{prefix}/proximity``.
+        """
+        return None
+
     def publish_diagnostics(self, msg: object) -> None:
         """Publish a ``DiagnosticsMessage`` heartbeat (Phase 1 distributed).
 

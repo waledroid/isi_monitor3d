@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # MQTT broker connection.
     mqtt_host: str = "127.0.0.1"
     mqtt_port: int = 1883
-    mqtt_base: str = "isi"
+    mqtt_base: str = "isiMonitor3D"
     mqtt_tls: bool = False
     mqtt_ca_cert: str | None = None
     mqtt_tls_insecure: bool = False

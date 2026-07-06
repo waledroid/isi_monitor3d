@@ -11,19 +11,25 @@ the rationale behind each decision, see the companion `docs/rfc.md`; for the bar
 topology, `docs/architecture-distributed.md`.
 
 ```
+ cam_a  cam_b              cam_a  cam_b              cam_a  (Mode 1)
+   └──RTSP──┐                └──RTSP──┐                └──RTSP──┐
+            ▼                         ▼                         ▼
  Warehouse PC 1            Warehouse PC 2            Warehouse PC 3
  Backbone node_id=zone_a   Backbone node_id=dock_1   Backbone node_id=cold_3
-        │ publish isi/v1/zone_a/… │ isi/v1/dock_1/…         │ isi/v1/cold_3/…
+        │ publish isiMonitor3D/v1/zone_a/… │ isiMonitor3D/v1/dock_1/…         │ isiMonitor3D/v1/cold_3/…
         └──────────┬──────────────┴─────────────┬───────────┘   MQTT over the LAN
                    ▼                             ▼
         ┌────────────────────────────────────────────────┐
         │  CENTRAL SERVER (e.g. 192.168.2.39)             │
-        │   • Mosquitto broker      :1883  (TLS :8883)     │  routes isi/#
+        │   • Mosquitto broker      :1883  (TLS :8883)     │  routes isiMonitor3D/#
         │   • isi-gateway REST API  :8080  (HTTPS :443)    │  caches per node_id
         └────────────────────────────────────────────────┘
                    ▲  GET /v1/nodes /v1/tracks /v1/zones /v1/passings …
             AGVs / WMS poll here (HTTP only)
 ```
+
+Cameras (1–2 per PC) attach **directly to their PC over RTSP** (PoE); video
+never crosses the MQTT fabric — only extracted metadata does.
 
 The broker and gateway live together on **one central host that is deliberately
 *not* a warehouse PC** — a dedicated server, a small NUC, or a cloud VM, running
@@ -70,12 +76,14 @@ dispatches on `type`.
 The **on-wire** types are deliberately separate from the **in-process** types
 (`backbone.core.types.Track2D/Track3D`) so internal refactors can't break the bus.
 
-### The six message types
+### The seven message types
 
 | `type` | Model | Cadence |
 |---|---|---|
 | `track_2d` | `Track2DMessage` | every frame, every track — **always** |
 | `track_3d` | `Track3DMessage` | **Mode 2** only, subscription-driven |
+| `zone_state` | `ZoneStateMessage` | on zone-contents change + ~1 s refresh, **retained, QoS 1** |
+| `proximity` | `ProximityMessage` (v5) | person↔object floor distances within `metadata.proximity.max_distance_m` (default = `detection.person_pallet_max_distance_m`, 6 m), throttled to `refresh_interval_s` (0.5 s), **retained, QoS 1** on `{prefix}/proximity`; an explicit empty `pairs` message clears the topic |
 | `passing` | `PassingEventMessage` | on a zone enter/leave |
 | `image_ref` | `ImageRefMessage` | on a passing, if snapshots enabled |
 | `diagnostics` | `DiagnosticsMessage` | every `interval_sec` (~5 s) |
@@ -110,6 +118,31 @@ confidence: float
 ```
 The `track_id` is **identical** to the corresponding `Track2DMessage` (principle 2):
 the triangulation layer augments an existing track with 3D and **never re-IDs**.
+
+**`ZoneStateMessage`** — one zone's current contents (**the FMS/WMS signal**;
+retained on `{prefix}/zone/{zone}`, QoS 1):
+```
+ts: float                       # capture_ts of the frame producing this state
+zone: str                       # zone name (matches ZoneSpec.name in config)
+objects: [ZoneObject, …]        # EMPTY list ⇒ zone is empty (explicit, not absent)
+count: int                      # len(objects)
+```
+Each `ZoneObject`:
+```
+track_id: int
+cls: str                        # detected class
+confidence: float               # 0..1 — the detection confidence score
+xy_m: (float, float)            # floor position inside the zone
+occupancy_state: str|None       # pallet empty/full (mirrors Track2DMessage)
+occupancy_content: str|None
+occupancy_confidence: float
+```
+Published by the node's `ZoneStateTracker` (`backbone/shared/zone_state.py`)
+**on change** (membership, class, or occupancy of any member) plus a periodic
+refresh (`metadata.zone_state.refresh_interval_s`, default 1 s) while occupied.
+At startup the node publishes a retained **empty** state for every configured
+zone, so the whole `zone/` folder is discoverable before anything moves.
+`node_id` is not in the payload — the gateway derives it from the topic.
 
 **`PassingEventMessage`** — a boundary crossing:
 ```
@@ -162,16 +195,16 @@ its *addressing* evolve independently:
   anything outside that set raises `SchemaVersionError`.
 - **Path / topic — `TOPIC_VERSION`** (`"v1"` in `backbone/comms/schemas.py`).
   Governs the *addressing*: the REST prefix (`/v1/...`) and the MQTT topic tree
-  (`isi/v1/...`). Lets `v1` and a future `v2` run side-by-side so consumers migrate
+  (`isiMonitor3D/v1/...`). Lets `v1` and a future `v2` run side-by-side so consumers migrate
   on their own schedule.
 
-**How a `v2` lands:** nodes set `prefix: isi/v2/<node_id>` and publish
-`isi/v2/...`; the gateway already parses any `v\d+` segment, so it serves both
+**How a `v2` lands:** nodes set `prefix: isiMonitor3D/v2/<node_id>` and publish
+`isiMonitor3D/v2/...`; the gateway already parses any `v\d+` segment, so it serves both
 trees at once and mounts `/v2/...` alongside `/v1/...`; consumers migrate when
 ready; `v1` is deprecated on a published date.
 
 **`v0` legacy fallback:** the gateway still accepts un-versioned
-`isi/<node_id>/...` topics (no `v\d+` segment) during transition and reports those
+`isiMonitor3D/<node_id>/...` topics (no `v\d+` segment) during transition and reports those
 nodes as `topic_version: "v0"`.
 
 ---
@@ -205,16 +238,16 @@ metadata:
     - plugin: mqtt       # network → central broker
       host: 192.168.2.39
       port: 1883
-      prefix: isi/v1/zone_a
+      prefix: isiMonitor3D/v1/zone_a
 ```
 
 A non-abstract default no-op base keeps the seam count at five even though sinks
-gained `publish_event` / `publish_image_ref` / `publish_diagnostics` /
-`publish_config` over time.
+gained `publish_event` / `publish_image_ref` / `publish_zone_state` /
+`publish_diagnostics` / `publish_config` over time.
 
 ### `MqttSink` behaviour (the details that matter operationally)
 
-Everything a node emits is namespaced under `prefix = isi/v1/<node_id>`
+Everything a node emits is namespaced under `prefix = isiMonitor3D/v1/<node_id>`
 (`= {base}/{TOPIC_VERSION}/{node_id}`). The sink substitutes one topic template per
 message; each branch carries one kind of information — in plain language:
 
@@ -226,10 +259,18 @@ message; each branch carries one kind of information — in plain language:
   Published **only in Mode 2** (two calibrated cameras) and **only for subscribed
   tracks** — when something downstream actually needs height or pose, not for
   everything.
-- **`{prefix}/zones/{zone}/passings`** — an **event** each time a track crosses a
-  zone boundary: one `enter` or `leave` per crossing, not a continuous stream.
-- **`{prefix}/images/{zone}/{track_id}`** — a **URL pointer** to a saved snapshot
-  JPEG for that event; the bytes themselves never touch the bus (see
+- **`{prefix}/zone/{zone}`** *(retain=True, QoS 1)* — the **`zone` folder**: one
+  subtopic per configured zone carrying its current object list + confidence
+  (`ZoneStateMessage` above) — the FMS/WMS integration signal. A node defines
+  **up to 6 zones** (`zone1`–`zone6`; the dashboard's `MAX_ZONES = 6` config
+  limit — the sink/broker/gateway are zone-count-agnostic), and every one is
+  monitored independently. Subscribe `…/zone/+` for every zone on a node,
+  `isiMonitor3D/v1/+/zone/+` warehouse-wide.
+- **`{prefix}/zone/{zone}/passings`** — an **event** each time a track crosses
+  that zone's boundary: one `enter` or `leave` per crossing, not a continuous
+  stream.
+- **`{prefix}/zone/{zone}/images/{track_id}`** — a **URL pointer** to a saved
+  snapshot JPEG for that event; the bytes themselves never touch the bus (see
   `ImageRefMessage` above).
 - **`{prefix}/diagnostics/heartbeat`** — the node's health pulse (~5 s): frame
   rate, latency, and per-camera liveness. Absence of the pulse is how the gateway
@@ -242,8 +283,9 @@ message; each branch carries one kind of information — in plain language:
 ```
 {prefix}/track2d/{cls}              {prefix}/diagnostics/heartbeat
 {prefix}/track3d/{cls}              {prefix}/config            (retain=True)
-{prefix}/zones/{zone}/passings
-{prefix}/images/{zone}/{track_id}
+{prefix}/zone/{zone}                (retain=True, QoS 1 — current contents)
+{prefix}/zone/{zone}/passings
+{prefix}/zone/{zone}/images/{track_id}
 ```
 
 The specifics that make these templates safe and cheap:
@@ -256,9 +298,12 @@ The specifics that make these templates safe and cheap:
   hierarchy or inject wildcards.
 - **QoS 0 by default** (set per sink). Tracks/passings/diagnostics are high-rate
   and disposable — at-most-once is the right trade, since the next message
-  supersedes the last. `config` is the exception: see below.
+  supersedes the last. `config` and `zone_state` are the exceptions: see below.
 - **`config` is always published with `retain=True`**, regardless of the sink's
   `retain` setting. The broker keeps the last `config` per topic forever.
+- **`zone_state` is always published with `retain=True` at `zone_state_qos`
+  (default 1)** — low-rate absolute state that a WMS must not miss; duplicates
+  are harmless, and a late subscriber immediately reads every zone's contents.
 - **Broker-down-safe.** Construction uses `connect_async()` + `loop_start()`, so
   building the sink **never blocks or raises** even with no broker — paho retries
   in a background thread. A node boots whether or not the server is up yet.
@@ -333,7 +378,7 @@ allow_anonymous true                # fine on a trusted LAN
 **The self-describing trick (why `persistence` + `retain` matter):** because each
 node publishes its `config` *retained* (§3), the broker holds the latest one per
 topic; `persistence true` keeps those retained adverts across a broker restart.
-So whenever the gateway subscribes to `isi/#` — first boot, reconnect, or a
+So whenever the gateway subscribes to `isiMonitor3D/#` — first boot, reconnect, or a
 totally fresh gateway — the broker **immediately replays every node's config**,
 and the gateway learns the entire warehouse layout (nodes, areas, modes, cameras,
 zones) with **zero central configuration**. Adding a PC needs no registry and no
@@ -346,7 +391,7 @@ node list to maintain — it simply *appears*.
 A small FastAPI service that turns the MQTT firehose into a poll-able API.
 
 ### Subscriber + cache — `mqtt_subscriber.py`
-- Subscribes `{base}/#` (`base = isi`, matches both `isi/v1/...` and legacy
+- Subscribes `{base}/#` (`base = isiMonitor3D`, matches both `isiMonitor3D/v1/...` and legacy
   `isi/...`), parses the topic version-aware: a segment after the base matching
   `^v\d+$` is the `topic_version` and the next segment is `node_id`; a legacy
   un-versioned topic is accepted as `topic_version = "v0"`. Each message is
@@ -389,7 +434,7 @@ tracks currently inside that zone — across all nodes.
 |---|---|---|
 | `ISI_GATEWAY_HOST` / `_PORT` | `0.0.0.0` / `8080` | API bind |
 | `ISI_GATEWAY_MQTT_HOST` / `_PORT` | `127.0.0.1` / `1883` | broker |
-| `ISI_GATEWAY_MQTT_BASE` | `isi` | topic root subscribed (`isi/#`) |
+| `ISI_GATEWAY_MQTT_BASE` | `isiMonitor3D` | topic root subscribed (`isiMonitor3D/#`) |
 | `ISI_GATEWAY_MQTT_TLS` | `false` | TLS to the broker |
 | `ISI_GATEWAY_MQTT_CA_CERT` | — | CA to verify a self-signed broker |
 | `ISI_GATEWAY_MQTT_TLS_INSECURE` | `false` | skip hostname check (test only) |
@@ -460,7 +505,7 @@ metadata:
     - plugin: mqtt                    # → central server
       host: <server-ip>
       port: 1883
-      prefix: isi/v1/zone_a           # = isi/<TOPIC_VERSION>/<node_id>
+      prefix: isiMonitor3D/v1/zone_a           # = isiMonitor3D/<TOPIC_VERSION>/<node_id>
 ```
 Run it (under systemd in production):
 ```bash
@@ -488,8 +533,8 @@ client, no per-node awareness, one HTTP endpoint.
 ### Verify the whole chain
 ```bash
 # watch every node's traffic on the broker:
-mosquitto_sub -h <server-ip> -t 'isi/#' -v
-#  → isi/v1/zone_a/config (retained) · isi/v1/zone_a/diagnostics/heartbeat · isi/v1/zone_a/track2d/person …
+mosquitto_sub -h <server-ip> -t 'isiMonitor3D/#' -v
+#  → isiMonitor3D/v1/zone_a/config (retained) · isiMonitor3D/v1/zone_a/diagnostics/heartbeat · isiMonitor3D/v1/zone_a/track2d/person …
 # confirm the gateway reflects it:
 curl http://<server-ip>:8080/v1/nodes   # zone_a present, status alive, topic_version, mode, cameras
 ```

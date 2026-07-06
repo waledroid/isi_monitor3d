@@ -1,6 +1,6 @@
 """UDP/JSON envelopes — the **public contract** between the Backbone and modules.
 
-Six envelope types:
+Seven envelope types:
 
 * ``Track2DMessage`` — always-on output from the homography layer (S4).
 * ``Track3DMessage`` — subscription-driven output from the triangulation
@@ -12,6 +12,11 @@ Six envelope types:
 * ``ImageRefMessage`` — image reference (Phase C). Emitted alongside a
   ``PassingEventMessage`` when snapshot-writing is enabled. Carries a URL
   (``file://`` or HTTP) to the saved JPEG; **never** raw image bytes.
+* ``ZoneStateMessage`` — the current contents of one zone: every tracked
+  object inside it with class + confidence (the WMS/FMS integration signal).
+  Published retained on MQTT (``{prefix}/zone/{zone}``) on change plus a
+  periodic refresh; an empty zone is an explicit empty ``objects`` tuple.
+  Additive within v4.
 * ``DiagnosticsMessage`` — periodic heartbeat (Phase 1). Published by the
   ``DiagnosticsPublisher`` every ``interval_sec`` seconds.  Carries node
   identity, mode, source liveness, fps, latency stats, and a calibration
@@ -29,14 +34,14 @@ before parsing further. Bump on any breaking change. Adding fields is
 non-breaking if they're optional and default-valued; renaming or removing is.
 
 MQTT topic convention (orthogonal to ``schema_version``): topics are namespaced
-``<base>/<version>/<node_id>/<suffix>`` — e.g. ``isi/v1/zone_a/track2d/person``.
-``base`` is the deployment root (default ``isi``), ``version`` is ``TOPIC_VERSION``
+``<base>/<version>/<node_id>/<suffix>`` — e.g. ``isiMonitor3D/v1/zone_a/track2d/person``.
+``base`` is the deployment root (default ``isiMonitor3D``), ``version`` is ``TOPIC_VERSION``
 below, ``node_id`` identifies the publishing Backbone, and ``suffix`` is the
 per-message-type tail (``track2d/<cls>``, ``config``, ``diagnostics/heartbeat``,
-…). The version lives in the operator-set MQTT ``prefix`` (``isi/v1/<node_id>``);
+…). The version lives in the operator-set MQTT ``prefix`` (``isiMonitor3D/v1/<node_id>``);
 ``MqttSink`` keeps a freeform ``prefix`` and does not parse it. The gateway
 subscriber parses the version segment back out (and falls back to ``v0`` for
-legacy unversioned ``isi/<node_id>/...`` topics during transition).
+legacy unversioned ``isiMonitor3D/<node_id>/...`` topics during transition).
 """
 
 from __future__ import annotations
@@ -48,21 +53,23 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backbone.core.types import Track2D, Track3D
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 """Bumped on any breaking change to the UDP/JSON contract.
 
 v2: added optional pallet ``occupancy_*`` fields to ``Track2DMessage`` (additive,
 non-breaking — v1 consumers can ignore them).
 v4: added ``PassingEventMessage`` (zone entry/leave events, Phase B). All prior
-message shapes are unchanged; ``parse_envelope`` accepts both v3 and v4."""
+message shapes are unchanged; ``parse_envelope`` accepts both v3 and v4.
+v5: added ``ProximityMessage`` (person↔object floor distances — the safety
+signal). Additive; all prior shapes unchanged."""
 
-_ACCEPTED_VERSIONS = frozenset({3, 4})
+_ACCEPTED_VERSIONS = frozenset({3, 4, 5})
 
 TOPIC_VERSION = "v1"
 """Current MQTT topic-contract version, shared so node + gateway agree.
 
 Embedded in the topic tree as ``<base>/<version>/<node_id>/<suffix>`` (the
-operator sets the MQTT sink ``prefix`` to ``isi/v1/<node_id>``). Independent of
+operator sets the MQTT sink ``prefix`` to ``isiMonitor3D/v1/<node_id>``). Independent of
 ``SCHEMA_VERSION`` (the payload contract): a topic-layout change bumps this; a
 payload-shape change bumps ``SCHEMA_VERSION``."""
 
@@ -72,6 +79,8 @@ class MessageType(str, Enum):
     TRACK_3D = "track_3d"
     PASSING = "passing"
     IMAGE_REF = "image_ref"
+    ZONE_STATE = "zone_state"
+    PROXIMITY = "proximity"
     DIAGNOSTICS = "diagnostics"
     CONFIG = "config"
 
@@ -155,7 +164,7 @@ class PassingEventMessage(BaseModel):
     Emitted when a tracked object crosses a zone boundary. Published through
     the same ``MetadataSink`` fan-out as ``Track2DMessage`` / ``Track3DMessage``.
 
-    MQTT topic: ``{prefix}/zones/{zone}/passings`` (zone name sanitised).
+    MQTT topic: ``{prefix}/zone/{zone}/passings`` (zone name sanitised).
     UDP: same JSON datagram channel as tracks.
     """
 
@@ -203,6 +212,67 @@ class ImageRefMessage(BaseModel):
     url: str = Field(..., description="URL of the saved JPEG snapshot (no image bytes)")
 
 
+class ZoneObject(BaseModel):
+    """One tracked object currently inside a zone (element of ``ZoneStateMessage``)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    track_id: int = Field(..., ge=0)
+    cls: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    xy_m: tuple[float, float]
+    # Pallet occupancy (the empty/full KPI) — optional, mirrors Track2DMessage.
+    occupancy_state: str | None = None          # "empty" | "full" | None
+    occupancy_content: str | None = None        # "carton" | "polybag" | None
+    occupancy_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class ZoneStateMessage(BaseModel):
+    """Wire format for the current contents of one zone (the WMS/FMS signal).
+
+    Lists every tracked object whose floor position lies inside the zone,
+    with class and confidence. Published through the same ``MetadataSink``
+    fan-out as tracks; on MQTT it is **retained** on ``{prefix}/zone/{zone}``
+    so a late-joining consumer immediately sees every zone's occupancy.
+
+    An **empty** zone is an explicit message with ``objects=()`` / ``count=0``
+    — never silence — so consumers can distinguish "empty" from "unknown".
+    ``node_id`` is deliberately absent: like track messages, the gateway
+    derives it from the topic.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.ZONE_STATE] = MessageType.ZONE_STATE
+    ts: float = Field(..., description="capture_ts of the frame producing this state")
+    zone: str
+    objects: tuple[ZoneObject, ...]
+    count: int = Field(..., ge=0, description="len(objects) — consumer convenience")
+
+    @classmethod
+    def from_state(cls, state: object) -> ZoneStateMessage:
+        """Construct from a ``ZoneState`` (avoid hard import of shared module)."""
+        objects = tuple(
+            ZoneObject(
+                track_id=int(o.track_id),
+                cls=str(o.cls),
+                confidence=float(o.confidence),
+                xy_m=o.xy_m,
+                occupancy_state=o.occupancy_state,
+                occupancy_content=o.occupancy_content,
+                occupancy_confidence=float(o.occupancy_confidence),
+            )
+            for o in state.occupants  # type: ignore[attr-defined]
+        )
+        return cls(
+            ts=float(state.ts),      # type: ignore[attr-defined]
+            zone=str(state.zone),    # type: ignore[attr-defined]
+            objects=objects,
+            count=len(objects),
+        )
+
+
 class LatencyStats(BaseModel):
     """Latency percentiles from ``LatencyMeter.percentiles()`` (in milliseconds)."""
 
@@ -224,6 +294,39 @@ class CalibrationFactCheck(BaseModel):
     mode: int = Field(..., ge=1, le=2)
 
 
+class ProximityPair(BaseModel):
+    """One person↔object floor distance (element of ``ProximityMessage``)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    person_track_id: int = Field(..., ge=0)
+    object_track_id: int = Field(..., ge=0)
+    object_cls: str
+    distance_m: float = Field(..., ge=0.0)
+    person_xy_m: tuple[float, float]
+    object_xy_m: tuple[float, float]
+
+
+class ProximityMessage(BaseModel):
+    """Wire format for person↔object proximity — the safety/AGV signal.
+
+    Every (person, object) track pair whose floor distance is within
+    ``max_distance_m``, computed by the Backbone from the SAME metric tracks
+    it publishes (identity-stable ids — consumers can join on ``track_id``).
+    An **empty** ``pairs`` message is sent once when the last pair clears —
+    never silence — so consumers can distinguish "nobody near anything" from
+    "unknown". On MQTT it is retained on ``{prefix}/proximity``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.PROXIMITY] = MessageType.PROXIMITY
+    ts: float = Field(..., description="capture_ts of the frame producing this state")
+    max_distance_m: float = Field(..., gt=0.0, description="the configured horizon")
+    pairs: tuple[ProximityPair, ...]
+
+
 class DiagnosticsMessage(BaseModel):
     """Periodic heartbeat emitted by ``DiagnosticsPublisher`` (Phase 1 distributed).
 
@@ -242,6 +345,10 @@ class DiagnosticsMessage(BaseModel):
     sources: dict[str, str]   # camera_id → "alive" | "exited" | "crashed"
     frame_count: int = Field(..., ge=0)
     fps: float = Field(..., ge=0.0)
+    # Per-camera INGEST rate (frames arriving from each source, pre-sync) —
+    # the operator-facing camera health signal. Additive: defaults empty so
+    # payloads from older nodes still parse.
+    fps_by_camera: dict[str, float] = Field(default_factory=dict)
     latency_ms: LatencyStats
     zones: int = Field(..., ge=0)
     subscriptions: int = Field(..., ge=0)
@@ -291,6 +398,8 @@ def parse_envelope(
     | Track3DMessage
     | PassingEventMessage
     | ImageRefMessage
+    | ZoneStateMessage
+    | ProximityMessage
     | DiagnosticsMessage
     | ConfigMessage
 ):
@@ -302,7 +411,7 @@ def parse_envelope(
     messages never carry the ``PASSING``, ``DIAGNOSTICS``, or ``CONFIG`` types,
     so consumers can parse mixed streams produced by older Backbone builds
     without rejecting old packets.
-    Any version outside {3, 4} raises ``SchemaVersionError``.
+    Any version outside {3, 4, 5} raises ``SchemaVersionError``.
     """
     version = int(data.get("schema_version", 0))
     if version not in _ACCEPTED_VERSIONS:
@@ -319,6 +428,10 @@ def parse_envelope(
         return PassingEventMessage.model_validate(data)
     if msg_type == MessageType.IMAGE_REF.value:
         return ImageRefMessage.model_validate(data)
+    if msg_type == MessageType.ZONE_STATE.value:
+        return ZoneStateMessage.model_validate(data)
+    if msg_type == MessageType.PROXIMITY.value:
+        return ProximityMessage.model_validate(data)
     if msg_type == MessageType.DIAGNOSTICS.value:
         return DiagnosticsMessage.model_validate(data)
     if msg_type == MessageType.CONFIG.value:

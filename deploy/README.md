@@ -90,7 +90,7 @@ metadata:
       ca_cert: /etc/isi/ca.crt      # the distributed ca.crt
       username: <MQTT_USERNAME>
       password: <MQTT_PASSWORD>
-      prefix: isi/<node_id>
+      prefix: isiMonitor3D/<node_id>
 ```
 
 ### Let's Encrypt (real domain)

@@ -56,6 +56,7 @@ class ZoneTransitionDetector:
         cls: str,
         xy_m: tuple[float, float],
         ts: float,
+        membership: tuple[str, ...] | None = None,
     ) -> list[PassingEvent]:
         """Compute zone membership for ``xy_m`` and diff against the previous
         set for this track.
@@ -68,8 +69,13 @@ class ZoneTransitionDetector:
             cls:      Object class string (e.g. "person", "palette").
             xy_m:     Floor-plane position in meters ``(X, Y)``.
             ts:       Capture timestamp for the event.
+            membership: Precomputed ``ZoneRegistry.which(xy_m)`` result, so a
+                caller that also feeds the ``ZoneStateTracker`` runs
+                point-in-polygon once per track. ``None`` → computed here.
         """
-        now: frozenset[str] = frozenset(self._zones.which(xy_m))
+        now: frozenset[str] = frozenset(
+            membership if membership is not None else self._zones.which(xy_m)
+        )
         before: frozenset[str] = self._prev.get(track_id, frozenset())
         self._prev[track_id] = now
 

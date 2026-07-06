@@ -26,8 +26,10 @@ from .schemas import (
     DiagnosticsMessage,
     ImageRefMessage,
     PassingEventMessage,
+    ProximityMessage,
     Track2DMessage,
     Track3DMessage,
+    ZoneStateMessage,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,14 @@ class UdpSink(MetadataSink):
         url: str,
     ) -> None:
         msg = ImageRefMessage(track_id=track_id, cls=cls, zone=zone, ts=ts, url=url)
+        self._send(msg.model_dump_json().encode("utf-8"))
+
+    def publish_zone_state(self, msg: object) -> None:
+        assert isinstance(msg, ZoneStateMessage)
+        self._send(msg.model_dump_json().encode("utf-8"))
+
+    def publish_proximity(self, msg: object) -> None:
+        assert isinstance(msg, ProximityMessage)
         self._send(msg.model_dump_json().encode("utf-8"))
 
     def publish_diagnostics(self, msg: object) -> None:

@@ -134,10 +134,10 @@ def test_parse_envelope_accepts_version_3() -> None:
     assert isinstance(msg, Track2DMessage)
 
 
-def test_parse_envelope_accepts_version_4() -> None:
-    """Version 4 messages (current SCHEMA_VERSION) are accepted."""
+def test_parse_envelope_accepts_current_version() -> None:
+    """Messages at the current SCHEMA_VERSION are accepted."""
     payload = json.loads(Track2DMessage.from_track(_track_2d()).model_dump_json())
-    assert payload["schema_version"] == SCHEMA_VERSION == 4
+    assert payload["schema_version"] == SCHEMA_VERSION == 5
     msg = parse_envelope(payload)
     assert isinstance(msg, Track2DMessage)
 
@@ -200,9 +200,10 @@ def test_passing_direction_rejects_invalid_value() -> None:
         )
 
 
-def test_schema_version_is_4() -> None:
-    """Pin the current schema version so a bump is explicit and visible."""
-    assert SCHEMA_VERSION == 4
+def test_schema_version_is_5() -> None:
+    """Pin the current schema version so a bump is explicit and visible.
+    v5 added ProximityMessage (person↔object floor distances)."""
+    assert SCHEMA_VERSION == 5
 
 
 def test_topic_version_is_v1() -> None:
@@ -396,3 +397,111 @@ def test_config_extra_fields_rejected() -> None:
     data["rogue_key"] = "surprise"
     with pytest.raises(ValidationError):
         ConfigMessage.model_validate(data)
+
+
+# ---------------------------------------------------------------------------
+# ZoneStateMessage — the per-zone object list for FMS/WMS (zone folder topic)
+# ---------------------------------------------------------------------------
+
+def _make_zone_state():
+    from backbone.comms.schemas import ZoneObject, ZoneStateMessage
+    return ZoneStateMessage(
+        ts=1_700_000_000.0,
+        zone="B3D",
+        objects=(
+            ZoneObject(
+                track_id=7, cls="palette", confidence=0.91, xy_m=(3.0, 4.0),
+                occupancy_state="full", occupancy_content="carton",
+                occupancy_confidence=0.88,
+            ),
+            ZoneObject(track_id=9, cls="person", confidence=0.75, xy_m=(3.5, 4.2)),
+        ),
+        count=2,
+    )
+
+
+def test_zone_state_message_type_and_version() -> None:
+    from backbone.comms.schemas import MessageType
+    msg = _make_zone_state()
+    assert msg.type == MessageType.ZONE_STATE
+    assert msg.schema_version == SCHEMA_VERSION
+    assert msg.count == 2
+    assert msg.objects[0].cls == "palette"
+
+
+def test_zone_state_json_roundtrip() -> None:
+    from backbone.comms.schemas import ZoneStateMessage
+    msg = _make_zone_state()
+    data = json.loads(msg.model_dump_json())
+    back = ZoneStateMessage.model_validate(data)
+    assert back == msg
+
+
+def test_parse_envelope_dispatches_zone_state() -> None:
+    from backbone.comms.schemas import ZoneStateMessage
+    data = json.loads(_make_zone_state().model_dump_json())
+    parsed = parse_envelope(data)
+    assert isinstance(parsed, ZoneStateMessage)
+    assert parsed.zone == "B3D"
+    assert parsed.objects[1].track_id == 9
+
+
+def test_zone_state_empty_zone_is_explicit() -> None:
+    """An empty zone is an explicit empty objects tuple, never an absent message."""
+    from backbone.comms.schemas import ZoneStateMessage
+    msg = ZoneStateMessage(ts=1.0, zone="B3D", objects=(), count=0)
+    data = json.loads(msg.model_dump_json())
+    assert data["objects"] == []
+    assert data["count"] == 0
+
+
+def test_zone_state_extra_fields_rejected() -> None:
+    from backbone.comms.schemas import ZoneStateMessage
+    data = json.loads(_make_zone_state().model_dump_json())
+    data["rogue_key"] = "surprise"
+    with pytest.raises(ValidationError):
+        ZoneStateMessage.model_validate(data)
+
+
+def test_zone_object_confidence_out_of_range_rejected() -> None:
+    from backbone.comms.schemas import ZoneObject
+    with pytest.raises(ValidationError):
+        ZoneObject(track_id=1, cls="palette", confidence=1.5, xy_m=(0.0, 0.0))
+
+
+def test_zone_state_bad_version_raises() -> None:
+    data = json.loads(_make_zone_state().model_dump_json())
+    data["schema_version"] = 99
+    with pytest.raises(SchemaVersionError):
+        parse_envelope(data)
+
+
+def test_proximity_message_round_trip() -> None:
+    """v5 ProximityMessage — the person↔object distance signal — survives the
+    wire and parse_envelope discriminates it."""
+    import json
+
+    from backbone.comms.schemas import ProximityMessage, ProximityPair
+
+    msg = ProximityMessage(
+        ts=123.4,
+        max_distance_m=6.0,
+        pairs=(ProximityPair(
+            person_track_id=7, object_track_id=3, object_cls="palette",
+            distance_m=1.25, person_xy_m=(1.0, 2.0), object_xy_m=(2.0, 2.75)),),
+    )
+    parsed = parse_envelope(json.loads(msg.model_dump_json()))
+    assert isinstance(parsed, ProximityMessage)
+    assert parsed.pairs[0].distance_m == 1.25
+    assert parsed.schema_version == SCHEMA_VERSION
+
+
+def test_proximity_empty_pairs_is_explicit() -> None:
+    """An empty proximity message (the clear signal) is valid — never silence."""
+    import json
+
+    from backbone.comms.schemas import ProximityMessage
+
+    msg = ProximityMessage(ts=1.0, max_distance_m=6.0, pairs=())
+    parsed = parse_envelope(json.loads(msg.model_dump_json()))
+    assert parsed.pairs == ()

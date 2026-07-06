@@ -5,7 +5,7 @@
 | **Title** | Warehouse-wide distributed comms: Backbone nodes → MQTT broker → polling gateway |
 | **Status** | **Implemented & Validated (on-prem)** · cloud profile pending live smoke |
 | **Author** | ISI Monitor 3D — Backbone team (Isitec) |
-| **Date** | 2026-06-26 |
+| **Date** | 2026-07-02 (rev. 2 — PM review: root topic `isiMonitor3D`, `zone` folder topic, per-topic payload schemas, node-config REST answer) |
 | **Scope** | The network/comms layer only — the vision pipeline (detection, homography, triangulation) is upstream and out of scope here |
 | **Companion** | `docs/mqtt-architecture.md` (field-level technical reference) · `docs/architecture-distributed.md` (topology) |
 
@@ -71,23 +71,30 @@ publish once; a single aggregator serves everyone.
 ## 3. High-level architecture
 
 ```
-        EDGE (per warehouse PC)                    CENTRE (one server)        CONSUMERS
- ┌─────────────────────────────┐
- │ Backbone  node_id = zone_a  │── publish ─┐
- │  cameras → vision → metadata│ isi/v1/zone_a/…│
- └─────────────────────────────┘            │
- ┌─────────────────────────────┐            ▼         ┌────────────────────┐      ┌──────────┐
- │ Backbone  node_id = dock_1  │── publish ─┼────────►│  MQTT broker :1883 │      │  AGVs    │
- │  cameras → vision → metadata│ isi/v1/dock_1/…│      │  (Mosquitto)       │      │  WMS     │
- └─────────────────────────────┘            │         └─────────┬──────────┘      │  HMI     │
- ┌─────────────────────────────┐            │                   │ subscribe isi/# └────┬─────┘
- │ Backbone  node_id = cold_3  │── publish ─┘                   ▼                      │
- │  …                          │                       ┌────────────────────┐   GET   │
- └─────────────────────────────┘                       │  isi-gateway :8080 │◄────────┘
-                                                        │  cache per node_id │ /v1/nodes /v1/tracks
-        MQTT over the LAN (intranet, plaintext)         │  REST polling API  │ /v1/zones /v1/passings
-        — outbound only from the PCs                    └────────────────────┘
+            EDGE (per warehouse PC)                     CENTRE (one server)        CONSUMERS
+ ┌cameras┐
+ │ cam_a ├─RTSP─►┌─────────────────────────────┐
+ │ cam_b ├─RTSP─►│ Backbone  node_id = zone_a  │── publish ─┐
+ └───────┘       │  vision → metric metadata   │            │ isiMonitor3D/v1/zone_a/…
+                 └─────────────────────────────┘            │
+ ┌cameras┐                                                  ▼        ┌────────────────────┐   ┌──────────┐
+ │ cam_a ├─RTSP─►┌─────────────────────────────┐  ┌──────────────────┐│                    │   │  AGVs    │
+ │ cam_b ├─RTSP─►│ Backbone  node_id = dock_1  │─►│ MQTT broker :1883│► …                  │   │  WMS/FMS │
+ └───────┘       │  vision → metric metadata   │  │  (Mosquitto)     ││                    │   │  HMI     │
+                 └─────────────────────────────┘  └────────┬─────────┘│                    │   └────┬─────┘
+ ┌cameras┐                                                 │subscribe │                    │        │
+ │ cam_a ├─RTSP─►┌─────────────────────────────┐           │isiMonitor3D/#                 │   GET  │
+ └───────┘       │ Backbone  node_id = cold_3  │── publish ┘          ▼                    │        │
+  (Mode 1:       │  vision → metric metadata   │           ┌────────────────────┐         │        │
+   1 camera)     └─────────────────────────────┘           │  isi-gateway :8080 │◄────────┴────────┘
+                                                           │  cache per node_id │ /v1/nodes /v1/tracks
+        MQTT over the LAN (intranet, plaintext)            │  REST polling API  │ /v1/zones /v1/passings
+        — outbound only from the PCs                       └────────────────────┘
 ```
+
+Each PC's cameras (1 in Mode 1, 2 in Mode 2) connect **directly to that PC over
+RTSP** (PoE, local LAN segment) — camera video never touches the MQTT fabric;
+only the extracted metadata does.
 
 **Three roles, three protocols:**
 - PCs **publish** metadata (MQTT, outbound only).
@@ -108,18 +115,25 @@ central server is its own host. Either way, the only thing the warehouse PCs and
 the AGVs need is that the central server's **IP is reachable on the LAN**.
 
 ```
-   WAREHOUSE PCs (one Backbone each)            CENTRAL SERVER                 AGVs (DHCP)
+   WAREHOUSE PCs (one Backbone each)                CENTRAL SERVER                 AGVs (DHCP)
+ cam_a ─RTSP┐
+ cam_b ─RTSP┤(PoE)
+            ▼
  ┌──────────────────────────────┐
  │ PC-1   192.168.2.41          │── MQTT ─┐
  │ Backbone  node_id = zone_a   │ :1883   │
  └──────────────────────────────┘         │   ┌──────────────────────────┐
+ cam_a ─RTSP┐                             │   │                          │
+ cam_b ─RTSP┤(PoE)                        │   │                          │
+            ▼                             │   │                          │
  ┌──────────────────────────────┐         ├──►│   192.168.2.39           │   ┌────────────┐
  │ PC-2   192.168.2.42          │── MQTT ─┘   │  Mosquitto      :1883    │   │ AGV-1, AGV-2│
  │ Backbone  node_id = dock_1   │ :1883       │  isi-gateway    :8080    │◄──│  (DHCP)     │
  └──────────────────────────────┘             └──────────────────────────┘   │  poll :8080 │
                                                                               └────────────┘
-   each PC publishes outbound to                a separate host — NOT          AGVs poll
-   192.168.2.39:1883 only                       any warehouse PC's Docker      192.168.2.39:8080
+   cameras attach to their PC only;             a separate host — NOT          AGVs poll
+   each PC publishes outbound to                any warehouse PC's Docker      192.168.2.39:8080
+   192.168.2.39:1883 only
 ```
 
 The central server here (192.168.2.39) runs the `deploy/` Docker compose stack
@@ -171,43 +185,211 @@ and subscribers never know each other, connections are long-lived, and the broke
 buffers/retains. Topics are hierarchical and namespaced by node (Layer 3).
 
 ### Layer 3 — The address space: the topic tree
-Everything a node emits is namespaced under `isi/<TOPIC_VERSION>/<node_id>/…`
+Everything a node emits is namespaced under `isiMonitor3D/<TOPIC_VERSION>/<node_id>/…`
 (currently `TOPIC_VERSION = "v1"`, in `backbone/comms/schemas.py`). Each branch of
 the tree carries one kind of information — in plain language:
 
-- **`isi/v1/<node_id>/track2d/<cls>`** — the always-on output. One metric 2D
+- **`isiMonitor3D/v1/<node_id>/track2d/<cls>`** — the always-on output. One metric 2D
   position-and-velocity on the warehouse floor for each tracked object of class
   `<cls>`. This is what an AGV navigates against. The `<cls>` is the object class,
   so `track2d/person` carries people positions, `track2d/forklift` forklifts, etc.
-- **`isi/v1/<node_id>/track3d/<cls>`** — the same object lifted to full 3D
+- **`isiMonitor3D/v1/<node_id>/track3d/<cls>`** — the same object lifted to full 3D
   `(X, Y, Z)`. Published **only in Mode 2** (two calibrated cameras) and **only for
   subscribed tracks** — i.e. when something downstream actually needs height or
   pose, not for everything.
-- **`isi/v1/<node_id>/zones/<zone>/passings`** — an **event** each time a tracked
-  object crosses a zone's boundary: an enter or a leave. One message per crossing,
-  not a continuous stream.
-- **`isi/v1/<node_id>/images/<zone>/<id>`** — a **URL pointer** to a saved snapshot
-  JPEG for that event. The image **bytes are never on the bus** — only a link a
-  consumer can fetch out-of-band.
-- **`isi/v1/<node_id>/diagnostics/heartbeat`** — the node's health pulse, emitted
+- **`isiMonitor3D/v1/<node_id>/zone/<zone>`** *(retained)* — the **`zone` folder**: one
+  subtopic per zone defined on the node — **up to 6 zones per node**
+  (`zone1`–`zone6`, enforced by the node's configuration UI), every one of them
+  monitored independently — whose payload is the **current list of objects
+  detected inside that zone with their confidence scores** (plus, for pallets,
+  the empty/full occupancy verdict). This is the primary integration
+  signal for the **FMS/WMS**: subscribe `isiMonitor3D/v1/+/zone/+` and you hold every
+  zone's live contents warehouse-wide. Retained + published on change (and a ~1 s
+  refresh while occupied), so a late-joining consumer reads the state instantly;
+  an emptied zone publishes an explicit empty list, never silence.
+- **`isiMonitor3D/v1/<node_id>/zone/<zone>/passings`** — an **event** each time a tracked
+  object crosses that zone's boundary: an enter or a leave. One message per
+  crossing, not a continuous stream.
+- **`isiMonitor3D/v1/<node_id>/zone/<zone>/images/<id>`** — a **URL pointer** to a saved
+  snapshot JPEG for that event. The image **bytes are never on the bus** — only a
+  link a consumer can fetch out-of-band.
+- **`isiMonitor3D/v1/<node_id>/diagnostics/heartbeat`** — the node's health pulse, emitted
   about every 5 s: frame rate, latency, and whether each camera source is alive.
   Absence of the pulse is how the gateway notices a PC went down.
-- **`isi/v1/<node_id>/config`** *(retained)* — the node's self-description: its
+- **`isiMonitor3D/v1/<node_id>/config`** *(retained)* — the node's self-description: its
   area, operational mode, cameras, and zones. **"Retained"** means the broker
   stores the last one and immediately hands it to any subscriber that connects
   later — so a freshly-started gateway learns the layout instantly.
 
 ```
-isi/v1/zone_a/track2d/person          isi/v1/zone_a/diagnostics/heartbeat
-isi/v1/zone_a/track3d/forklift        isi/v1/zone_a/config           (retained)
-isi/v1/zone_a/zones/dock_door/passings
-isi/v1/zone_a/images/dock_door/42
+isiMonitor3D/v1/zone_a/track2d/person             isiMonitor3D/v1/zone_a/diagnostics/heartbeat
+isiMonitor3D/v1/zone_a/track3d/forklift           isiMonitor3D/v1/zone_a/config       (retained)
+isiMonitor3D/v1/zone_a/zone/dock_door             (retained — objects now inside + confidence)
+isiMonitor3D/v1/zone_a/zone/dock_door/passings    (enter/leave events)
+isiMonitor3D/v1/zone_a/zone/dock_door/images/42   (snapshot URL)
 ```
 
-### Layer 4 — The payload: the message contract
-Six validated JSON message types (`track_2d`, `track_3d`, `passing`, `image_ref`,
-`diagnostics`, `config`), each with a `schema_version` and `type`. This schema is
-the **only** thing shared across the process boundary. Full field reference:
+### Layer 4 — The payload: the message contract, topic by topic
+
+Seven validated JSON message types, one per topic family. The schemas are
+enforced in code (pydantic models in `backbone/comms/schemas.py`, strict —
+unknown fields are rejected) and that code is the single source of truth; the
+tables below are its rendering for integrators. **This schema is the only thing
+shared across the process boundary**, and — see *REST parity* at the end of this
+layer — **the exact same JSON shapes are served by the REST API**.
+
+Every payload carries two envelope fields; consumers MUST check them first:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema_version` | int | payload-contract version (currently **4**; consumers accept `{3, 4}`) |
+| `type` | string | discriminator naming the message type (values below) |
+
+#### The complete topic tree and its payloads
+
+| Topic (under `isiMonitor3D/v1/<node_id>/`) | `type` | QoS | Retained | Cadence |
+|---|---|---|---|---|
+| `track2d/<cls>` | `track_2d` | 0 | no | per frame, per tracked object |
+| `track3d/<cls>` | `track_3d` | 0 | no | Mode 2 only, subscribed tracks |
+| **`zone/<zone>`** | `zone_state` | **1** | **yes** | on change + ~1 s refresh while occupied |
+| `zone/<zone>/passings` | `passing` | 0 | no | one per boundary crossing |
+| `zone/<zone>/images/<track_id>` | `image_ref` | 0 | no | per snapshot-enabled passing |
+| `diagnostics/heartbeat` | `diagnostics` | 0 | no | every ~5 s |
+| `config` | `config` | 0 | **yes** | once at startup + on every (re)connect |
+
+`node_id` never appears inside a payload — it is carried by the topic (M1), and
+the gateway tags REST responses with it.
+
+#### `track_2d` — metric 2D track (the always-on output)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ts` | float | capture timestamp, Unix seconds (the honest-latency clock, M5) |
+| `track_id` | int | stable per-node identity |
+| `cls` | string | object class (`person`, `palette`, `forklift`, …) |
+| `xy_m` | [float, float] | floor position, meters |
+| `vxy_m` | [float, float] | floor velocity, m/s |
+| `confidence` | float 0–1 | detection confidence |
+| `cameras_seeing` | [string] | camera ids that observed it this frame |
+| `occupancy_state` | string \| null | pallets: `"empty"` / `"full"` / null |
+| `occupancy_content` | string \| null | pallets: `"carton"` / `"polybag"` / null |
+| `occupancy_confidence` | float 0–1 | confidence of the occupancy verdict |
+
+```json
+{"schema_version": 4, "type": "track_2d", "ts": 1751443200.123, "track_id": 42,
+ "cls": "person", "xy_m": [3.1, 4.2], "vxy_m": [0.4, -0.1], "confidence": 0.93,
+ "cameras_seeing": ["cam_a", "cam_b"], "occupancy_state": null,
+ "occupancy_content": null, "occupancy_confidence": 0.0}
+```
+
+#### `track_3d` — subscription-driven 3D lift
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ts`, `track_id`, `cls` | — | as `track_2d` (same identity space) |
+| `xyz_m` / `vxyz_m` | [float ×3] | 3D position / velocity, meters |
+| `contributing_cameras` | [string] | cameras used in the triangulation |
+| `max_reprojection_error_px` | float | the gate value — honesty about geometry quality |
+| `keypoints_xyz` | [[float ×3]] \| null | per-keypoint 3D (pose mode, S5.5) |
+| `single_view` | bool | true = floor-pinned single-camera fallback |
+| `confidence` | float 0–1 | track confidence |
+
+#### `zone_state` — one zone's current contents (**the FMS/WMS signal**)
+
+Published retained on `zone/<zone>` — one topic per configured zone, **up to 6
+per node** (`zone1`–`zone6`; the per-node configuration UI enforces the limit,
+the fabric itself is zone-count-agnostic). Every configured zone is monitored:
+each gets its own retained state at node startup and its own independent
+change/refresh publishing. The payload is the full list of objects currently
+inside the zone; an empty zone is an explicit `"objects": []`, so a consumer
+can always distinguish *empty* from *unknown*.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ts` | float | capture timestamp of the frame that produced this state |
+| `zone` | string | zone name (matches the `config` advert's zone list) |
+| `objects` | array | every tracked object currently inside (fields below) |
+| `count` | int | `len(objects)` — consumer convenience |
+
+Each element of `objects`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `track_id` | int | the object's per-node track identity |
+| `cls` | string | detected class |
+| `confidence` | float 0–1 | detection confidence score |
+| `xy_m` | [float, float] | floor position inside the zone, meters |
+| `occupancy_state` / `occupancy_content` / `occupancy_confidence` | as `track_2d` | pallet empty/full verdict |
+
+```json
+{"schema_version": 4, "type": "zone_state", "ts": 1751443201.456, "zone": "dock_door",
+ "count": 2, "objects": [
+   {"track_id": 42, "cls": "palette", "confidence": 0.91, "xy_m": [3.0, 4.0],
+    "occupancy_state": "full", "occupancy_content": "carton", "occupancy_confidence": 0.88},
+   {"track_id": 57, "cls": "person", "confidence": 0.87, "xy_m": [3.6, 4.4],
+    "occupancy_state": null, "occupancy_content": null, "occupancy_confidence": 0.0}]}
+```
+
+#### `passing` — zone boundary-crossing event
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ts` | float | capture timestamp of the crossing frame |
+| `track_id` / `cls` | int / string | who crossed |
+| `zone` | string | which zone |
+| `direction` | `"enter"` \| `"leave"` | which way |
+
+```json
+{"schema_version": 4, "type": "passing", "ts": 1751443201.456,
+ "track_id": 42, "cls": "person", "zone": "dock_door", "direction": "enter"}
+```
+
+#### `image_ref` — snapshot pointer (URL only, never bytes — M8)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ts` / `track_id` / `cls` / `zone` | — | correlate with the `passing` event |
+| `url` | string | `file://` or HTTP URL of the saved JPEG |
+
+#### `diagnostics` — the ~5 s heartbeat
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ts` | float | wall-clock at emit |
+| `node_id` | string | (also in the payload here — the heartbeat is the liveness record) |
+| `mode` | string | `single_cam_homography` / `dual_cam_homography_triangulation` |
+| `sources` | {camera: string} | per-camera `alive` / `exited` / `crashed` |
+| `frame_count` / `fps` | int / float | throughput |
+| `latency_ms` | {p50, p95, p99, n} | capture→publish percentiles (the < 200 ms KPI) |
+| `zones` / `subscriptions` | int | configured counts |
+| `calibration` | {loaded, rms_ok, mode} | calibration fact-check |
+
+#### `config` — the retained self-description (M2)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ts` / `node_id` / `area` / `mode` | — | node identity |
+| `cameras` | [string] | configured camera ids |
+| `zones` | array of zone specs | each: `name`, `kind`, `type`, `severity`, `polygon` ([[x, y], … ] meters) |
+| `calibration` | {loaded, rms_ok, mode} | calibration fact-check |
+
+#### REST parity — one format, two transports
+
+The gateway's REST responses are **these same models serialized verbatim**
+(`model_dump()`), each item tagged with the `node_id` recovered from the topic.
+A consumer that parses the MQTT payload parses the REST response, and vice
+versa:
+
+| REST endpoint | Payload it returns |
+|---|---|
+| `/v1/tracks` items | `track_2d` / `track_3d` payloads + `node_id` |
+| `/v1/zones` items | zone spec (from `config`) **+ the zone's latest `zone_state` fields** (`objects`, `count`, `state_ts`) |
+| `/v1/zones/<name>` | one zone across all nodes defining it: spec + latest `zone_state` per node |
+| `/v1/passings` items | `passing` payloads + `node_id` |
+| `/v1/diagnostics` | `diagnostics` payloads |
+| `/v1/config` | `config` payloads |
+
+Full field-level reference (kept in lock-step with the code):
 `docs/mqtt-architecture.md §2`.
 
 ### Layer 5 — The mechanisms
@@ -225,7 +407,7 @@ evolve.
 
 ### M1 — Identity by topic namespacing
 **Problem:** two PCs both number their tracks from 1, so "track 42" is ambiguous.
-**Method:** each node prefixes every topic with `isi/v1/<node_id>`. The gateway
+**Method:** each node prefixes every topic with `isiMonitor3D/v1/<node_id>`. The gateway
 reads the `node_id` back out of the topic and tags every record with it, making
 global identity the pair `(node_id, track_id)`.
 ▶ **Expected result:** `track 42` from `zone_a` and `track 42` from `dock_1` never
@@ -249,13 +431,18 @@ background thread retries forever; construction never blocks or raises.
 runs its pipeline, and silently connects whenever the broker appears.
 
 ### M4 — QoS and retain tuned per message
-**Problem:** tracks are high-rate and disposable; config must never be missed.
+**Problem:** tracks are high-rate and disposable; config and zone contents must
+never be missed.
 **Method:** tracks, passings, and diagnostics use **QoS 0** (at-most-once — cheap,
-right for a 20 fps stream where the next message supersedes the last); `config` is
-**retained** (M2) so late subscribers still receive it.
-▶ **Expected result:** track throughput stays cheap, while a consumer that joins
-late still learns each node's identity immediately. (Whether safety-critical
-messages should move to QoS 1 is an open question — see §10.)
+right for a 20 fps stream where the next message supersedes the last); `config`
+and the per-zone **`zone_state`** are **retained** (M2) so late subscribers still
+receive them, and `zone_state` additionally uses **QoS 1** (at-least-once — it is
+low-rate, WMS-consequential absolute state, so duplicates are harmless and a
+lost update is not).
+▶ **Expected result:** track throughput stays cheap, a consumer that joins late
+still learns each node's identity *and every zone's current contents*
+immediately. (Whether `passings` should also move to QoS 1 is an open question —
+see §10.)
 
 ### M5 — Liveness and honest latency via heartbeat
 **Problem:** the gateway must tell a downed PC from a merely quiet one, and a
@@ -307,14 +494,14 @@ breaking change must run *alongside* the old contract — across both what messa
 1. **Content** — a single integer `schema_version` on each payload; consumers
    accept a set (currently `{3, 4}`), and adding optional fields is non-breaking.
 2. **Addressing** — `TOPIC_VERSION = "v1"` (shared in `backbone/comms/schemas.py`)
-   namespaces both the MQTT topics (`isi/v1/<node_id>/…`) and the REST paths
+   namespaces both the MQTT topics (`isiMonitor3D/v1/<node_id>/…`) and the REST paths
    (`/v1/nodes`, …). The gateway parses any `v\d+` segment out of the topic and
    mounts every resource route under its version prefix; bare paths (`/nodes`) stay
    as back-compat aliases and `/healthz` stays unversioned. A legacy un-versioned
-   topic (`isi/<node_id>/…`) is still accepted and reported as `topic_version:
+   topic (`isiMonitor3D/<node_id>/…`) is still accepted and reported as `topic_version:
    "v0"`.
 ▶ **Expected result:** mixed old/new nodes interoperate during a staged rollout. A
-future **v2** lands without breaking anyone — nodes publish `isi/v2/…`, the gateway
+future **v2** lands without breaking anyone — nodes publish `isiMonitor3D/v2/…`, the gateway
 serves both trees and mounts `/v2/…` alongside `/v1/…`, and consumers migrate on
 their own schedule.
 
@@ -333,11 +520,13 @@ docker compose -p on-prem -f deploy/onprem/docker-compose.yml up -d
 `{"ok":true}`; `GET /v1/nodes` → `{"nodes":[],"count":0}` (no PCs yet).
 
 ### Stage B — A PC starts publishing
-Run a Backbone with `node_id: zone_a` and an mqtt sink (`prefix: isi/v1/zone_a`)
+Run a Backbone with `node_id: zone_a` and an mqtt sink (`prefix: isiMonitor3D/v1/zone_a`)
 pointing at the server.
 ▶ **Expected:**
-- The broker shows `isi/v1/zone_a/config` (retained), then `…/diagnostics/heartbeat`
-  every ~5 s, then `…/track2d/<cls>` once detections begin.
+- The broker shows `isiMonitor3D/v1/zone_a/config` (retained) and one retained
+  **empty `…/zone/<zone>` state per configured zone** (the folder is discoverable
+  before anything moves), then `…/diagnostics/heartbeat` every ~5 s, then
+  `…/track2d/<cls>` and per-zone `…/zone/<zone>` updates once detections begin.
 - `GET /v1/nodes` → `zone_a`, status **`alive`**, `topic_version: "v1"`, with its
   area/mode/cameras.
 - `GET /v1/config` → `zone_a`'s self-description.
@@ -364,7 +553,8 @@ Every GET an AGV or the WMS can call today, with its purpose:
 | `GET /v1/tracks?node=<id>` | tracks from one PC only |
 | `GET /v1/tracks?cls=<class>` | tracks of one object class only (e.g. `person`) |
 | `GET /v1/tracks?zone=<name>` | tracks currently inside one zone's polygon |
-| `GET /v1/zones` | every zone defined across all PCs (the warehouse map) |
+| `GET /v1/zones` | every zone defined across all PCs (the warehouse map), each with its **live contents** (`objects` + confidence, `count`, `state_ts`) |
+| `GET /v1/zones/<name>` | one zone: its spec + the latest per-node object list |
 | `GET /v1/passings` | recent enter/leave boundary-crossing events |
 | `GET /v1/passings?limit=<n>` | cap how many events come back |
 | `GET /v1/passings?node=<id>` | events from one PC only |
@@ -391,6 +581,33 @@ their retained `config`; the warehouse map rebuilds itself with no manual step.
 Stand up one more PC with a new `node_id` pointed at the same broker.
 ▶ **Expected:** it appears in `/v1/nodes`/`/v1/zones` on its own; **nothing on the
 server changes.**
+
+### Configuring a node — is there a REST API on the backbone nodes?
+
+**Yes — with a deliberate split.** Each warehouse PC hosts a configuration REST
+API, but it belongs to the **co-located operator dashboard (`monitor_web`, port
+8000)**, not to the Backbone process itself:
+
+- **`GET/POST /api/config`** on the PC's dashboard edits that node's
+  configuration — cameras (RTSP/USB), detection model, zones, and the MQTT sink
+  (broker host + topic prefix) — writing `backbone.yaml`/`zones.yaml`
+  atomically. **`POST /api/control/{start,stop}`** restarts the Backbone to
+  apply. This is LAN-local operator tooling on each PC, deliberately **outside
+  the comms fabric**: the broker and gateway stay read-only aggregation.
+- **The Backbone process itself intentionally opens no inbound port.** This
+  preserves the outbound-only edge property (firewall-friendly, zero attack
+  surface on the vision process) and the industrial default of
+  config-as-a-file under systemd with deterministic restart.
+- The centre never needs write access to *see* a config change: the node
+  re-publishes its retained `config` advert (M2), so the new zones/cameras
+  appear in `/v1/nodes`, `/v1/zones` automatically.
+
+If **centralized remote configuration** is ever required, the
+architecture-consistent path is **config-over-MQTT**: each node subscribes to a
+command topic (`isiMonitor3D/v1/<node_id>/cmd/config`) over its *existing
+outbound* broker connection — still no inbound port on the PC. This is recorded
+as an open question in §10 (it needs an authorization story — who may command a
+node — before it is safe to build).
 
 ---
 
@@ -424,19 +641,19 @@ Validation was done at three levels. **All green.**
 ### 8.1 Unit / component (logic correctness — paho mocked)
 | Suite | Tests | Proves |
 |---|---|---|
-| `test_metadata_schemas` | 32 | every message type validates/serialises; version gate |
-| `test_udp_sink` / `test_mqtt_sink` | 10 / 23 | topic templates, retain-config, broker-down-safe, TLS kwargs, shutdown order |
-| `test_publisher` / `test_diagnostics_publisher` | 12 / 14 | per-sink isolation; heartbeat content |
-| `test_zone_transitions` / `test_snapshot_writer` | 16 / 6 | passing detection; URL-only image refs |
-| `isi_gateway/tests` | 76 | subscriber cache, every REST route, liveness, **import discipline**, **`/v1` prefix + bare aliases** (`test_app_versioning`), **version-aware topic parse + `topic_version`** (subscriber tests) |
-| Backbone full suite | **489** | no regression across the pipeline |
-| monitor_web (dashboard consumer) | **272** | the operator UI consumes the contract |
+| `test_metadata_schemas` | 40 | every message type (incl. `zone_state`) validates/serialises; version gate |
+| `test_udp_sink` / `test_mqtt_sink` | 10 / 28 | topic templates (incl. the `zone/` folder, all 6 per-zone topics), retain-config, retained QoS-1 zone state, broker-down-safe, TLS kwargs, shutdown order |
+| `test_publisher` / `test_diagnostics_publisher` | 15 / 14 | per-sink isolation (incl. `publish_zone_state`); heartbeat content |
+| `test_zone_transitions` / `test_zone_state` / `test_snapshot_writer` | 16 / 12 / 6 | passing detection; zone-contents change/refresh/explicit-empty; **6 zones per node each independently monitored**; URL-only image refs |
+| `isi_gateway/tests` | 82 | subscriber cache (incl. per-zone state, **all 6 zones of a node served enriched**), every REST route (incl. `/v1/zones` enrichment + `/v1/zones/{name}`), liveness, **import discipline**, **`/v1` prefix + bare aliases** (`test_app_versioning`), **version-aware topic parse + `topic_version`** (subscriber tests) |
+| Backbone full suite | **519** | no regression across the pipeline |
+| monitor_web (dashboard consumer) | **278** | the operator UI consumes the contract |
 
 ▶ **Result:** the *logic* of every component is correct in isolation. **Versioning
 (M10) is implemented and covered:** `test_app_versioning.py` asserts every resource
 route answers under `/v1` and the bare alias with identical shape (and `/healthz`
-both ways); the subscriber tests assert `isi/v1/zone_a/...` parses to
-`topic_version: "v1"` and legacy `isi/zone_a/...` to `"v0"`; `TOPIC_VERSION == "v1"`
+both ways); the subscriber tests assert `isiMonitor3D/v1/zone_a/...` parses to
+`topic_version: "v1"` and legacy `isiMonitor3D/zone_a/...` to `"v0"`; `TOPIC_VERSION == "v1"`
 is pinned in `test_metadata_schemas`.
 
 ### 8.2 Live wire smoke (real broker — the part mocks can't prove)
@@ -446,7 +663,7 @@ video (no cameras needed), and the gateway.
 node zone_a ─┐                         ┌─ GET /v1/nodes  → zone_a + zone_b, both alive
 node zone_b ─┼─► mosquitto :1883 ─► gateway ─┤ GET /v1/config → both retained adverts
              │   (real paho wire)            └─ liveness  → alive → stale on stop
-mosquitto_sub -t 'isi/#' shows BOTH node trees
+mosquitto_sub -t 'isiMonitor3D/#' shows BOTH node trees
 ```
 ▶ **Result:** `config` (retained), `diagnostics`, and `track2d` all delivered on
 the real wire for both nodes; the gateway aggregated both; liveness flipped
@@ -478,9 +695,9 @@ end-to-end** (unit + live wire + containerised deploy). It is currently on the
 
 | Item | State |
 |---|---|
-| Node publishing (6 message types) | ✅ done + live-validated |
+| Node publishing (7 message types, incl. `zone_state`) | ✅ done + live-validated |
 | Central gateway + REST API | ✅ done + live-validated |
-| Versioning (M10: `/v1` API + `isi/v1/...` topics, `v0` legacy fallback) | ✅ done + unit-covered |
+| Versioning (M10: `/v1` API + `isiMonitor3D/v1/...` topics, `v0` legacy fallback) | ✅ done + unit-covered |
 | On-prem Docker deploy | ✅ stood up + validated |
 | Cloud (TLS) Docker deploy | 🟡 artifacts ready, live smoke pending |
 | Merge to `main` | 🟡 pending |
@@ -514,11 +731,16 @@ Feedback sought on:
    gateway gets the layout instantly), but it is not the same as a delivery
    guarantee for the *next* message.
 
+   The per-zone **`zone_state`** already uses **QoS 1 + retained** (M4): it is
+   low-rate, WMS-consequential absolute state, so the cost is negligible and
+   duplicates are harmless.
+
    **Open question:** should safety-critical, AGV-facing messages — notably
-   `passings` (e.g. a person *entering a danger zone*) — move to **QoS 1** for
-   guaranteed delivery, accepting the added cost and duplicate-handling, while the
-   high-rate `track2d`/`track3d` streams stay on **QoS 0**? This is a deliberate
-   trade the manager can weigh: guaranteed safety events vs. a busier bus.
+   `passings` (e.g. a person *entering a danger zone*) — also move to **QoS 1**
+   for guaranteed delivery, accepting the added cost and duplicate-handling,
+   while the high-rate `track2d`/`track3d` streams stay on **QoS 0**? This is a
+   deliberate trade the manager can weigh: guaranteed safety events vs. a busier
+   bus.
 
 2. **API surface** — are the current endpoints (see §6, *The full consumer API
    surface*) sufficient for the WMS/AGV integration, or is a push/streaming
@@ -526,6 +748,15 @@ Feedback sought on:
 
 3. **Auth** — is Bearer-token API auth + broker password/TLS sufficient for the
    site's network policy?
+
+4. **Centralized remote configuration.** Today a node is configured on-site via
+   its co-located dashboard REST API (see §6, *Configuring a node*); the
+   Backbone itself opens no inbound port. Should we add **config-over-MQTT**
+   (a `isiMonitor3D/v1/<node_id>/cmd/config` command topic consumed over the
+   node's existing outbound broker connection) so nodes can be reconfigured
+   from the centre? It preserves the outbound-only edge, but requires an
+   authorization story (who may command a node, and how commands are signed)
+   before it is safe to build.
 
 ---
 

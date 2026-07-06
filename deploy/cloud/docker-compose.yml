@@ -31,7 +31,7 @@ services:
     environment:
       ISI_GATEWAY_MQTT_HOST: mosquitto
       ISI_GATEWAY_MQTT_PORT: "8883"
-      ISI_GATEWAY_MQTT_BASE: isi
+      ISI_GATEWAY_MQTT_BASE: isiMonitor3D
       ISI_GATEWAY_MQTT_TLS: "true"
       ISI_GATEWAY_MQTT_CA_CERT: /certs/ca.crt
       ISI_GATEWAY_MQTT_USERNAME: ${MQTT_USERNAME}

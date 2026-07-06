@@ -40,7 +40,7 @@ metadata:
     - plugin: mqtt
       host: 192.168.2.39            # the central server
       port: 1883
-      prefix: isi/v1/zone_a         # = isi/v1/<node_id>   (note the v1)
+      prefix: isiMonitor3D/v1/zone_a         # = isiMonitor3D/v1/<node_id>   (note the v1)
 ```
 Start the Backbone:
 ```bash
@@ -65,10 +65,10 @@ they appear here automatically — **no server change needed**.
 
 ## A5. Watch raw traffic (debug)
 ```bash
-mosquitto_sub -h 192.168.2.39 -t 'isi/#' -v
+mosquitto_sub -h 192.168.2.39 -t 'isiMonitor3D/#' -v
 ```
-▶ **Expected:** lines like `isi/v1/zone_a/config {...}`,
-`isi/v1/zone_a/diagnostics/heartbeat {...}`, `isi/v1/zone_a/track2d/person {...}`.
+▶ **Expected:** lines like `isiMonitor3D/v1/zone_a/config {...}`,
+`isiMonitor3D/v1/zone_a/diagnostics/heartbeat {...}`, `isiMonitor3D/v1/zone_a/track2d/person {...}`.
 
 ## A6. Day-to-day management
 ```bash
@@ -86,9 +86,9 @@ docker compose -p on-prem -f deploy/onprem/docker-compose.yml down
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `/v1/nodes` is empty | no node publishing, or wrong `host`/`prefix` | check the PC's mqtt sink `host` = server IP, `prefix: isi/v1/<node_id>`; check `mosquitto_sub -t 'isi/#'` shows traffic |
+| `/v1/nodes` is empty | no node publishing, or wrong `host`/`prefix` | check the PC's mqtt sink `host` = server IP, `prefix: isiMonitor3D/v1/<node_id>`; check `mosquitto_sub -t 'isiMonitor3D/#'` shows traffic |
 | node shows `status:"stale"` | the PC stopped heart-beating (process down / network) | restart the Backbone on that PC; check LAN connectivity to :1883 |
-| node shows `topic_version:"v0"` | the PC's `prefix` is missing the `v1` segment | set `prefix: isi/v1/<node_id>` (it still works as `v0`, but use v1) |
+| node shows `topic_version:"v0"` | the PC's `prefix` is missing the `v1` segment | set `prefix: isiMonitor3D/v1/<node_id>` (it still works as `v0`, but use v1) |
 | `curl` to :8080 refused | gateway container down | `docker compose -p on-prem … ps`; `… logs gateway`; `… up -d` |
 | port 1883 "address in use" | a system mosquitto is squatting | `sudo systemctl stop mosquitto && sudo systemctl disable mosquitto`, then `… up -d` |
 
@@ -229,10 +229,10 @@ requests.get(f"{GATEWAY}/v1/tracks", headers=HEADERS, timeout=1)
 ```bash
 docker compose -p on-prem -f deploy/onprem/docker-compose.yml up -d     # start
 curl http://<server>:8080/v1/nodes                                       # who's online
-mosquitto_sub -h <server> -t 'isi/#' -v                                  # raw traffic
+mosquitto_sub -h <server> -t 'isiMonitor3D/#' -v                                  # raw traffic
 docker compose -p on-prem -f deploy/onprem/docker-compose.yml down       # stop
 ```
-Node config: `node_id: <unique>` · mqtt sink `host: <server>`, `prefix: isi/v1/<node_id>`.
+Node config: `node_id: <unique>` · mqtt sink `host: <server>`, `prefix: isiMonitor3D/v1/<node_id>`.
 
 **AGV / WMS**
 ```bash

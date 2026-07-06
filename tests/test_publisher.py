@@ -21,16 +21,19 @@ class _RecordingSink(MetadataSink):
         raise_on_3d: bool = False,
         raise_on_diag: bool = False,
         raise_on_config: bool = False,
+        raise_on_zone_state: bool = False,
     ) -> None:
         self.track_2d: list[Track2D] = []
         self.track_3d: list[Track3D] = []
         self.diagnostics: list[object] = []
         self.configs: list[object] = []
+        self.zone_states: list[object] = []
         self.closed = False
         self._raise_on_2d = raise_on_2d
         self._raise_on_3d = raise_on_3d
         self._raise_on_diag = raise_on_diag
         self._raise_on_config = raise_on_config
+        self._raise_on_zone_state = raise_on_zone_state
 
     def publish_track_2d(self, track: Track2D) -> None:
         if self._raise_on_2d:
@@ -51,6 +54,11 @@ class _RecordingSink(MetadataSink):
         if self._raise_on_config:
             raise RuntimeError("simulated config failure")
         self.configs.append(msg)
+
+    def publish_zone_state(self, msg: object) -> None:
+        if self._raise_on_zone_state:
+            raise RuntimeError("simulated zone-state failure")
+        self.zone_states.append(msg)
 
     def close(self) -> None:
         self.closed = True
@@ -209,3 +217,41 @@ def test_publish_config_noop_after_close() -> None:
     pub.close()
     pub.publish_config(_make_cfg())
     assert sink.configs == []
+
+
+# ---------------------------------------------------------------------------
+# publish_zone_state fan-out
+# ---------------------------------------------------------------------------
+
+def _make_zone_state():
+    from backbone.comms.schemas import ZoneObject, ZoneStateMessage
+    return ZoneStateMessage(
+        ts=1.0,
+        zone="B3D",
+        objects=(ZoneObject(track_id=1, cls="palette", confidence=0.9, xy_m=(1.0, 1.0)),),
+        count=1,
+    )
+
+
+def test_publish_zone_state_fan_out() -> None:
+    a, b = _RecordingSink(), _RecordingSink()
+    pub = Publisher([a, b])
+    pub.publish_zone_state(_make_zone_state())
+    assert len(a.zone_states) == 1
+    assert len(b.zone_states) == 1
+
+
+def test_publish_zone_state_raising_sink_swallowed() -> None:
+    bad = _RecordingSink(raise_on_zone_state=True)
+    good = _RecordingSink()
+    pub = Publisher([bad, good])
+    pub.publish_zone_state(_make_zone_state())   # must not raise
+    assert len(good.zone_states) == 1
+
+
+def test_publish_zone_state_noop_after_close() -> None:
+    sink = _RecordingSink()
+    pub = Publisher([sink])
+    pub.close()
+    pub.publish_zone_state(_make_zone_state())
+    assert sink.zone_states == []

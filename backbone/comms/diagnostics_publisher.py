@@ -60,8 +60,9 @@ class DiagnosticsPublisher:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-        # State for fps computation.
+        # State for fps computation (global pipeline + per-camera ingest).
         self._last_frame_count: int | None = None
+        self._last_cam_counts: dict[str, int] | None = None
         self._last_tick_ts: float | None = None
 
     # ------------------------------------------------------------------ #
@@ -80,16 +81,24 @@ class DiagnosticsPublisher:
         """
         o = self._orchestrator
 
-        # --- fps computation ---
+        # --- fps computation (pipeline pairs + per-camera ingest) ---
         current_count = o.frame_count
+        cam_counts = getattr(o, "frames_by_camera", None) or {}
         current_ts = now()
         if self._last_frame_count is None or self._last_tick_ts is None:
             fps = 0.0
+            fps_by_camera: dict[str, float] = dict.fromkeys(cam_counts, 0.0)
         else:
             dt = current_ts - self._last_tick_ts
             delta = current_count - self._last_frame_count
             fps = float(delta / dt) if dt > 0 else 0.0
+            prev = self._last_cam_counts or {}
+            fps_by_camera = {
+                cam: (float(n - prev.get(cam, 0)) / dt if dt > 0 else 0.0)
+                for cam, n in cam_counts.items()
+            }
         self._last_frame_count = current_count
+        self._last_cam_counts = dict(cam_counts)
         self._last_tick_ts = current_ts
 
         # --- calibration fact-check ---
@@ -116,6 +125,7 @@ class DiagnosticsPublisher:
             sources=dict(o.source_status),
             frame_count=current_count,
             fps=fps,
+            fps_by_camera={c: round(v, 2) for c, v in fps_by_camera.items()},
             latency_ms=latency_ms,
             zones=o.zone_count,
             subscriptions=o.subscription_count,
@@ -140,10 +150,11 @@ class DiagnosticsPublisher:
         )
 
     def stop(self) -> None:
-        """Signal the thread to stop and wait up to 2 s for it to exit."""
+        """Signal the thread to stop and wait briefly for it to exit (a daemon
+        thread — a short join keeps STOP fast; process exit reaps it anyway)."""
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=1.0)
             self._thread = None
 
     # ------------------------------------------------------------------ #

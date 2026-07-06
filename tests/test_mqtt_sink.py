@@ -92,7 +92,7 @@ def test_publish_track_2d_correct_topic_and_payload() -> None:
         MockClient.return_value = mock_instance
 
         from backbone.comms.mqtt_sink import MqttSink
-        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node")
         sink.publish_track_2d(_t2())
 
         mock_instance.publish.assert_called_once()
@@ -100,7 +100,7 @@ def test_publish_track_2d_correct_topic_and_payload() -> None:
         topic = call_args[0][0]
         payload_bytes = call_args[0][1]
 
-        assert topic == "isi/monitor3d/track2d/palette"
+        assert topic == "isiMonitor3D/v1/node/track2d/palette"
         msg = json.loads(payload_bytes.decode("utf-8"))
         assert msg["schema_version"] == SCHEMA_VERSION
         assert msg["type"] == MessageType.TRACK_2D.value
@@ -117,7 +117,7 @@ def test_publish_track_3d_correct_topic_and_payload() -> None:
         MockClient.return_value = mock_instance
 
         from backbone.comms.mqtt_sink import MqttSink
-        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node")
         sink.publish_track_3d(_t3())
 
         mock_instance.publish.assert_called_once()
@@ -125,7 +125,7 @@ def test_publish_track_3d_correct_topic_and_payload() -> None:
         topic = call_args[0][0]
         payload_bytes = call_args[0][1]
 
-        assert topic == "isi/monitor3d/track3d/palette"
+        assert topic == "isiMonitor3D/v1/node/track3d/palette"
         msg = json.loads(payload_bytes.decode("utf-8"))
         assert msg["schema_version"] == SCHEMA_VERSION
         assert msg["type"] == MessageType.TRACK_3D.value
@@ -178,7 +178,7 @@ def test_publish_event_correct_topic_and_payload() -> None:
         MockClient.return_value = mock_instance
 
         from backbone.comms.mqtt_sink import MqttSink
-        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node")
         ev = PassingEvent(track_id=3, cls="palette", zone="B3D", direction="enter", ts=5.0)
         sink.publish_event(ev)
 
@@ -187,7 +187,7 @@ def test_publish_event_correct_topic_and_payload() -> None:
         topic = call_args[0][0]
         payload_bytes = call_args[0][1]
 
-        assert topic == "isi/monitor3d/zones/B3D/passings"
+        assert topic == "isiMonitor3D/v1/node/zone/B3D/passings"
         msg = json.loads(payload_bytes.decode("utf-8"))
         assert msg["type"] == MessageType.PASSING.value
         assert msg["schema_version"] == SCHEMA_VERSION
@@ -205,13 +205,13 @@ def test_publish_event_sanitises_zone_name() -> None:
         MockClient.return_value = mock_instance
 
         from backbone.comms.mqtt_sink import MqttSink
-        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node")
         ev = PassingEvent(track_id=1, cls="person", zone="zone/A+B#C", direction="leave", ts=1.0)
         sink.publish_event(ev)
 
         call_args = mock_instance.publish.call_args
         topic = call_args[0][0]
-        assert topic == "isi/monitor3d/zones/zone_A_B_C/passings"
+        assert topic == "isiMonitor3D/v1/node/zone/zone_A_B_C/passings"
         sink.close()
 
 
@@ -223,7 +223,7 @@ def test_publish_image_ref_correct_topic_and_payload() -> None:
 
         from backbone.comms.mqtt_sink import MqttSink
         from backbone.comms.schemas import MessageType
-        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/monitor3d")
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node")
         sink.publish_image_ref(
             track_id=42,
             cls="palette",
@@ -237,8 +237,8 @@ def test_publish_image_ref_correct_topic_and_payload() -> None:
         topic = call_args[0][0]
         payload_bytes = call_args[0][1]
 
-        # Topic must embed zone + track_id
-        assert topic == "isi/monitor3d/images/B3D/42"
+        # Topic must embed zone + track_id, inside the zone/ folder
+        assert topic == "isiMonitor3D/v1/node/zone/B3D/images/42"
 
         msg = json.loads(payload_bytes.decode("utf-8"))
         assert msg["type"] == MessageType.IMAGE_REF.value
@@ -326,7 +326,7 @@ def test_publish_diagnostics_correct_topic_and_payload() -> None:
         MockClient.return_value = mock_instance
 
         from backbone.comms.mqtt_sink import MqttSink
-        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/zone_a")
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/zone_a")
         sink.publish_diagnostics(_make_diag())
 
         mock_instance.publish.assert_called_once()
@@ -334,7 +334,7 @@ def test_publish_diagnostics_correct_topic_and_payload() -> None:
         topic = call_args[0][0]
         payload_bytes = call_args[0][1]
 
-        assert topic == "isi/zone_a/diagnostics/heartbeat"
+        assert topic == "isiMonitor3D/v1/zone_a/diagnostics/heartbeat"
         msg = json.loads(payload_bytes.decode("utf-8"))
         assert msg["type"] == MessageType.DIAGNOSTICS.value
         assert msg["schema_version"] == SCHEMA_VERSION
@@ -372,7 +372,7 @@ def test_publish_config_uses_retain_true() -> None:
 
         from backbone.comms.mqtt_sink import MqttSink
         # Even when instance retain=False, config must be retained.
-        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/zone_a", retain=False)
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/zone_a", retain=False)
         sink.publish_config(_make_config())
 
         mock_instance.publish.assert_called_once()
@@ -381,7 +381,7 @@ def test_publish_config_uses_retain_true() -> None:
         payload_bytes = call_args[0][1]
         kwargs = call_args[1]
 
-        assert topic == "isi/zone_a/config"
+        assert topic == "isiMonitor3D/v1/zone_a/config"
         assert kwargs.get("retain") is True, "retain must be True for config messages"
         msg = json.loads(payload_bytes.decode("utf-8"))
         assert msg["type"] == MessageType.CONFIG.value
@@ -437,7 +437,7 @@ def test_config_advert_republished_on_connect() -> None:
         MockClient.return_value = mock_instance
 
         from backbone.comms.mqtt_sink import MqttSink
-        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isi/zone_a")
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/zone_a")
         sink.publish_config(_make_config())
         publishes_after_first = mock_instance.publish.call_count
 
@@ -447,7 +447,7 @@ def test_config_advert_republished_on_connect() -> None:
         # A second retained publish to the config topic must have happened.
         assert mock_instance.publish.call_count == publishes_after_first + 1
         topic, *_ = mock_instance.publish.call_args[0]
-        assert topic == "isi/zone_a/config"
+        assert topic == "isiMonitor3D/v1/zone_a/config"
         assert mock_instance.publish.call_args[1].get("retain") is True
         sink.close()
 
@@ -526,4 +526,115 @@ def test_tls_with_no_ca_cert_uses_system_cas() -> None:
 
         mock_instance.tls_set.assert_called_once_with(ca_certs=None)
         mock_instance.tls_insecure_set.assert_not_called()
+        sink.close()
+
+
+# ---------------------------------------------------------------------------
+# Zone state — the retained per-zone object list (the WMS/FMS signal)
+# ---------------------------------------------------------------------------
+
+def _make_zone_state():
+    from backbone.comms.schemas import ZoneObject, ZoneStateMessage
+    return ZoneStateMessage(
+        ts=1_700_000_000.0,
+        zone="B3D",
+        objects=(
+            ZoneObject(track_id=7, cls="palette", confidence=0.91, xy_m=(3.0, 4.0)),
+        ),
+        count=1,
+    )
+
+
+def test_publish_zone_state_topic_retained_qos1() -> None:
+    """publish_zone_state publishes to {prefix}/zone/{zone} with retain=True, qos=1."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/zone_a",
+                        retain=False)
+        sink.publish_zone_state(_make_zone_state())
+
+        mock_instance.publish.assert_called_once()
+        call_args = mock_instance.publish.call_args
+        topic = call_args[0][0]
+        payload_bytes = call_args[0][1]
+        kwargs = call_args[1]
+
+        assert topic == "isiMonitor3D/v1/zone_a/zone/B3D"
+        assert kwargs.get("retain") is True, "zone state must be retained"
+        assert kwargs.get("qos") == 1, "zone state defaults to QoS 1"
+        msg = json.loads(payload_bytes.decode("utf-8"))
+        assert msg["type"] == "zone_state"
+        assert msg["schema_version"] == SCHEMA_VERSION
+        assert msg["zone"] == "B3D"
+        assert msg["count"] == 1
+        assert msg["objects"][0]["track_id"] == 7
+        assert msg["objects"][0]["confidence"] == 0.91
+        sink.close()
+
+
+def test_publish_zone_state_sanitises_zone_name() -> None:
+    """Zone names with MQTT wildcard chars are sanitised in the state topic."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        from backbone.comms.schemas import ZoneStateMessage
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node")
+        sink.publish_zone_state(
+            ZoneStateMessage(ts=1.0, zone="zone/A+B#C", objects=(), count=0)
+        )
+        topic = mock_instance.publish.call_args[0][0]
+        assert topic == "isiMonitor3D/v1/node/zone/zone_A_B_C"
+        sink.close()
+
+
+def test_publish_zone_state_custom_topic_and_qos() -> None:
+    """zone_state_topic and zone_state_qos parameters override the defaults."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(
+            host="127.0.0.1", port=1883, prefix="isi/z",
+            zone_state_topic="{prefix}/zstate/{zone}", zone_state_qos=0,
+        )
+        sink.publish_zone_state(_make_zone_state())
+
+        call_args = mock_instance.publish.call_args
+        assert call_args[0][0] == "isi/z/zstate/B3D"
+        assert call_args[1].get("qos") == 0
+        assert call_args[1].get("retain") is True
+        sink.close()
+
+
+def test_zone_state_qos_validation() -> None:
+    """zone_state_qos outside {0, 1, 2} must raise ValueError."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client"):
+        from backbone.comms.mqtt_sink import MqttSink
+        with pytest.raises(ValueError, match="zone_state_qos"):
+            MqttSink(host="127.0.0.1", port=1883, zone_state_qos=3)
+
+
+def test_six_zone_topics_per_node() -> None:
+    """zone1-zone6 each publish retained on their own {prefix}/zone/<name> topic."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        from backbone.comms.schemas import ZoneStateMessage
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/zone_a")
+        for i in range(1, 7):
+            sink.publish_zone_state(
+                ZoneStateMessage(ts=1.0, zone=f"zone{i}", objects=(), count=0)
+            )
+
+        topics = [c[0][0] for c in mock_instance.publish.call_args_list]
+        assert topics == [f"isiMonitor3D/v1/zone_a/zone/zone{i}" for i in range(1, 7)]
+        assert all(c[1].get("retain") is True for c in mock_instance.publish.call_args_list)
         sink.close()

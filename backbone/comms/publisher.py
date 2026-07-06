@@ -77,6 +77,30 @@ class Publisher:
                     "sink %s failed on publish_image_ref", type(sink).__name__, exc_info=True
                 )
 
+    def publish_zone_state(self, msg: object) -> None:
+        """Fan-out a ``ZoneStateMessage`` to all sinks (MQTT publishes it retained)."""
+        if self._closed:
+            return
+        for sink in self._sinks:
+            try:
+                sink.publish_zone_state(msg)
+            except Exception:
+                logger.warning(
+                    "sink %s failed on publish_zone_state", type(sink).__name__, exc_info=True
+                )
+
+    def publish_proximity(self, msg: object) -> None:
+        """Fan-out a ``ProximityMessage`` to all sinks (MQTT retains it)."""
+        if self._closed:
+            return
+        for sink in self._sinks:
+            try:
+                sink.publish_proximity(msg)
+            except Exception:
+                logger.warning(
+                    "sink %s failed on publish_proximity", type(sink).__name__, exc_info=True
+                )
+
     def publish_diagnostics(self, msg: object) -> None:
         """Fan-out a ``DiagnosticsMessage`` to all sinks."""
         if self._closed:
