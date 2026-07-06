@@ -14,11 +14,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _serialize(msg: Any) -> dict:
-    """Turn a pydantic envelope back into JSON-able dict for the browser."""
+def _serialize(msg: Any) -> dict | None:
+    """JSON-able dict for the browser, or ``None`` for envelope types this
+    socket doesn't carry (diagnostics, zone_state, config…). The broadcast
+    queue fans out EVERY bus envelope — passing an unknown pydantic model
+    through raw made ``send_json`` raise and killed the socket."""
     if isinstance(msg, (Track2DMessage, Track3DMessage)):
         return msg.model_dump(mode="json")
-    return msg
+    return None
 
 
 @router.websocket("/ws/tracks")
@@ -32,16 +35,22 @@ async def ws_tracks(ws: WebSocket) -> None:
     # immediately rather than waiting for the next UDP packet.
     snap = bus.snapshot()
     for msg in list(snap.last_track2d_by_id.values()) + list(snap.last_track3d_by_id.values()):
+        payload = _serialize(msg)
+        if payload is None:
+            continue
         try:
-            await ws.send_json(_serialize(msg))
+            await ws.send_json(payload)
         except WebSocketDisconnect:
             return
 
     try:
         while True:
             msg = await broadcast.get()
+            payload = _serialize(msg)
+            if payload is None:
+                continue
             try:
-                await ws.send_json(_serialize(msg))
+                await ws.send_json(payload)
             except WebSocketDisconnect:
                 return
     except WebSocketDisconnect:

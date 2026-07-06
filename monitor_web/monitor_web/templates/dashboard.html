@@ -26,7 +26,10 @@
                      'tall-hidden': $store.bigPanel.tallPanel === 'zone1' || $store.bigPanel.tallPanel === 'zone2' }">
     <div class="panel-toolbar">
       <div id="big-panel-tabs" class="custom-tabs" aria-label="big panel view">
-        <button class="custom-tab" data-view="map"
+        <!-- CARTE (3D map) is a diagnostic view: hidden until the shared dev
+             unlock (double-click the logo + password), same gate as MP4. -->
+        <button class="custom-tab" data-view="map" x-cloak
+                x-show="$store.bigPanel.mp4Unlocked"
                 :class="{ active: $store.bigPanel.view === 'map' }"
                 @click="$store.bigPanel.select('map')">
           <span data-i18n="map">{{ t.map or 'MAP' }}</span>
@@ -113,7 +116,7 @@
       </div>
     </div>
     <div class="panel-body">
-      <div id="floor-map-host" class="big-view" data-view="map"
+      <div id="floor-map-host" class="big-view" data-view="map" x-cloak
            x-show="$store.bigPanel.view === 'map'"></div>
       <div id="cam_a-wrap" class="big-view" data-view="cam_a" x-cloak
            :class="{ 'cam-flat': $store.bigPanel.isWarped }"
@@ -237,7 +240,8 @@
       <button id="btn-start" class="glass-btn btn-start" @click="$store.bigPanel.start()">
         <span data-i18n="start">{{ t.start or 'START' }}</span>
       </button>
-      <button id="btn-stop" class="glass-btn btn-stop" @click="$store.bigPanel.stop()">
+      <button id="btn-stop" class="glass-btn btn-stop" @click="$store.bigPanel.stop()"
+              :disabled="$store.bigPanel.stopping" :class="{ 'is-busy': $store.bigPanel.stopping }">
         <span data-i18n="stop">{{ t.stop or 'STOP' }}</span>
       </button>
     </div>
@@ -414,6 +418,40 @@
               <p class="layout-hint" data-i18n="cam_zones_empty">Draw a zone on a camera view — it appears here.</p>
             </div>
           </section>
+          <!-- Metric FLOOR zones (zones.yaml, world metres — the Backbone's zones:
+               passings, MQTT zone/ topics, subscriptions). Drawn by clicking floor
+               points on EITHER camera; shown in both cam views + the map. -->
+          <section class="config-section">
+            <h3 data-i18n="floor_zones_section">{{ t.floor_zones_section or 'Floor zones (shared, metric)' }}</h3>
+            <p class="layout-hint" data-i18n="floor_zones_hint">
+              {{ t.floor_zones_hint or 'Drawn on one camera, visible in both + on the map. The Backbone applies them on next START (max 6).' }}
+            </p>
+            <div id="zm-floor-zones" class="config-zone-list"></div>
+            <button id="zm-floor-zone-add" class="glass-btn config-link-add" type="button"
+                    data-i18n="floor_zone_add">{{ t.floor_zone_add or '+ Draw floor zone on camera' }}</button>
+          </section>
+          <!-- Cross-camera alignment fine-tune: 4 corresponding FLOOR points
+               picked on both cameras → a rigid correction baked into cam_b's
+               extrinsics (refined calibration file; toggleable; refit-able). -->
+          <section class="config-section">
+            <h3 data-i18n="align_section">{{ t.align_section or 'Cross-camera alignment (fine-tune)' }}</h3>
+            <p class="layout-hint" data-i18n="align_hint">
+              {{ t.align_hint or 'Pick 4 identical FLOOR spots on both cameras (tape marks are ideal — never box tops). Applies to the Backbone on next START.' }}
+            </p>
+            <div id="zm-align-status" class="layout-hint"></div>
+            <div class="config-general-fps" style="gap:8px;flex-wrap:wrap;">
+              <button id="zm-align-pick" class="glass-btn config-link-add" type="button"
+                      data-i18n="align_pick">{{ t.align_pick or 'Pick 4 point pairs' }}</button>
+              <button id="zm-align-refit" class="glass-btn" type="button" hidden
+                      data-i18n="align_refit">{{ t.align_refit or 'Refit (new calibration)' }}</button>
+              <label style="display:flex;align-items:center;gap:6px;">
+                <input id="zm-align-enabled" type="checkbox" disabled>
+                <span data-i18n="align_use">{{ t.align_use or 'Use fine-tuned calibration' }}</span>
+              </label>
+              <button id="zm-align-clear" class="glass-btn zm-iconbtn" type="button" hidden
+                      title="{{ t.clear or 'Clear' }}">✕</button>
+            </div>
+          </section>
         </div>
 
         <!-- Tab 4: Distance Lines -->
@@ -474,7 +512,7 @@
               <input id="zm-comm-password" type="password" class="zm-input" placeholder="(optional)" />
 
               <label for="zm-comm-prefix" data-i18n="comm_prefix">Topic prefix</label>
-              <input id="zm-comm-prefix" type="text" class="zm-input" placeholder="isi/&lt;node_id&gt;" />
+              <input id="zm-comm-prefix" type="text" class="zm-input" placeholder="isiMonitor3D/v1/&lt;node_id&gt;" />
             </div>
           </section>
         </div>
@@ -551,14 +589,19 @@
               data-i18n="calibrate_start">{{ t.calibrate_start or 'Start calibration' }}</button>
     </div>
 
-    <!-- Mode 2: Multical placeholder (S18.B replaces this with the full UX). -->
+    <!-- Mode 2: point at an existing calibration.json by path (produced by the
+         isical Studio or the Multical CLI) — validated + persisted server-side. -->
     <div id="cal-mode2" class="cal-mode hidden">
-      <p class="cal-hint" data-i18n="calibrate_multical_placeholder">
-        {{ t.calibrate_multical_placeholder or 'Two-camera 3D calibration (Track3D) requires Multical bundle adjustment with a ChArUco board. The in-dashboard workflow is coming in S18.B — for now, run from the CLI:' }}
+      <p class="cal-hint" data-i18n="calibrate_mode2_path_intro">
+        {{ t.calibrate_mode2_path_intro or 'Two-camera 3D calibration (Track3D) is produced by the isical Studio (or the Multical CLI). Give the path to its calibration.json — the Backbone will load it from there; re-calibrating in the Studio takes effect on the next START.' }}
       </p>
-      <pre class="cal-cli">python -m calibration.calibrate calibrate-all \
-  --cam-images cam_a=path/cam_a/ cam_b=path/cam_b/ \
-  --output config/mode2/calibration.json</pre>
+      <div class="cal-points-row">
+        <label for="cal-mode2-path" data-i18n="calibrate_mode2_path_label">{{ t.calibrate_mode2_path_label or 'Calibration file (calibration.json)' }}</label>
+        <input id="cal-mode2-path" type="text" class="zm-input cal-path-input"
+               placeholder="/path/to/calibration.json" spellcheck="false" />
+      </div>
+      <button id="cal-mode2-use" class="glass-btn cal-primary"
+              data-i18n="calibrate_mode2_use">{{ t.calibrate_mode2_use or 'Use this file' }}</button>
     </div>
 
     <!-- Result panel (shared by both modes). -->

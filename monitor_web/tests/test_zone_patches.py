@@ -127,3 +127,227 @@ def test_stream_unknown_patch_404(app_cfg):
         assert client.get("/stream/zone/nope").status_code == 404
 
 
+
+
+# ---- cross-camera ghost projection (Mode-2 stereo UX) ----------------------
+
+
+def _mode2_app(tmp_path: Path):
+    """App with 2 cameras + a synthetic Mode-2 calibration (two look-down cams),
+    ui_settings isolated in tmp so the calibration-path override never leaks."""
+    import json
+
+    import numpy as np
+    from backbone.shared.geometry import (
+        floor_homography_from_K_R_t,
+        projection_from_K_R_t,
+    )
+    from calibration.schema import CALIBRATION_VERSION
+
+    K = np.array([[1000.0, 0.0, 500.0], [0.0, 1000.0, 500.0], [0.0, 0.0, 1.0]])
+    R = np.diag([1.0, -1.0, -1.0])
+
+    def cam(cam_id, x):
+        t = np.array([x, 0.0, 3.0])
+        return {
+            "camera_id": cam_id, "image_size_wh": [1000, 1000],
+            "K": K.tolist(), "D": [0.0] * 5, "R": R.tolist(), "t": t.tolist(),
+            "H": floor_homography_from_K_R_t(K, R, t).tolist(),
+            "P": projection_from_K_R_t(K, R, t).tolist(),
+            "reprojection_rms_px": 0.1,
+        }
+
+    cal = tmp_path / "mode2" / "calibration.json"
+    cal.parent.mkdir(parents=True, exist_ok=True)
+    cal.write_text(json.dumps({
+        "version": CALIBRATION_VERSION, "created_at": "2026-07-02T00:00:00Z",
+        "floor_anchor_method": "synthetic", "floor_origin_note": "test",
+        "cameras": {"cam_a": cam("cam_a", 0.0), "cam_b": cam("cam_b", 2.0)},
+    }))
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {"cam_a": {}, "cam_b": {}},
+        "calibration_path": str(cal),
+        "metadata": {"sinks": []},
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0,
+                   ui_settings_path=tmp_path / "monitor_web_ui.yaml")
+    return create_app(cfg)
+
+
+def test_ghost_projected_into_other_camera(tmp_path: Path):
+    """A patch on cam_a comes back with its cross-camera outline in cam_b —
+    now as a detecting TWIN patch (occlusion persistence); the display-only
+    ghost is omitted when a twin exists."""
+    import numpy as np
+    from backbone.shared.geometry import floor_to_pixel, pixel_to_floor
+
+    app = _mode2_app(tmp_path)
+    # Around cam_a pixel (833, 500) = world (1.0, 0) — the middle of the two
+    # cameras' shared floor, inside cam_b's view as well.
+    poly = [[783.0, 450.0], [883.0, 450.0], [883.0, 550.0], [783.0, 550.0]]
+    with TestClient(app) as client:
+        client.post("/api/zone-patches", json={"patches": [
+            {"id": "g1", "name": "ghosted", "camera": "cam_a",
+             "polygon": poly, "frame_wh": [1000, 1000]},
+        ]})
+        patches_all = client.get("/api/zone-patches").json()["patches"]
+        got = patches_all[0]
+
+    # The cross-camera outline arrives as a TWIN (detects on cam_b).
+    assert got.get("ghost") is None
+    twin = next(p for p in patches_all if p.get("twin_of") == "g1")
+    assert twin["camera"] == "cam_b"
+    assert twin["frame_wh"] == [1000, 1000]
+    ghost = {"polygon": twin["polygon"], "camera": twin["camera"],
+             "image_wh": twin["frame_wh"]}
+
+    # Expected: the DENSIFIED polygon round-tripped through the H matrices
+    # (D=0 → undistort no-op and the distorted projection equals pinhole; the
+    # synthetic rig has real K/R/t so the full-model path runs).
+    from backbone.shared.geometry import densify_polygon
+
+    from monitor_web.api.routes_projection import _load_rig_cached
+    cal = tmp_path / "mode2" / "calibration.json"
+    rig = _load_rig_cached(str(cal.resolve()), cal.stat().st_mtime_ns)
+    dense = densify_polygon(np.asarray(poly), segments_per_edge=8)
+    world = pixel_to_floor(dense, rig["cam_a"].H)
+    expected = floor_to_pixel(world, rig["cam_b"].H)
+    got = np.asarray(ghost["polygon"])
+    assert got.shape == expected.shape          # densified: 4 edges x 8 samples
+    assert np.allclose(got, expected, atol=1e-3)
+
+
+def test_ghost_null_when_no_overlap(tmp_path: Path):
+    """A patch whose floor footprint lies fully outside cam_b's view → ghost None."""
+    app = _mode2_app(tmp_path)
+    # cam_a's far-left edge maps to world x≈-1.5, well outside cam_b (at x=2).
+    poly = [[0.0, 0.0], [30.0, 0.0], [30.0, 30.0], [0.0, 30.0]]
+    with TestClient(app) as client:
+        client.post("/api/zone-patches", json={"patches": [
+            {"id": "g2", "name": "far", "camera": "cam_a",
+             "polygon": poly, "frame_wh": [1000, 1000]},
+        ]})
+        got = client.get("/api/zone-patches").json()["patches"][0]
+    assert got.get("ghost") is None
+
+
+def test_ghost_absent_without_calibration(app_cfg):
+    """No calibration → response shape unchanged (no ghost key computation)."""
+    app, _ = app_cfg
+    with TestClient(app) as client:
+        client.post("/api/zone-patches", json={"patches": [
+            {"id": "g3", "camera": "cam_a", "rect": [10, 10, 60, 60],
+             "frame_wh": [1000, 1000]},
+        ]})
+        got = client.get("/api/zone-patches").json()["patches"][0]
+    assert "ghost" not in got or got["ghost"] is None
+
+
+# ---- /api/zone-patches/state — live worker contents for the comms cards ----
+
+
+class _Det:
+    def __init__(self, cls, conf, bbox):
+        self.cls = cls
+        self.confidence = conf
+        self.bbox_xyxy = bbox
+
+
+class _FakeManager:
+    """zone_manager stub: fixed per-zone detections + status."""
+
+    def __init__(self, dets_by_zone, status="ok"):
+        self._dets = dets_by_zone
+        self._status = status
+
+    def zone_status(self, zone_id):
+        return self._status if zone_id in self._dets else ""
+
+    def zone_dets(self, zone_id):
+        return list(self._dets.get(zone_id, []))
+
+
+def test_zone_patches_state_maps_occupancy(app_cfg):
+    """A pallet with a carton on it → palette object with occupancy_state=full;
+    the carton itself is listed too — same shape as the world-zone states."""
+    app, _ = app_cfg
+    with TestClient(app) as client:
+        client.post("/api/zone-patches", json={"patches": [
+            {"id": "z1", "name": "Zone 1", "camera": "cam_a",
+             "rect": [0, 0, 400, 300], "frame_wh": [1920, 1080]},
+            {"id": "z2", "name": "Zone 2", "camera": "cam_a",
+             "rect": [500, 0, 900, 300], "frame_wh": [1920, 1080]},
+        ]})
+        # Zone 1: a pallet with a carton sitting on it (image overlap → full).
+        client.app.state.zone_manager = _FakeManager({
+            "z1": [
+                _Det("palette", 0.9, (100.0, 200.0, 300.0, 300.0)),
+                _Det("carton", 0.8, (150.0, 120.0, 250.0, 210.0)),
+            ],
+        })
+        data = client.get("/api/zone-patches/state").json()
+
+    assert set(data["states"]) == {"z1"}          # z2 has no coverage → absent (dim)
+    objs = data["states"]["z1"]["objects"]
+    pal = next(o for o in objs if o["cls"] == "palette")
+    assert pal["occupancy_state"] == "full"
+    # What the pallet carries, for the human-readable comms cards
+    # ("Palette present — with carton").
+    assert pal["occupancy_content"] == ["carton"]
+    assert any(o["cls"] == "carton" for o in objs)
+    assert data["states"]["z1"]["count"] == 2
+    assert data["states"]["z1"]["status"] == "ok"
+
+
+def test_zone_patches_state_empty_pallet_is_vide(app_cfg):
+    app, _ = app_cfg
+    with TestClient(app) as client:
+        client.post("/api/zone-patches", json={"patches": [
+            {"id": "z1", "name": "Zone 1", "camera": "cam_a",
+             "rect": [0, 0, 400, 300], "frame_wh": [1920, 1080]},
+        ]})
+        client.app.state.zone_manager = _FakeManager({
+            "z1": [_Det("palette", 0.9, (100.0, 200.0, 300.0, 300.0))],
+        })
+        data = client.get("/api/zone-patches/state").json()
+    pal = data["states"]["z1"]["objects"][0]
+    assert pal["cls"] == "palette"
+    assert pal["occupancy_state"] == "empty"
+    assert "occupancy_content" not in pal         # empty pallet carries nothing
+
+
+def test_zone_patches_state_no_manager(app_cfg):
+    app, _ = app_cfg
+    with TestClient(app) as client:
+        client.app.state.zone_manager = None
+        data = client.get("/api/zone-patches/state").json()
+    assert data == {"states": {}}
+
+
+def test_zone_patches_state_conflicting_pallet_reads_resolve_to_loaded(app_cfg):
+    """The same physical pallet double-detected as empty AND loaded in one
+    zone must surface only the LOADED palette — mirrors the Backbone's MQTT
+    zone_state rule so REST and MQTT agree."""
+    app, _ = app_cfg
+    with TestClient(app) as client:
+        client.post("/api/zone-patches", json={"patches": [
+            {"id": "z1", "name": "Zone 1", "camera": "cam_a",
+             "rect": [0, 0, 900, 400], "frame_wh": [1920, 1080]},
+        ]})
+        client.app.state.zone_manager = _FakeManager({
+            "z1": [
+                # Loaded pallet (a carton sits on it)…
+                _Det("palette", 0.9, (100.0, 200.0, 300.0, 300.0)),
+                _Det("carton", 0.8, (150.0, 120.0, 250.0, 210.0)),
+                # …and a second, overlapping read of the SAME pallet, empty.
+                _Det("palette", 0.6, (420.0, 200.0, 620.0, 300.0)),
+            ],
+        })
+        data = client.get("/api/zone-patches/state").json()
+    objs = data["states"]["z1"]["objects"]
+    pals = [o for o in objs if o["cls"] == "palette"]
+    assert len(pals) == 1
+    assert pals[0]["occupancy_state"] == "full"
+    assert pals[0]["occupancy_content"] == ["carton"]
+    assert data["states"]["z1"]["count"] == len(objs)

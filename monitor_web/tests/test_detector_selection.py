@@ -50,7 +50,7 @@ def test_rfdetr_priority_over_arity():
 # --- list_trained_onnx: model discovery now scans models/rfdetr/ too ---------
 
 def test_list_trained_onnx_finds_rfdetr_under_models(tmp_path, monkeypatch):
-    import monitor_web.detection_overlay as ov
+    import monitor_web.model_store as ov  # canonical home of model discovery
 
     repo = tmp_path
     runs = repo / "trainer/isidet/runs/segment/models/yolo/r1/weights"

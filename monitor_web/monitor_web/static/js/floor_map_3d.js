@@ -405,14 +405,18 @@ async function init() {
       } else {
         if (msg.cls !== view.cls) { rebuildBody(view, msg.cls); }
       }
-      view.target = w2t(msg.xy_m[0], msg.xy_m[1]);
       view.lastSeen = now;
       view.lastMsg = msg;
 
-      // label (id + occupancy) + single-view flag
+      // Triangulated base height (Mode-2 proof): a REAL 2-view Track3D lifts
+      // the body off the floor by xyz_m[2] and shows h=…m in the label.
+      // single_view Z is floor-pinned by design — stays flat, no h label.
       const t3 = window.__tracks?.byId3D?.get(msg.track_id);
       const sv = !!(t3 && t3.single_view);
-      const lbl = `#${msg.track_id}${occupancyText(msg)}${sv ? "  ·1cam" : ""}`;
+      const z = (t3 && !sv) ? (t3.xyz_m?.[2] ?? 0) : 0;
+      view.target = w2t(msg.xy_m[0], msg.xy_m[1], Math.max(0, z));
+      const hTxt = (t3 && !sv) ? `  h=${z.toFixed(2)}m` : "";
+      const lbl = `#${msg.track_id}${occupancyText(msg)}${hTxt}${sv ? "  ·1cam" : ""}`;
       if (view._lbl !== lbl) { setLabel(view, lbl, occupancyColor(msg) ?? COLORS.text); view._lbl = lbl; }
       view.mat.opacity = sv ? 0.5 : 1.0;
       view.mat.transparent = sv;

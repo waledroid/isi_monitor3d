@@ -234,7 +234,10 @@ async def status(request: Request) -> JSONResponse:
                 "active_2d": len(snap.last_track2d_by_id),
                 "active_3d": len(snap.last_track3d_by_id),
             },
-            # Live KPIs for the expanded STATUS panel.
+            # Live KPIs for the expanded STATUS panel. FPS comes from the
+            # Backbone's diagnostics heartbeat (5 s interval) — hide it once
+            # stale (> 2 heartbeats) so a stopped Backbone doesn't show a
+            # frozen rate.
             "kpis": {
                 "latency_p50_ms": snap.latency_p50_ms,
                 "latency_p95_ms": snap.latency_p95_ms,
@@ -242,6 +245,14 @@ async def status(request: Request) -> JSONResponse:
                 "latency_target_ms": 200,
                 "reproj_rms_px": _reprojection_px(cfg),
                 "reproj_target_px": 2.0,
+                "fps_by_camera": (
+                    snap.fps_by_camera
+                    if time.time() - snap.diagnostics_ts <= 12.0 else {}
+                ),
+                "pipeline_fps": (
+                    snap.pipeline_fps
+                    if time.time() - snap.diagnostics_ts <= 12.0 else None
+                ),
             },
         }
     )
@@ -272,6 +283,32 @@ async def zones(request: Request) -> JSONResponse:
             ]
         }
     )
+
+
+@router.get("/api/zones/state")
+async def zones_state(request: Request) -> JSONResponse:
+    """Latest per-zone contents from the LOCAL UDP bus (``ZoneStateMessage``).
+
+    Feeds the COMMUNICATION panel's zone cards when no gateway is configured:
+    ``states`` maps zone name → the zone-state payload (objects with cls /
+    confidence / occupancy, plus count and capture ts). ``fresh`` mirrors the
+    bus-freshness gate the STATUS panel uses — stale bus ⇒ the cards dim.
+    """
+    bus = getattr(request.app.state, "bus", None)
+    if bus is None:
+        return JSONResponse({"fresh": False, "states": {}})
+    snap = bus.snapshot()
+    return JSONResponse({
+        "fresh": bus.is_fresh(2.0),
+        "states": {
+            zone: {
+                "objects": [o.model_dump(mode="json") for o in msg.objects],
+                "count": msg.count,
+                "ts": msg.ts,
+            }
+            for zone, msg in snap.zone_state_by_zone.items()
+        },
+    })
 
 
 @router.get("/api/danger-zones-object")

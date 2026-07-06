@@ -115,5 +115,12 @@
   "reproj_label": "Reproj",
   "display_fps": "FPS détection (zones & superpositions)",
   "camera_fps": "FPS caméra",
-  "zones_fps": "FPS zones"
+  "zones_fps": "FPS zones",
+  "zone_no_palette": "Aucune palette disponible",
+  "zone_palette_empty": "Palette présente mais vide",
+  "zone_palette_with": "Palette présente avec",
+  "zone_an_object": "un objet",
+  "zone_and": "et",
+  "zone_no_data": "aucune donnée en direct",
+  "pipeline_fps_label": "FPS pipeline"
 }

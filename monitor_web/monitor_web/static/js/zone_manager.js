@@ -9,6 +9,8 @@
 
 import { cancelDraw } from "/static/js/draw_mode.js";
 import { invalidateCalibrationCache } from "/static/js/draw_target_picker.js";
+import { loadAlignment } from "/static/js/alignment_tune.js";
+import { loadFloorZones } from "/static/js/floor_zones.js";
 
 function t(key, fallback) {
   const strings = (window.__monitor_web && window.__monitor_web.strings) || {};
@@ -165,9 +167,9 @@ function collectMqttSink() {
   const caCert = el("zm-comm-ca-cert")?.value.trim() || "";
   const username = el("zm-comm-username")?.value.trim() || "";
   const password = el("zm-comm-password")?.value || "";
-  // Default the prefix to isi/<node_id> when the operator left it blank.
+  // Default the prefix to isiMonitor3D/v1/<node_id> when the operator left it blank.
   const prefixRaw = el("zm-comm-prefix")?.value.trim() || "";
-  const prefix = prefixRaw || (nodeId ? `isi/${nodeId}` : "");
+  const prefix = prefixRaw || (nodeId ? `isiMonitor3D/v1/${nodeId}` : "");
   return {
     node_id: nodeId,
     mqtt_sink: { host, port, tls, ca_cert: caCert, username, password, prefix },
@@ -479,6 +481,8 @@ async function open() {
   // Zones FPS field (Zones tab, UI-settings display_fps). Default 10.
   const zonesFpsEl = el("zm-zones-fps");
   if (zonesFpsEl) zonesFpsEl.value = (uiSettings && uiSettings.display_fps) ?? 10;
+  loadFloorZones(configData);   // metric floor zones (Zones tab, drawn on a cam)
+  loadAlignment();              // cross-camera alignment fine-tune status
   if (configData) {
     buildCameraInputs(configData.cameras || {});
     // Camera FPS field (Cameras tab, backbone.yaml capture_fps).

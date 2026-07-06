@@ -189,7 +189,10 @@ async function onCamPointerDown(ev) {
     const res = await fetch("/api/project/pixel-to-floor", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ camera_id: target, points: [[srcX, srcY]] }),
+      // frame_wh: the stream can be a downscaled copy of the calibrated
+      // sensor — the server rescales the click into the calibration frame.
+      body: JSON.stringify({ camera_id: target, points: [[srcX, srcY]],
+                             frame_wh: [img.naturalWidth, img.naturalHeight] }),
     });
     if (!res.ok) {
       console.warn("draw_mode: pixel-to-floor failed", await res.text());

@@ -19,10 +19,12 @@ Both require a valid ``calibration.json`` (Mode 1 ``single_cam_4pt`` or Mode 2
 else from ``backbone.yaml`` 's ``calibration_path`` key. Missing / unloadable
 calibration → HTTP 503.
 
-Distortion note: ``floor_to_pixel`` returns *ideal* (undistorted) pixels. For
-Mode 1 (``D = 0``) this is exact. For Mode 2 the small re-distortion error
-near frame edges is documented but not applied here — operator-drawn zones
-typically sit in the centre of the frame where ``D`` is sub-pixel anyway.
+Distortion note: ``floor-to-pixel`` is DISTORTION-AWARE for Mode-2 (full
+``K/D/R/t``) calibrations — the returned pixels land on the RAW live frame
+(``floor_to_pixel_distorted``), because pinhole coordinates drift 100+ px near
+the edges of a strong barrel lens (k1 ≈ -0.45 on the site cameras). Mode-1
+placeholder extrinsics (``K=I, R=I, t=0`` — only ``H`` real) keep the H-based
+pinhole mapping, which is exact there (``D = 0``).
 """
 
 from __future__ import annotations
@@ -50,6 +52,10 @@ router = APIRouter()
 class PixelToFloorBody(BaseModel):
     camera_id: str = Field(..., min_length=1)
     points: list[tuple[float, float]] = Field(..., min_length=1)
+    # The frame size the points were measured on (the browser stream can be a
+    # DOWNSCALED copy of the calibrated sensor — e.g. 1280x720 vs 1920x1080).
+    # Omitted = points already in the calibration frame.
+    frame_wh: tuple[int, int] | None = None
 
 
 class FloorToPixelBody(BaseModel):
@@ -131,6 +137,11 @@ async def pixel_to_floor_endpoint(body: PixelToFloorBody, request: Request) -> J
     rig = _resolve_rig(cfg)
     view = _camera_view(rig, body.camera_id)
     pts_uv = np.asarray(body.points, dtype=np.float64)
+    if body.frame_wh:
+        cw, ch = view.image_size_wh
+        fw, fh = body.frame_wh
+        if fw and fh and (int(fw), int(fh)) != (int(cw), int(ch)):
+            pts_uv = pts_uv * [cw / float(fw), ch / float(fh)]
     pts_undist = undistort_points(pts_uv, view.K, view.D)
     pts_world = pixel_to_floor(pts_undist, view.H)
     return JSONResponse({
@@ -143,16 +154,40 @@ async def pixel_to_floor_endpoint(body: PixelToFloorBody, request: Request) -> J
 async def floor_to_pixel_endpoint(body: FloorToPixelBody, request: Request) -> JSONResponse:
     """Map world floor ``(X, Y)`` metres back to source-pixel coords.
 
+    Distortion-aware: the returned pixels are RAW-frame coordinates (the full
+    lens model), because every consumer draws them over the live (distorted)
+    camera image — pinhole coords drift 100+ px near the edges of a strong
+    barrel lens. The polygon is CLIPPED to the camera's reliably-projectable
+    field (see ``project_floor_polygon_distorted``): a zone spilling past the
+    lens's fold radius would otherwise get points projected back inside the
+    frame at folded positions. The returned polygon may therefore have a
+    different vertex count than the input; it may be empty (no overlap).
+
     Returns the polygon + the camera's source frame ``image_size_wh`` so the
     client can scale to its displayed size (with ``object-fit: cover``).
     """
     import numpy as np
+    from backbone.shared.geometry import (
+        densify_polygon,
+        has_metric_camera_model,
+        project_floor_polygon_distorted,
+    )
 
     cfg = request.app.state.settings
     rig = _resolve_rig(cfg)
     view = _camera_view(rig, body.camera_id)
     pts_world = np.asarray(body.polygon, dtype=np.float64)
-    pts_uv = floor_to_pixel(pts_world, view.H)
+    if has_metric_camera_model(view.K, view.R, view.t):
+        # Densify: a straight floor edge is CURVED in the distorted frame —
+        # consumers draw straight segments between the returned points.
+        pts_uv = project_floor_polygon_distorted(
+            densify_polygon(pts_world, segments_per_edge=8),
+            view.K, view.D, view.R, view.t, view.image_size_wh)
+        if pts_uv is None:
+            pts_uv = np.empty((0, 2))
+    else:
+        # Mode-1 placeholder extrinsics: only H is real — pinhole via H.
+        pts_uv = floor_to_pixel(pts_world, view.H)
     w, h = view.image_size_wh
     return JSONResponse({
         "camera_id": body.camera_id,

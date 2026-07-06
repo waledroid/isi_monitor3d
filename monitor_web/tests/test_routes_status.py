@@ -212,3 +212,45 @@ def test_link_lines_endpoint_500_on_malformed_yaml(tmp_path: Path) -> None:
         res = client.get("/api/link-lines")
         assert res.status_code == 500
         assert res.json()["rules"] == []
+
+
+# ---- /api/zones/state — local-bus zone contents for the comms-panel cards ----
+
+
+def test_zones_state_empty_when_no_bus_traffic(app_with_settings) -> None:
+    from fastapi.testclient import TestClient
+
+    with TestClient(app_with_settings) as client:
+        res = client.get("/api/zones/state")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["fresh"] is False
+    assert data["states"] == {}
+
+
+def test_zones_state_serves_bus_zone_state(app_with_settings) -> None:
+    import time as _time
+
+    from backbone.comms.schemas import ZoneObject, ZoneStateMessage
+    from fastapi.testclient import TestClient
+
+    with TestClient(app_with_settings) as client:
+        bus = client.app.state.bus
+        msg = ZoneStateMessage(
+            ts=_time.time(), zone="dock",
+            objects=(ZoneObject(track_id=7, cls="palette", confidence=0.9,
+                                xy_m=(1.0, 1.0), occupancy_state="full"),),
+            count=1,
+        )
+        # Inject directly (same path _handle_payload uses under its lock).
+        with bus._lock:
+            bus._state.zone_state_by_zone["dock"] = msg
+            bus._state.last_envelope_ts = _time.time()
+        res = client.get("/api/zones/state")
+
+    data = res.json()
+    assert data["fresh"] is True
+    dock = data["states"]["dock"]
+    assert dock["count"] == 1
+    assert dock["objects"][0]["cls"] == "palette"
+    assert dock["objects"][0]["occupancy_state"] == "full"

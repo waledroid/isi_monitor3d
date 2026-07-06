@@ -109,8 +109,22 @@ function renderStatus(status) {
     return `<div class="kpi-row"><span class="kpi-key">${strings.reproj_label || "Reproj"} ${cam}</span>`
       + `<span class="kpi-val ${cls}">${v} px<span class="kpi-target">≤2</span></span></div>`;
   }).join("");
+  // Per-camera capture FPS from the Backbone's diagnostics heartbeat (empty
+  // while stopped/stale → rows hidden). Flagged red under 1 fps (camera
+  // effectively stalled).
+  const fpsByCam = k.fps_by_camera || {};
+  const fpsRows = Object.entries(fpsByCam).map(([cam, v]) => {
+    const cls = v < 1.0 ? "kpi-bad" : "";
+    return `<div class="kpi-row"><span class="kpi-key">${strings.fps_label || "FPS"} ${cam}</span>`
+      + `<span class="kpi-val ${cls}">${Number(v).toFixed(1)} fps</span></div>`;
+  }).join("");
+  const pipelineFpsRow = (k.pipeline_fps == null) ? "" :
+    `<div class="kpi-row"><span class="kpi-key">${strings.pipeline_fps_label || "FPS pipeline"}</span>`
+    + `<span class="kpi-val">${Number(k.pipeline_fps).toFixed(1)} fps</span></div>`;
   const kpiHtml = `
     <div class="kpi-group">
+      ${fpsRows}
+      ${pipelineFpsRow}
       <div class="kpi-row">
         <span class="kpi-key">${strings.latency_p95 || "Latency p95"}</span>
         <span class="kpi-val ${latCls}">${fmtLat(k.latency_p95_ms)}<span class="kpi-target">&lt;200</span></span>

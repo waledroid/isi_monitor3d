@@ -67,7 +67,14 @@ async def start(request: Request) -> JSONResponse:
 @router.post("/stop")
 async def stop(request: Request) -> JSONResponse:
     supervisor = request.app.state.supervisor
-    stopped = supervisor.stop()
+    # Off the event loop: supervisor.stop() blocks for the SIGTERM grace +
+    # memory trim (seconds — longer under host-RAM pressure, exactly when the
+    # operator most needs the UI alive). The loop keeps serving Settings and
+    # status while the teardown runs in a worker thread. (An earlier freeze
+    # attributed to this pattern was actually the Settings model-list walking
+    # 34k dataset files ON the loop — fixed in routes_config/detection_overlay;
+    # with that gone, off-loop stop is strictly better.)
+    stopped = await asyncio.to_thread(supervisor.stop)
     return JSONResponse(
         {"action": "stop", "stopped": stopped, "state": supervisor.state}
     )

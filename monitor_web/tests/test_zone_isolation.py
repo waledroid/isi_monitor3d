@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from backbone.core.types import Detection
 
-import monitor_web.detection_overlay as overlay
+import monitor_web.engines as overlay  # canonical home of session lifecycle
 from monitor_web.detection_overlay import ZoneModelUnavailable
 from monitor_web.zone_worker import ZONE_RETRY_COOLDOWN_S, ZoneDetectionWorker
 

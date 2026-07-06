@@ -35,6 +35,7 @@ def test_people_merge_by_proximity():
 def test_draw_unified_tracks_overlay():
     """Fused tracks overlay onto the rectified floor at their world (X,Y)."""
     import numpy as np
+
     from monitor_web.api.routes_video import _draw_unified_tracks
 
     bounds = {"px_per_m": 100.0, "x_min": 0.0, "y_min": 0.0, "out_wh": (400, 400)}
@@ -59,6 +60,7 @@ def test_draw_unified_tracks_overlay():
 
 def test_draw_unified_tracks_stale_noop():
     import numpy as np
+
     from monitor_web.api.routes_video import _draw_unified_tracks
 
     class _Bus:

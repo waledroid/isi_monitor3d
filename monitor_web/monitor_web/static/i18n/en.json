@@ -115,5 +115,12 @@
   "reproj_label": "Reproj",
   "display_fps": "Detection FPS (zones & overlays)",
   "camera_fps": "Camera FPS",
-  "zones_fps": "Zones FPS"
+  "zones_fps": "Zones FPS",
+  "zone_no_palette": "There is no palette available",
+  "zone_palette_empty": "Palette present but empty",
+  "zone_palette_with": "Palette present with",
+  "zone_an_object": "an object",
+  "zone_and": "and",
+  "zone_no_data": "no live data",
+  "pipeline_fps_label": "FPS pipeline"
 }

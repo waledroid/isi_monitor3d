@@ -30,7 +30,11 @@
 
   function initialView() {
     const v = sessionStorage.getItem("active_view");
-    return VIEWS.includes(v) ? v : "map";
+    // Default is CAM 1 — the CARTE (3D map) is a diagnostic view gated behind
+    // the same logo-double-click unlock as MP4, and only renders when chosen.
+    const unlocked = sessionStorage.getItem("mp4_unlocked") === "1";
+    if (v === "map" && !unlocked) return "cam_a";
+    return VIEWS.includes(v) ? v : "cam_a";
   }
 
   function register() {
@@ -114,7 +118,9 @@
       select(v) {
         if (v === "cam_b" && !this.hasCamB) return;
         if (v === "unified" && !this.unifiedAvailable) return;   // needs 2 LIVE cameras
-        if (v === "mp4" && !this.mp4Unlocked) return;
+        // mp4Unlocked is the shared DEV unlock (logo double-click + password):
+        // it gates both the MP4 viewer and the CARTE 3D map.
+        if ((v === "mp4" || v === "map") && !this.mp4Unlocked) return;
         this.showWarp = false;   // every view starts live; warp is opt-in per view
         this.view = v;
       },
@@ -160,13 +166,22 @@
         }
         if (window.htmx) htmx.trigger("#logs-content", "load");   // refresh logs now
       },
+      stopping: false,
       async stop() {
+        if (this.stopping) return;             // ignore double-clicks
+        this.stopping = true;
+        // Immediate feedback — the server-side teardown takes seconds
+        // (SIGTERM grace + GPU session release); without this the button
+        // felt dead and got hammered.
+        this.flashStatus("Stopping backbone…", false);
         try {
           const res = await fetch("/api/control/stop", { method: "POST" });
           const data = await res.json();
           this.flashStatus(data.state === "stopped" ? "Backbone stopped" : `state: ${data.state}`, false);
         } catch (e) {
           this.flashStatus("Stop request failed", true);
+        } finally {
+          this.stopping = false;
         }
         if (window.htmx) htmx.trigger("#logs-content", "load");
       },
@@ -200,7 +215,7 @@
           if (!res.ok) return;
           const cams = (await res.json()).cameras || {};
           this.hasCamB = !!(cams.cam_b && (cams.cam_b.url || cams.cam_b.device));
-          if (!this.hasCamB && this.view === "cam_b") this.view = "map";
+          if (!this.hasCamB && this.view === "cam_b") this.view = "cam_a";
         } catch (e) { /* quiet */ }
       },
       async loadUi() {
@@ -219,8 +234,8 @@
           sessionStorage.setItem("mp4_selected", this.mp4Selected);
         });
         // Guard a stale persisted view that's not valid for this host/session.
-        if (this.view === "cam_b" && !this.hasCamB) this.view = "map";
-        if (this.view === "mp4" && !this.mp4Unlocked) this.view = "map";
+        if (this.view === "cam_b" && !this.hasCamB) this.view = "cam_a";
+        if ((this.view === "mp4" || this.view === "map") && !this.mp4Unlocked) this.view = "cam_a";
         // Leave the UNIFIED view if it stops being available (cam_b feed dropped).
         window.Alpine.effect(() => {
           if (this.view === "unified" && !this.unifiedAvailable) this.view = "cam_a";

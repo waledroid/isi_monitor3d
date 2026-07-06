@@ -366,3 +366,67 @@ def test_ui_settings_persist_gateway_url(tmp_path: Path) -> None:
         data = get_res.json()
         assert data.get("gateway_url") == "http://stored-gateway:8080"
         assert data.get("gateway_token") == "tok"
+
+
+# ---------------------------------------------------------------------------
+# /api/gateway/zones — same contract, forwards the enriched zone list
+# ---------------------------------------------------------------------------
+
+_GATEWAY_ZONES_RESPONSE = {
+    "zones": [
+        {"node_id": "zone_a", "name": "dock", "kind": "palette",
+         "objects": [{"track_id": 1, "cls": "palette", "confidence": 0.9,
+                      "xy_m": [1.0, 1.0], "occupancy_state": "empty"}],
+         "count": 1, "state_ts": 123.0},
+        {"node_id": "zone_a", "name": "cold", "kind": "danger",
+         "objects": None, "count": None, "state_ts": None},
+    ],
+    "count": 2,
+}
+
+
+def test_gateway_zones_not_configured(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+    with TestClient(app) as client:
+        res = client.get("/api/gateway/zones")
+    assert res.status_code == 200
+    assert res.json() == {"configured": False, "zones": []}
+
+
+def test_gateway_zones_forwards_enriched_list(tmp_path: Path,
+                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list = []
+
+    def _fake_urlopen(req, timeout=None):
+        captured.append(req)
+        return _FakeResponse(_GATEWAY_ZONES_RESPONSE)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    app = _make_app(tmp_path, gateway_url="http://gateway-host:8080",
+                    gateway_token="sekret")
+    with TestClient(app) as client:
+        res = client.get("/api/gateway/zones")
+
+    data = res.json()
+    assert data["configured"] is True
+    assert len(data["zones"]) == 2
+    assert data["zones"][0]["objects"][0]["occupancy_state"] == "empty"
+    assert data["zones"][1]["objects"] is None   # no state yet — card stays dim
+    assert captured[0].full_url == "http://gateway-host:8080/zones"
+    assert captured[0].get_header("Authorization") == "Bearer sekret"
+
+
+def test_gateway_zones_error_never_500(tmp_path: Path,
+                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    def _failing_urlopen(req, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _failing_urlopen)
+    app = _make_app(tmp_path, gateway_url="http://gateway-host:8080")
+    with TestClient(app) as client:
+        res = client.get("/api/gateway/zones")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["configured"] is True
+    assert "error" in data
+    assert data["zones"] == []

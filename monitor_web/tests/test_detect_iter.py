@@ -4,9 +4,10 @@ Pins the STRICT rule: the cam view never runs a full-frame object detector —
 pose is the only model that runs on the full frame; object detections come
 exclusively from the zone-worker snapshot (empty when no zones).
 
-Also pins that the pose model INHERITS the Camera FPS: it runs on EVERY cam-view
-frame (the frames already arrive at the source ``capture_fps`` = Camera FPS), and
-is independent of the zones-only ``display_fps`` ("Zones FPS") preference.
+Also pins the ASYNC pose contract: the per-camera pose runner is fetched and
+fed on EVERY cam-view frame (the video rate is never chained to the model's
+latency — inference happens in the runner's background worker), independent of
+the zones-only ``display_fps`` ("Zones FPS") preference.
 """
 
 from __future__ import annotations
@@ -30,8 +31,8 @@ def _patch_overlay_helpers(monkeypatch, calls: dict) -> None:
     monkeypatch.setattr(routes_video, "masks_enabled", lambda cfg: True)
     monkeypatch.setattr(routes_video, "boxes_enabled", lambda cfg: True)
     monkeypatch.setattr(routes_video, "person_pallet_max_m", lambda cfg: 6.0)
-    monkeypatch.setattr(routes_video, "get_pose_detector",
-                        lambda cfg: calls.setdefault("pose_fetched", True) and None)
+    monkeypatch.setattr(routes_video, "get_async_pose",
+                        lambda cfg, cam: calls.setdefault("pose_fetched", True) and None)
 
     def fake_annotate(image, detector, **kwargs):
         calls["detector_arg"] = detector
@@ -90,7 +91,7 @@ def test_stop_releases_pose_ref_in_suspended_generator(monkeypatch) -> None:
     calls: dict = {}
     _patch_overlay_helpers(monkeypatch, calls)
     sentinel_pose = object()
-    monkeypatch.setattr(routes_video, "get_pose_detector", lambda cfg: sentinel_pose)
+    monkeypatch.setattr(routes_video, "get_async_pose", lambda cfg, cam: sentinel_pose)
     running = {"on": True}
     gen = routes_video._detect_iter(
         iter([_frame(), _frame(), _frame()]), Settings(), "cam_a",
@@ -104,12 +105,12 @@ def test_stop_releases_pose_ref_in_suspended_generator(monkeypatch) -> None:
     gen.close()
 
 
-# ---- pose inherits the Camera FPS (runs every cam-view frame) ----
+# ---- pose runner is fed every cam-view frame (async, never blocks) ----
 
 
 def _patch_for_pose_rate(monkeypatch, pose_call_log: list) -> None:
-    """Stubs for the pose-rate tests. Records each call to the pose detector
-    factory so we can assert it runs once per cam-view frame."""
+    """Stubs for the pose-rate tests. Records each fetch of the async pose
+    runner so we can assert it is fed once per cam-view frame."""
     monkeypatch.setattr(routes_video, "distances_enabled", lambda cfg: False)
     monkeypatch.setattr(routes_video, "distance_line_style", lambda cfg: {})
     monkeypatch.setattr(routes_video, "occupancy_enabled", lambda cfg: False)
@@ -118,19 +119,19 @@ def _patch_for_pose_rate(monkeypatch, pose_call_log: list) -> None:
     monkeypatch.setattr(routes_video, "boxes_enabled", lambda cfg: True)
     monkeypatch.setattr(routes_video, "person_pallet_max_m", lambda cfg: 6.0)
 
-    def counting_pose(cfg):
+    def counting_pose(cfg, cam):
         pose_call_log.append(len(pose_call_log))
         return object()
 
-    monkeypatch.setattr(routes_video, "get_pose_detector", counting_pose)
+    monkeypatch.setattr(routes_video, "get_async_pose", counting_pose)
     monkeypatch.setattr(routes_video, "annotate_frame",
                         lambda image, detector, **kw: image)
 
 
 def test_pose_runs_every_frame_inherits_camera_fps(monkeypatch) -> None:
-    """Pose inherits the Camera FPS: the cam-view frames arrive at the source
-    capture_fps, and pose runs on EVERY one of them — N frames ⇒ N pose calls.
-    No time-gate / carry-forward throttle on the cam view."""
+    """The async pose runner is fetched and fed on EVERY cam-view frame —
+    N frames ⇒ N runner submissions (the worker itself paces the actual
+    inference; the video loop never waits)."""
     pose_calls: list = []
     _patch_for_pose_rate(monkeypatch, pose_calls)
 

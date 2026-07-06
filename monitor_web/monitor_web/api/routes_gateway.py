@@ -48,20 +48,15 @@ def _resolve_gateway(cfg) -> tuple[str | None, str | None]:
     return cfg.gateway_url, cfg.gateway_token
 
 
-@router.get("/api/gateway/nodes")
-def gateway_nodes(request: Request) -> JSONResponse:
-    """Return the node list from the isi-gateway, or a safe fallback.
-
-    Never raises; always HTTP 200.
-    """
-    cfg = request.app.state.settings
-
+def _gateway_fetch(cfg, path: str, list_key: str) -> JSONResponse:
+    """Shared never-raise proxy: GET ``<gateway_url>/<path>``, normalise the
+    ``list_key`` list out of the response, and surface errors as data."""
     gateway_url, gateway_token = _resolve_gateway(cfg)
 
     if not gateway_url:
-        return JSONResponse({"configured": False, "nodes": []})
+        return JSONResponse({"configured": False, list_key: []})
 
-    url = gateway_url.rstrip("/") + "/nodes"
+    url = gateway_url.rstrip("/") + "/" + path.lstrip("/")
     req = urllib.request.Request(url)
     if gateway_token:
         req.add_header("Authorization", f"Bearer {gateway_token}")
@@ -73,23 +68,42 @@ def gateway_nodes(request: Request) -> JSONResponse:
     except urllib.error.HTTPError as exc:
         # HTTPError is a subclass of URLError — must be caught first.
         short = f"HTTP {exc.code}"
-        logger.debug("gateway_nodes: HTTPError fetching %s: %s", url, exc)
-        return JSONResponse({"configured": True, "error": short, "nodes": []})
+        logger.debug("gateway proxy: HTTPError fetching %s: %s", url, exc)
+        return JSONResponse({"configured": True, "error": short, list_key: []})
     except urllib.error.URLError as exc:
         short = str(exc.reason) if hasattr(exc, "reason") else str(exc)
-        logger.debug("gateway_nodes: URLError fetching %s: %s", url, exc)
-        return JSONResponse({"configured": True, "error": short, "nodes": []})
+        logger.debug("gateway proxy: URLError fetching %s: %s", url, exc)
+        return JSONResponse({"configured": True, "error": short, list_key: []})
     except (json.JSONDecodeError, OSError, ValueError) as exc:
         short = str(exc)
-        logger.debug("gateway_nodes: error fetching %s: %s", url, exc)
-        return JSONResponse({"configured": True, "error": short, "nodes": []})
+        logger.debug("gateway proxy: error fetching %s: %s", url, exc)
+        return JSONResponse({"configured": True, "error": short, list_key: []})
 
-    # Gateway returns {"nodes": [...], "count": N} — normalise to list.
+    # Gateway returns {"<list_key>": [...], "count": N} — normalise to list.
     if isinstance(data, dict):
-        nodes = data.get("nodes", [])
+        items = data.get(list_key, [])
     elif isinstance(data, list):
-        nodes = data
+        items = data
     else:
-        nodes = []
+        items = []
 
-    return JSONResponse({"configured": True, "gateway_url": gateway_url, "nodes": nodes})
+    return JSONResponse({"configured": True, "gateway_url": gateway_url, list_key: items})
+
+
+@router.get("/api/gateway/nodes")
+def gateway_nodes(request: Request) -> JSONResponse:
+    """Return the node list from the isi-gateway, or a safe fallback.
+
+    Never raises; always HTTP 200.
+    """
+    return _gateway_fetch(request.app.state.settings, "nodes", "nodes")
+
+
+@router.get("/api/gateway/zones")
+def gateway_zones(request: Request) -> JSONResponse:
+    """Return the gateway's zone list — each zone enriched with its latest
+    MQTT-retained ``zone_state`` (``objects``/``count``/``state_ts``; ``objects``
+    null = no state received yet). Feeds the COMMUNICATION panel's zone cards
+    when a gateway is configured. Never raises; always HTTP 200.
+    """
+    return _gateway_fetch(request.app.state.settings, "zones", "zones")

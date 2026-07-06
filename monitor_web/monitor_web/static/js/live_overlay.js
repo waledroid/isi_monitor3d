@@ -9,7 +9,7 @@
 
 import * as cameraZones from "/static/js/camera_zones.js";
 import { renderActiveCamPreview } from "/static/js/draw_mode.js";
-import { getPatches } from "/static/js/zone_patch.js";
+import { getGhosts, getPatches } from "/static/js/zone_patch.js";
 
 const OVERLAYS = [
   { camId: "cam_a", canvasId: "cam_a-overlay", imgId: "cam_a-img" },
@@ -141,6 +141,45 @@ function drawZonePatches(ctx, img, camId) {
   }
 }
 
+// Cross-camera GHOSTS: patches drawn on the OTHER camera, projected through the
+// floor into this one (server-computed, Mode-2 calibration). Finely dashed +
+// translucent so they read as "defined elsewhere"; labelled "(from cam_x)".
+// Ghost polygon coords are in the ghost camera's CALIBRATION frame (image_wh).
+function drawPatchGhosts(ctx, img, camId) {
+  const ghosts = getGhosts(camId);
+  if (!ghosts.length) return;
+  const natW = img.naturalWidth, natH = img.naturalHeight;
+  if (!natW || !natH) return;
+  ctx.lineWidth = 2;
+  ctx.font = "11px monospace";
+  for (const g of ghosts) {
+    const gw = (g.image_wh && g.image_wh[0]) || natW;
+    const gh = (g.image_wh && g.image_wh[1]) || natH;
+    const sx = natW / gw, sy = natH / gh;
+    ctx.strokeStyle = g.color || "#ff3b3b";
+    ctx.globalAlpha = 0.55;
+    ctx.setLineDash([3, 7]);
+    ctx.beginPath();
+    let lx = 0, ly = 0;
+    for (let i = 0; i < g.polygon.length; i++) {
+      const [dx, dy] = sourceToDisplay(img, g.polygon[i][0] * sx, g.polygon[i][1] * sy, natW, natH);
+      if (i === 0) { ctx.moveTo(dx, dy); lx = dx; ly = dy; } else ctx.lineTo(dx, dy);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const label = `${g.name} (from ${g.from})`;
+    const tw = ctx.measureText(label).width;
+    const bx = Math.max(0, Math.min(lx, ctx.canvas.width - tw - 8));
+    const by = Math.max(0, ly - 16);
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(bx, by, tw + 8, 14);
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fillText(label, bx + 4, by + 11);
+    ctx.globalAlpha = 1;
+  }
+}
+
 function drawForCam(canvas, img, camId) {
   if (canvas.classList.contains("hidden")) return;
   const ctx = canvas.getContext("2d");
@@ -150,6 +189,7 @@ function drawForCam(canvas, img, camId) {
 
   drawZones(ctx, img, cameraZones.get(camId));   // S17 — projected world zones
   drawZonePatches(ctx, img, camId);              // pixel-space red ROI watch boxes
+  drawPatchGhosts(ctx, img, camId);              // cross-camera ghost outlines (Mode 2)
   // Top-left per-track UDP readout disabled for now (to be surfaced elsewhere
   // later). Re-enable by uncommenting; drawTrackLegend() is kept intact below.
   // drawTrackLegend(ctx, camId);

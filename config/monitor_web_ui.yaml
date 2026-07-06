@@ -1,66 +1,194 @@
-mp4_selected: archive/video/veed.mp4
-model_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26l-seg_e200_640px_09-06-2026_00-24-57/weights/best.onnx
-model_xml_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/detect/models/yolo/yolo11l-det_e100_640px_21-05-2026_21-55-41/weights/openvino/model.xml
-pose_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/tests/.cache/yolo11n-pose.onnx
-show_nodes: true
-show_masks: true
-show_boxes: true
-display_fps: 25
-warehouse_map:
-  elements: []
-  outline: null
 zone_patches:
   patches:
-  - id: zp_mq8fx4li
+  - id: zp_mr8z624j
     name: Zone 1
     camera: cam_a
     rect:
-    - 191.27305668792027
-    - 88.69600362356712
-    - 390.64283474443397
-    - 265.3030904846521
+    - 760.4139228598307
+    - 386.9300721229225
+    - 1100.7839448102854
+    - 634.1799937284416
     polygon:
-    - - 192.8428974600188
-      - 102.82457057245392
-    - - 342.7626911954287
-      - 88.69600362356712
-    - - 390.64283474443397
-      - 241.75547890317412
-    - - 191.27305668792027
-      - 265.3030904846521
+    - - 760.4139228598307
+      - 455.96738789589216
+    - - 985.186578864848
+      - 386.9300721229225
+    - - 1100.7839448102854
+      - 536.2433364691126
+    - - 874.4057698338038
+      - 634.1799937284416
     frame_wh:
-    - 640
-    - 352
-    model: /home/aatanda/isi_monitor3d/trainer/isidet/models/rfdetr/rfdetr-medium-seg_e41_432px/inference_model.onnx
+    - 1280
+    - 720
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
     infer_size: 320
     color: null
-    confidence: 0.15
-    max_fps: 10.0
-  - id: zp_mq8fyc6q
+    confidence: null
+    sahi: false
+    enhance: false
+    sahi_rows: 2
+    sahi_cols: 2
+    sahi_overlap: 0.2
+    twin_of: null
+  - id: zp_mr8z7cot
+    name: Zone 2
+    camera: cam_b
+    rect:
+    - 49.169018501097526
+    - 277.7547820633427
+    - 212.93195359046726
+    - 518.5826277830041
+    polygon:
+    - - 49.169018501097526
+      - 345.1865788648479
+    - - 171.18846033239262
+      - 277.7547820633427
+    - - 212.93195359046726
+      - 444.7287550956413
+    - - 65.22420821574161
+      - 518.5826277830041
+    frame_wh:
+    - 1280
+    - 720
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
+    infer_size: 320
+    color: '#ffc800'
+    confidence: 0.1
+    sahi: false
+    enhance: false
+    sahi_rows: 2
+    sahi_cols: 2
+    sahi_overlap: 0.2
+    twin_of: null
+  - id: zp_mr8z624j__twin
+    name: Zone 1
+    camera: cam_b
+    polygon:
+    - - 579.6262866679492
+      - 537.4515149607574
+    - - 564.3014941380801
+      - 510.7836013738932
+    - - 549.6296703934734
+      - 484.47908425732726
+    - - 535.5837534735049
+      - 458.5122466589717
+    - - 522.138675751614
+      - 432.8562739111451
+    - - 509.2714431114765
+      - 407.4834116153285
+    - - 496.96125800760564
+      - 382.36512802947266
+    - - 485.1897062003677
+      - 357.4722785313121
+    - - 473.9410351791891
+      - 332.77524324213016
+    - - 505.655941659504
+      - 321.2252739306783
+    - - 536.4240771257894
+      - 310.16000437434025
+    - - 566.2555205541319
+      - 299.54150403553365
+    - - 595.1729182669343
+      - 289.3328080786795
+    - - 623.2080830135922
+      - 279.4976603027978
+    - - 650.3999729428581
+      - 269.9999322177778
+    - - 676.7938937666656
+      - 260.8025299139378
+    - - 702.4420698088575
+      - 251.8654701794951
+    - - 717.6407637103212
+      - 273.68650352897913
+    - - 733.288024363201
+      - 295.30909734292663
+    - - 749.3786242155919
+      - 316.7739854500854
+    - - 765.9130048852838
+      - 338.1116346569273
+    - - 782.8950217152106
+      - 359.34662728681064
+    - - 800.3307205280377
+      - 380.4998516891107
+    - - 818.2276733915191
+      - 401.5896046134568
+    - - 836.5946213191137
+      - 422.6321531566698
+    - - 809.1113732773002
+      - 434.6668618366316
+    - - 780.4840873148133
+      - 447.2544998215464
+    - - 750.6216544626362
+      - 460.4466504342505
+    - - 719.4316675834018
+      - 474.2977343255037
+    - - 686.8221163418259
+      - 488.8647082406965
+    - - 652.7040232798325
+      - 504.2064132992406
+    - - 616.9953026350445
+      - 520.382465472523
+    frame_wh:
+    - 1920
+    - 1080
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
+    infer_size: 320
+    color: null
+    confidence: null
+    sahi: false
+    enhance: false
+    sahi_rows: 2
+    sahi_cols: 2
+    sahi_overlap: 0.2
+    twin_of: zp_mr8z624j
+  - id: zp_mr8z7cot__twin
     name: Zone 2
     camera: cam_a
-    rect:
-    - 374.94442702344867
-    - 76.13727744677887
-    - 557.0459565868784
-    - 238.61579735897706
     polygon:
-    - - 374.94442702344867
-      - 87.12616285146859
-    - - 485.61820145639524
-      - 76.13727744677887
-    - - 557.0459565868784
-      - 207.2189819170064
-    - - 418.89996864220757
-      - 238.61579735897706
+    - - 1310.9421120329364
+      - 368.11589514835714
+    - - 1327.6381493740635
+      - 386.42781812145
+    - - 1344.9424494120922
+      - 404.19654666759436
+    - - 1298.6632496024054
+      - 416.2770183045094
+    - - 1253.4631444036654
+      - 427.602701162472
+    - - 1209.3485103003065
+      - 438.2368633242097
+    - - 1166.32487043368
+      - 448.2266469645005
+    - - 1124.3937086458484
+      - 457.6089599928172
+    - - 1083.551039926701
+      - 466.41398089136953
+    - - 1043.7869780961146
+      - 474.6672532257094
+    - - 1005.0858451790222
+      - 482.39092330931055
+    - - 992.7495561661711
+      - 462.51792329968066
+    - - 980.617070762372
+      - 442.4045843285479
+    - - 968.581474127601
+      - 421.6630109488774
     frame_wh:
-    - 640
-    - 352
-    model: /home/aatanda/isi_monitor3d/trainer/isidet/models/rfdetr/rfdetr-medium-seg_e41_432px/inference_model.onnx
+    - 1920
+    - 1080
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
     infer_size: 320
-    color: '#ffcb3d'
-    confidence: 0.15
-    max_fps: 10.0
+    color: '#ffc800'
+    confidence: 0.1
+    sahi: false
+    enhance: false
+    sahi_rows: 2
+    sahi_cols: 2
+    sahi_overlap: 0.2
+    twin_of: zp_mr8z7cot
+warehouse_map:
+  elements: []
+  outline: null
 link_lines:
   rules:
   - from: person
@@ -68,6 +196,30 @@ link_lines:
     - palette
     max_distance_m: 6.0
     color: '#ffffff'
-distance_line_opacity: 0.3
-distance_line_color: '#ffffff'
-distance_line_thickness: 3
+mp4_selected: archive/video/veed.mp4
+model_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26l-seg_e200_640px_09-06-2026_00-24-57/weights/best.onnx
+model_xml_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/detect/models/yolo/yolo11l-det_e100_640px_21-05-2026_21-55-41/weights/openvino/model.xml
+pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.onnx
+show_nodes: false
+show_masks: true
+show_boxes: false
+display_fps: 25
+mode2_calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
+alignment_refinement:
+  pairs: []
+  fit:
+    theta_deg: 3.472387349594026
+    tx_m: -0.0801257619438338
+    ty_m: -0.1362218251769747
+    residuals_m:
+    - 0.0599
+    - 0.0231
+    - 0.0358
+    - 0.0133
+    max_residual_m: 0.0599
+    base_mtime_ns: 1783002385213297655
+  enabled: true
+  base_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration.json
+  refined_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
+gateway_url: ''
+gateway_token: ''

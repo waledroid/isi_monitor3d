@@ -12,6 +12,8 @@ trainer's PoseOnnxInferencer uses: head ``(1, 4 + nc + K*3, A)`` → person boxe
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from dataclasses import dataclass
 
 import cv2
@@ -52,7 +54,7 @@ class PoseEngine:
     """Lazy YOLO-pose ONNX runner (CUDA → CPU)."""
 
     def __init__(self, model_path: str, conf: float = 0.3, kpt_conf: float = 0.3,
-                 device: str | None = None) -> None:
+                 device: str | None = None, imgsz: int | None = None) -> None:
         self.conf, self.kpt_conf = float(conf), float(kpt_conf)
         providers = (["CPUExecutionProvider"] if device == "cpu"
                      or "CUDAExecutionProvider" not in ort.get_available_providers()
@@ -60,7 +62,14 @@ class PoseEngine:
         self.session = build_onnx_session(model_path, providers=providers)
         inp = self.session.get_inputs()[0]
         self.input_name = inp.name
-        _, _, self.h, self.w = inp.shape
+        _, _, h, w = inp.shape
+        # Dynamic exports carry SYMBOLIC spatial dims ('height'/'width') —
+        # letterbox needs concrete numbers; `imgsz` (detection.pose_imgsz)
+        # picks the runtime size there, else YOLO-pose's canonical 640. A
+        # STATIC export keeps its baked size — imgsz can't apply.
+        fallback = int(imgsz) if imgsz else 640
+        self.h = h if isinstance(h, int) else fallback
+        self.w = w if isinstance(w, int) else fallback
         out_c = self.session.get_outputs()[0].shape[1]
         self.k = (out_c - 4 - 1) // 3 if isinstance(out_c, int) else 17   # single person class
         self._lb = (1.0, 0, 0)
@@ -80,8 +89,12 @@ class PoseEngine:
         return padded
 
     def predict(self, frame_bgr: np.ndarray) -> list[Pose]:
-        rgb = cv2.cvtColor(self._letterbox(frame_bgr), cv2.COLOR_BGR2RGB)
-        tensor = np.ascontiguousarray(rgb.transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
+        # BGR→RGB via channel flip fused into the float conversion — this
+        # OpenCV build's cvtColor has a ~8 ms fixed dispatch cost per call
+        # (see backbone.detection.preprocess).
+        padded = self._letterbox(frame_bgr)
+        tensor = padded[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32, order="C")
+        tensor *= 1.0 / 255.0
         out = self.session.run(None, {self.input_name: tensor})[0]
         return self._decode(out, frame_bgr.shape[1], frame_bgr.shape[0])
 
@@ -121,3 +134,104 @@ class PoseEngine:
                 if p.keypoints[j, 2] >= self.kpt_conf:
                     cv2.circle(image, tuple(p.keypoints[j, :2].astype(int)), 3, (0, 0, 255), -1)
             cv2.circle(image, (int(p.foot_uv[0]), int(p.foot_uv[1])), 6, (0, 255, 255), -1)
+
+
+class AsyncPoseRunner:
+    """``predict``/``draw``-compatible wrapper that DECOUPLES pose inference
+    from the video loop.
+
+    Running the pose model synchronously per rendered frame chains the video
+    rate to the model's latency — under GPU contention with the live Backbone
+    the whole cam view dropped to ~4 fps. Here a daemon worker runs the engine
+    on the NEWEST submitted frame at whatever rate the GPU allows, and
+    ``predict`` returns the latest completed result instantly: the video stays
+    at camera rate, skeletons refresh at the pose-achievable rate. Results
+    older than ``_STALE_S`` clear (no frozen skeletons); the worker parks after
+    ``_IDLE_STOP_S`` without frames (viewer closed) and restarts on demand.
+    """
+
+    _STALE_S = 2.0
+    _IDLE_STOP_S = 30.0
+
+    def __init__(self, engine: PoseEngine) -> None:
+        self.engine = engine
+        self._cond = threading.Condition()
+        self._pending: np.ndarray | None = None
+        self._poses: list[Pose] = []
+        self._result_ts = 0.0
+        self._stopped = False
+        self._thread: threading.Thread | None = None
+
+    def stop(self) -> None:
+        """Tear the runner down NOW: exit the worker, drop the engine ref (its
+        CUDA session frees on the next gc), clear cached poses. Idempotent —
+        called by ``reset_detector()`` on backbone STOP / model change so pose
+        VRAM never outlives the run."""
+        with self._cond:
+            self._stopped = True
+            self._pending = None
+            self._poses = []
+            self._cond.notify_all()
+        t = self._thread
+        if t is not None and t.is_alive():
+            # Brief join only — the worker is a daemon and exits at its next
+            # loop check; STOP must not pay for it. The engine ref drop below
+            # releases the CUDA session on the following gc pass either way.
+            t.join(timeout=0.2)
+        self._thread = None
+        self.engine = None
+
+    @property
+    def kpt_conf(self) -> float:
+        eng = self.engine
+        return eng.kpt_conf if eng is not None else 0.3
+
+    def predict(self, frame_bgr: np.ndarray) -> list[Pose]:
+        """Submit the frame for background inference; return the latest result."""
+        now = time.time()
+        with self._cond:
+            if self._stopped:
+                return []
+            self._pending = frame_bgr
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(
+                    target=self._run, daemon=True, name="pose-async")
+                self._thread.start()
+            self._cond.notify()
+            if now - self._result_ts > self._STALE_S:
+                return []
+            return list(self._poses)
+
+    def draw(self, image: np.ndarray, poses: list[Pose]) -> None:
+        eng = self.engine
+        if eng is not None:
+            eng.draw(image, poses)
+
+    def _run(self) -> None:
+        idle_since = time.time()
+        while True:
+            with self._cond:
+                while self._pending is None:
+                    if self._stopped:
+                        return                      # torn down (reset_detector)
+                    self._cond.wait(timeout=1.0)
+                    if self._pending is None and time.time() - idle_since > self._IDLE_STOP_S:
+                        return                      # viewer gone — free the GPU
+                if self._stopped:
+                    return
+                frame = self._pending
+                self._pending = None
+                engine = self.engine
+            idle_since = time.time()
+            if engine is None:
+                return
+            try:
+                poses = engine.predict(frame)
+            except Exception:
+                logger.warning("pose overlay: async predict failed", exc_info=True)
+                poses = []
+            with self._cond:
+                if self._stopped:
+                    return
+                self._poses = poses
+                self._result_ts = time.time()

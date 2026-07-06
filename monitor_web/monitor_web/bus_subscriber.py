@@ -27,13 +27,31 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from backbone.comms.schemas import (
+    DiagnosticsMessage,
     SchemaVersionError,
     Track2DMessage,
     Track3DMessage,
+    ZoneStateMessage,
     parse_envelope,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _offer_broadcast(q: asyncio.Queue, msg) -> None:
+    """Runs ON the event loop: enqueue ``msg``, evicting the oldest entry when
+    the queue is full (nobody draining /ws/tracks must never error-spam)."""
+    try:
+        q.put_nowait(msg)
+    except asyncio.QueueFull:
+        try:
+            q.get_nowait()               # drop the oldest…
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            q.put_nowait(msg)            # …keep the newest
+        except asyncio.QueueFull:
+            pass
 
 
 @dataclass(slots=True)
@@ -43,6 +61,9 @@ class BusState:
     last_envelope_ts: float = 0.0   # time.time() of last packet (zero = never)
     last_track2d_by_id: dict[int, Track2DMessage] = field(default_factory=dict)
     last_track3d_by_id: dict[int, Track3DMessage] = field(default_factory=dict)
+    # Latest per-zone contents (ZoneStateMessage) — the COMMUNICATION panel's
+    # zone cards read this when no gateway is configured (local UDP path).
+    zone_state_by_zone: dict[str, ZoneStateMessage] = field(default_factory=dict)
     received: int = 0
     dropped_malformed: int = 0
     dropped_version: int = 0
@@ -52,6 +73,12 @@ class BusState:
     latency_p50_ms: float | None = None
     latency_p95_ms: float | None = None
     latency_samples: int = 0
+    # From the Backbone's diagnostics heartbeat (5 s interval): per-camera
+    # ingest fps + pipeline fps. ``diagnostics_ts`` (receive time) lets readers
+    # ignore stale values after a STOP.
+    fps_by_camera: dict[str, float] = field(default_factory=dict)
+    pipeline_fps: float | None = None
+    diagnostics_ts: float = 0.0
 
 
 class BusSubscriber:
@@ -122,12 +149,16 @@ class BusSubscriber:
                 last_envelope_ts=self._state.last_envelope_ts,
                 last_track2d_by_id=dict(self._state.last_track2d_by_id),
                 last_track3d_by_id=dict(self._state.last_track3d_by_id),
+                zone_state_by_zone=dict(self._state.zone_state_by_zone),
                 received=self._state.received,
                 dropped_malformed=self._state.dropped_malformed,
                 dropped_version=self._state.dropped_version,
                 latency_p50_ms=self._pct(lats, 50),
                 latency_p95_ms=self._pct(lats, 95),
                 latency_samples=len(lats),
+                fps_by_camera=dict(self._state.fps_by_camera),
+                pipeline_fps=self._state.pipeline_fps,
+                diagnostics_ts=self._state.diagnostics_ts,
             )
 
     def is_fresh(self, threshold_s: float) -> bool:
@@ -184,12 +215,24 @@ class BusSubscriber:
                 self._state.last_track2d_by_id[msg.track_id] = msg
             elif isinstance(msg, Track3DMessage):
                 self._state.last_track3d_by_id[msg.track_id] = msg
+            elif isinstance(msg, ZoneStateMessage):
+                self._state.zone_state_by_zone[msg.zone] = msg
+            elif isinstance(msg, DiagnosticsMessage):
+                self._state.fps_by_camera = dict(msg.fps_by_camera)
+                self._state.pipeline_fps = float(msg.fps)
+                self._state.diagnostics_ts = now
 
         # Broadcast to live WebSocket clients via the event loop, if attached.
+        # NOTE: call_soon_threadsafe only SCHEDULES the callback — an exception
+        # inside it (QueueFull once no /ws/tracks client is draining) would be
+        # raised later ON the event loop, unhandled, and uvloop then logs the
+        # whole handle repr including every queued message (the giant console
+        # dumps). _offer_broadcast handles the full queue itself: drop the
+        # OLDEST and keep the newest — latest-only, silent, bounded.
         if self._broadcast_queue is not None and self._loop is not None:
             try:
                 self._loop.call_soon_threadsafe(
-                    self._broadcast_queue.put_nowait, msg,
+                    _offer_broadcast, self._broadcast_queue, msg,
                 )
-            except (RuntimeError, asyncio.QueueFull):
-                pass
+            except RuntimeError:
+                pass          # loop shutting down

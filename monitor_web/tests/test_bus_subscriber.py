@@ -136,3 +136,88 @@ def test_stop_is_idempotent() -> None:
     sub.start()
     sub.stop()
     sub.stop()   # must not raise
+
+
+def test_zone_state_stored_by_zone_name() -> None:
+    """zone_state envelopes populate snapshot().zone_state_by_zone — the local
+    data source for the COMMUNICATION panel's zone cards."""
+    from backbone.comms.schemas import ZoneObject, ZoneStateMessage
+
+    sub, port = _bind_subscriber()
+    sub.start()
+    try:
+        msg = ZoneStateMessage(
+            ts=time.time(), zone="dock",
+            objects=(
+                ZoneObject(track_id=1, cls="palette", confidence=0.9,
+                           xy_m=(1.0, 1.0), occupancy_state="empty"),
+                ZoneObject(track_id=2, cls="carton", confidence=0.8, xy_m=(1.2, 1.1)),
+            ),
+            count=2,
+        )
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.sendto(msg.model_dump_json().encode("utf-8"), ("127.0.0.1", port))
+        finally:
+            s.close()
+        assert _wait_for(lambda: "dock" in sub.snapshot().zone_state_by_zone)
+        stored = sub.snapshot().zone_state_by_zone["dock"]
+        assert stored.count == 2
+        assert stored.objects[0].occupancy_state == "empty"
+        assert stored.objects[1].cls == "carton"
+    finally:
+        sub.stop()
+
+
+def test_diagnostics_fps_stored_for_status_panel() -> None:
+    """Diagnostics heartbeats populate per-camera + pipeline fps in the
+    snapshot — the STATUS panel's camera-performance rows."""
+    from backbone.comms.schemas import (
+        CalibrationFactCheck,
+        DiagnosticsMessage,
+        LatencyStats,
+    )
+
+    sub, port = _bind_subscriber()
+    sub.start()
+    try:
+        msg = DiagnosticsMessage(
+            ts=time.time(), node_id="n1", mode="dual_cam_homography_triangulation",
+            sources={"cam_a": "alive", "cam_b": "alive"},
+            frame_count=100, fps=6.1,
+            fps_by_camera={"cam_a": 12.3, "cam_b": 11.8},
+            latency_ms=LatencyStats(), zones=2, subscriptions=1,
+            calibration=CalibrationFactCheck(loaded=True, rms_ok=True, mode=2),
+        )
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.sendto(msg.model_dump_json().encode("utf-8"), ("127.0.0.1", port))
+        finally:
+            s.close()
+        assert _wait_for(lambda: sub.snapshot().fps_by_camera)
+        snap = sub.snapshot()
+        assert snap.fps_by_camera == {"cam_a": 12.3, "cam_b": 11.8}
+        assert snap.pipeline_fps == 6.1
+        assert snap.diagnostics_ts > 0.0
+    finally:
+        sub.stop()
+
+
+def test_broadcast_offer_drops_oldest_when_full() -> None:
+    """With no /ws/tracks client draining, the broadcast queue fills — the
+    offer must evict the OLDEST and keep the newest, silently. (The old direct
+    put_nowait raised QueueFull unhandled on the event loop, and uvloop logged
+    the entire queue repr to the console per message.)"""
+    import asyncio
+
+    from monitor_web.bus_subscriber import _offer_broadcast
+
+    async def run():
+        q: asyncio.Queue = asyncio.Queue(maxsize=2)
+        for i in range(5):
+            _offer_broadcast(q, i)       # never raises
+        assert q.qsize() == 2
+        assert q.get_nowait() == 3       # oldest evicted…
+        assert q.get_nowait() == 4       # …newest kept
+
+    asyncio.run(run())

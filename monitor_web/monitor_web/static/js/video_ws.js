@@ -14,22 +14,53 @@
 //                                        a config save, so a new model/source
 //                                        applies without a page reload)
 //
-// Frames arrive as binary: uint8 idLen | stream-id utf8 | JPEG bytes — rendered
-// via blob URLs into the existing <img> elements, so all CSS (object-fit,
-// expand overlay) keeps working unchanged. Auto-reconnects with backoff.
+// Protocol (client → server, text/JSON): {sub: id} | {unsub: id} | {ack: id}.
+// Frames arrive as binary: uint8 idLen | stream-id utf8 | JPEG bytes.
+//
+// LATEST-FRAME-ONLY rendering: each binary message only fills a per-stream
+// one-slot holder; a single requestAnimationFrame loop swaps the NEWEST slot
+// into the <img> (older undisplayed frames are simply overwritten — never
+// queued), revokes the previous blob URL unconditionally at swap, and sends
+// {ack: id} so the server's credit gate paces sends to the client's real
+// render rate. This is what stops the demo-observed frame accumulation: a
+// slow/stalled browser now always shows the newest frame at its own pace
+// instead of walking a growing FIFO of stale ones (and no longer leaks blob
+// URLs whose load events never fired). Auto-reconnects with backoff.
 
 (function () {
   "use strict";
 
-  const subs = new Map();   // streamId -> { img, lastUrl }
+  const subs = new Map();   // streamId -> { img, lastUrl, pending }
   let ws = null;
   let retries = 0;
   let retryTimer = null;
+  let rafId = null;
   const decoder = new TextDecoder();
 
   function wsUrl() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     return `${proto}://${location.host}/ws/video`;
+  }
+
+  function scheduleRender() {
+    if (rafId === null) rafId = requestAnimationFrame(render);
+  }
+
+  // One rAF pass for all streams: swap each pending (newest) frame into its
+  // <img>, revoke the previous blob URL (aborting a stale in-flight decode is
+  // exactly the point), and ack so the server refills our credit.
+  function render() {
+    rafId = null;
+    for (const [id, entry] of subs) {
+      if (entry.pending === null) continue;
+      const buf = entry.pending;
+      entry.pending = null;
+      const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
+      if (entry.lastUrl) URL.revokeObjectURL(entry.lastUrl);
+      entry.lastUrl = url;
+      entry.img.src = url;
+      send({ ack: id });
+    }
   }
 
   function connect() {
@@ -38,7 +69,10 @@
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       retries = 0;
-      for (const id of subs.keys()) ws.send(JSON.stringify({ sub: id }));
+      for (const id of subs.keys()) {
+        ws.send(JSON.stringify({ sub: id }));
+        ws.send(JSON.stringify({ ack: id }));   // prime the credit window
+      }
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") {
@@ -53,13 +87,10 @@
       const id = decoder.decode(view.subarray(1, 1 + idLen));
       const entry = subs.get(id);
       if (!entry) return;
-      const url = URL.createObjectURL(new Blob([view.subarray(1 + idLen)], { type: "image/jpeg" }));
-      const prev = entry.lastUrl;
-      entry.lastUrl = url;
-      entry.img.src = url;
-      // Revoke the PREVIOUS frame's URL once the new one has loaded (revoking
-      // immediately can abort the in-flight decode on slow machines).
-      if (prev) entry.img.addEventListener("load", () => URL.revokeObjectURL(prev), { once: true });
+      // Latest-slot only — no blob/src work here (that happens once per
+      // animation frame in render(), always with the newest payload).
+      entry.pending = view.subarray(1 + idLen);
+      scheduleRender();
     };
     ws.onclose = () => scheduleReconnect();
     ws.onerror = () => { try { ws.close(); } catch { /* already closed */ } };
@@ -82,15 +113,17 @@
       if (entry.img === img && id !== streamId) detach(id);
     }
     if (subs.has(streamId)) { subs.get(streamId).img = img; return; }
-    subs.set(streamId, { img, lastUrl: null });
+    subs.set(streamId, { img, lastUrl: null, pending: null });
     connect();
     send({ sub: streamId });
+    send({ ack: streamId });                   // prime the credit window
   }
 
   function detach(streamId) {
     const entry = subs.get(streamId);
     if (!entry) return;
     subs.delete(streamId);
+    entry.pending = null;
     if (entry.lastUrl) URL.revokeObjectURL(entry.lastUrl);
     send({ unsub: streamId });
   }
@@ -99,8 +132,15 @@
     for (const id of subs.keys()) {
       send({ unsub: id });
       send({ sub: id });
+      send({ ack: id });                       // re-prime credit after rebuild
     }
   }
+
+  // rAF is suspended in hidden tabs — on return, drain whatever landed in the
+  // slots and re-prime the server's credit so full rate resumes instantly.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) scheduleRender();
+  });
 
   window.__videoWS = { attach, detach, resubscribeAll };
 })();

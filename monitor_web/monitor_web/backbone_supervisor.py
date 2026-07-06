@@ -247,7 +247,15 @@ class BackboneSupervisor:
                 stderr=subprocess.STDOUT,
                 bufsize=1,
                 text=True,
-                env={**os.environ},
+                # Cage the native thread pools. The seg model's CUDA graph has
+                # CPU-assigned head ops (no CUDA kernel → Memcpy + CPU compute);
+                # uncapped, their worker pool spreads over every core (~7 busy
+                # threads ≈ 1.5+ cores measured via py-spy) and starves the
+                # dashboard/browser. 2 threads keeps p95 in budget at a
+                # fraction of the CPU. Explicit env in the operator's shell
+                # still wins (setdefault semantics via the dict merge order).
+                env={"OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2",
+                     **os.environ},
                 cwd=str(self._cwd),
             )
         except FileNotFoundError as exc:

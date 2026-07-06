@@ -101,3 +101,71 @@ def test_build_stream_id_mapping(monkeypatch):
         routes_ws_video._build_stream(None, "cam:cam_a:bogus")
     with pytest.raises(LookupError):
         routes_ws_video._build_stream(None, "mp4:x")
+
+
+# ---- credit-gated sends (latest-frame-only to a slow client) ---------------
+
+
+def _counter_frame_gen(period_s: float = 0.005, n: int = 2000):
+    """Frames whose uniform pixel value encodes the frame index (mod 250) —
+    lets a test read WHICH frame it received after JPEG round-trip."""
+    for i in range(n):
+        yield np.full((24, 32, 3), i % 250, dtype=np.uint8)
+        time.sleep(period_s)
+
+
+def _frame_counter(data: bytes) -> int:
+    import cv2
+    id_len = data[0]
+    jpeg = np.frombuffer(data[1 + id_len:], dtype=np.uint8)
+    img = cv2.imdecode(jpeg, cv2.IMREAD_COLOR)
+    return round(float(img.mean()))
+
+
+def test_credit_mode_sends_only_newest_on_ack(client, monkeypatch):
+    """After the first ack the server sends one frame per credit; while the
+    client withholds acks the one-slot holder keeps overwriting, so the frame
+    delivered on the NEXT ack is the NEWEST — never the stale backlog."""
+    monkeypatch.setattr(routes_ws_video, "ACK_REFILL_S", 60.0)   # refill can't fire
+    monkeypatch.setattr(routes_ws_video, "_build_stream",
+                        lambda state, sid: _counter_frame_gen())
+    with client.websocket_connect("/ws/video") as ws:
+        ws.send_json({"sub": "cam:cam_a"})
+        ws.send_json({"ack": "cam:cam_a"})       # priming ack → credit mode
+        first = _frame_counter(ws.receive_bytes())
+        # Possibly one more frame from the priming window; drain nothing else —
+        # now STOP acking and let many frames pass on the server (generous
+        # window: CI/parallel-test load slows the 5 ms generator).
+        time.sleep(0.5)
+        ws.send_json({"ack": "cam:cam_a"})
+        second = _frame_counter(ws.receive_bytes())
+        # Latest-only proof: the delivered frame skipped far ahead of first+1.
+        assert second - first > 5, (
+            f"expected a jump to the newest frame, got {first} -> {second} "
+            f"(a FIFO backlog would deliver ~{first + 1})")
+
+
+def test_credit_refill_recovers_lost_acks(client, monkeypatch):
+    """With acks lost (client never acks again), the refill timer keeps a slow
+    trickle flowing instead of freezing the panel forever."""
+    monkeypatch.setattr(routes_ws_video, "ACK_REFILL_S", 0.05)
+    monkeypatch.setattr(routes_ws_video, "_build_stream",
+                        lambda state, sid: _counter_frame_gen())
+    with client.websocket_connect("/ws/video") as ws:
+        ws.send_json({"sub": "cam:cam_a"})
+        ws.send_json({"ack": "cam:cam_a"})       # enter credit mode
+        for _ in range(3):                        # no further acks — refill only
+            data = ws.receive_bytes()
+            assert data[1:1 + data[0]].decode() == "cam:cam_a"
+
+
+def test_ack_for_unknown_stream_is_ignored(client, monkeypatch):
+    """An ack for a stream that was just unsubscribed (resubscribe race) must
+    not error or kill the socket."""
+    released = threading.Event()
+    monkeypatch.setattr(routes_ws_video, "_build_stream",
+                        lambda state, sid: _frame_gen(released))
+    with client.websocket_connect("/ws/video") as ws:
+        ws.send_json({"ack": "zone:gone"})       # unknown sid — silently ignored
+        ws.send_json({"sub": "zone:zp_x"})
+        ws.receive_bytes()                        # socket still healthy

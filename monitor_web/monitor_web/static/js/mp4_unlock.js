@@ -41,7 +41,8 @@ async function populatePicker() {
 }
 
 function revealTab() {
-  // The MP4 tab is shown reactively via x-show="$store.bigPanel.mp4Unlocked".
+  // The MP4 and CARTE (map) tabs are shown reactively via
+  // x-show="$store.bigPanel.mp4Unlocked" — one dev unlock reveals both.
   const store = bigPanelStore();
   if (store) store.mp4Unlocked = true;
   populatePicker();

@@ -74,10 +74,17 @@ def _ensure_launchable(backbone_data: dict, cfg) -> None:
     # from the cameras being written NOW (in-memory), not the stale on-disk file,
     # so a mode switch repoints correctly in the same save. The file may not exist
     # yet (calibration still to be run); caught with a clear message at START.
+    # Mode 2 honours the operator's path override (``mode2_calibration_path`` UI
+    # setting, set via the calibration picker) — e.g. an isical-Studio artefact —
+    # so a Settings save must not stomp it back to the managed default.
     cams = backbone_data.get("cameras", {})
     n_cams = len(cams) if isinstance(cams, dict) else 0
     mode = 1 if n_cams <= 1 else 2
     cal = Path(cfg.backbone_config_path).resolve().parent / f"mode{mode}" / "calibration.json"
+    if mode == 2:
+        override = str(_read_ui_settings(cfg).get("mode2_calibration_path") or "").strip()
+        if override:
+            cal = Path(override)
     backbone_data["calibration_path"] = str(cal)
 
 
@@ -328,9 +335,16 @@ def _read_ui_settings(cfg) -> dict[str, Any]:
 
 
 def _merge_ui_settings(cfg, patch: dict[str, Any]) -> dict[str, Any]:
-    current = _read_ui_settings(cfg)
+    # Strict read-modify-write via the unified store: an existing-but-unreadable
+    # file must raise (→ HTTP 500), never merge into {} and overwrite — that
+    # exact path once wiped every zone/calibration override/preference.
+    current = dashboard_config._load_all_or_none(cfg)
+    if current is None:
+        raise dashboard_config.StoreCorrupt(
+            f"{cfg.ui_settings_path} exists but is unreadable — fix or remove it "
+            f"(a .bak of the last good write sits next to it)")
     current.update(patch or {})
-    _write_yaml_atomic(Path(cfg.ui_settings_path), current)
+    dashboard_config.write_all(cfg, current)   # atomic + keeps a .bak
     return current
 
 
@@ -338,7 +352,12 @@ def _merge_ui_settings(cfg, patch: dict[str, Any]) -> dict[str, Any]:
 
 
 @router.get("/api/config")
-async def get_config(request: Request) -> JSONResponse:
+# Sync `def` ON PURPOSE (here and for the other read handlers below): these do
+# filesystem walks / YAML reads / ONNX metadata loads. As `async def` they ran
+# that blocking I/O ON the event loop — one cold model-list walk froze every
+# request for its whole duration (measured 20+ s Settings opens). Sync handlers
+# run in the threadpool; the loop stays responsive.
+def get_config(request: Request) -> JSONResponse:
     """Return the editable subset of the Backbone config + the current zones."""
     cfg = request.app.state.settings
     backbone_data = _read_backbone(cfg)
@@ -463,7 +482,7 @@ async def get_config(request: Request) -> JSONResponse:
 
 
 @router.get("/api/detection/onnx-files")
-async def detection_onnx_files(request: Request) -> JSONResponse:
+def detection_onnx_files(request: Request) -> JSONResponse:
     """List the trained ``best.onnx`` exports under ``trainer/isidet/runs/``.
 
     Mirrors ``/api/cameras/available``: scan the filesystem, return a JSON list,
@@ -474,7 +493,7 @@ async def detection_onnx_files(request: Request) -> JSONResponse:
 
 
 @router.get("/api/detection/pose-onnx-files")
-async def detection_pose_onnx_files(request: Request) -> JSONResponse:
+def detection_pose_onnx_files(request: Request) -> JSONResponse:
     """List person-pose ``*.onnx`` exports (path contains "pose") under the trainer
     runs and ``models/`` — populates the Settings pose-model dropdown."""
     return JSONResponse({"files": list_pose_onnx()})
@@ -556,7 +575,7 @@ def _model_info(onnx_path: str | None) -> dict:
 
 
 @router.get("/api/detection/classes")
-async def detection_classes(request: Request, path: str | None = None) -> JSONResponse:
+def detection_classes(request: Request, path: str | None = None) -> JSONResponse:
     """Class names embedded in the selected (``?path=``) or configured detection
     ONNX. The Settings modal DISPLAYS these read-only so the operator never keeps a
     class-name list in sync with the model — the detector self-configures from the
@@ -719,7 +738,7 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
     if payload.mqtt_sink is not None:
         ms = payload.mqtt_sink
         sink_dict: dict[str, Any] = {"plugin": "mqtt", "host": ms.host, "port": ms.port}
-        # Splice the prefix (use provided value; JS defaults it to isi/<node_id>).
+        # Splice the prefix (use provided value; JS defaults it to isiMonitor3D/v1/<node_id>).
         if ms.prefix:
             sink_dict["prefix"] = ms.prefix
         # Only write optional auth/tls fields when truthy — keep the YAML clean.
@@ -824,7 +843,7 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
 
 
 @router.get("/api/ui-settings")
-async def get_ui_settings(request: Request) -> JSONResponse:
+def get_ui_settings(request: Request) -> JSONResponse:
     """Return the dashboard UI-preferences dict (e.g. {'mp4_selected': ...})."""
     return JSONResponse(_read_ui_settings(request.app.state.settings))
 

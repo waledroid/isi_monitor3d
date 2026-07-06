@@ -694,7 +694,7 @@ def test_sahi_detector_agnostic_same_result():
 
     assert len(out_b) == len(out_s) == 1
     bb, bs = out_b[0].bbox_xyxy, out_s[0].bbox_xyxy
-    for a, b in zip(bb, bs):
+    for a, b in zip(bb, bs, strict=True):
         assert abs(a - b) <= 2.0, "batched and sequential paths agree"
 
 
@@ -715,11 +715,13 @@ def test_sahi_false_parity_with_single_pass():
     assert 40 <= cx <= 70
 
 
-def test_sahi_carry_forward_between_passes():
+def test_sahi_carry_forward_between_passes(monkeypatch):
     """SAHI runs every SAHI_PERIOD-th genuine frame; between passes the snapshot is
     re-published with a bumped frame_ts and a valid_s wide enough that the carried
-    boxes do not expire."""
+    boxes do not expire. (Motion gate off — this pins the SAHI cadence in
+    isolation; on a static scene the gate would legitimately skip even more.)"""
     import monitor_web.zone_worker as zw
+    monkeypatch.setattr(zw, "MOTION_GATE_ENABLED", False)
     frame = np.zeros((240, 320, 3), dtype=np.uint8)
     frame[60:100, 40:70] = 255
     patch = _sahi_patch("z", 0, 0, 200, 160)
@@ -783,3 +785,195 @@ def test_worker_start_stop_clean():
     w.stop()
     assert w._thread is None
     assert not any(t.name == name for t in threading.enumerate())
+
+
+def test_merge_tile_dets_joins_quadrants_into_one_union():
+    """The reported bug: a large object split across a 2x2 SAHI grid produced
+    FOUR partial boxes that never joined (their pairwise overlap is only the
+    thin tile band, and NMS-suppression would keep a quarter anyway). The
+    union-merge must return ONE detection whose bbox is the hull."""
+    from monitor_web.zone_worker import _merge_tile_dets
+
+    def det(x1, y1, x2, y2, conf, cls="palette", mask=None):
+        from backbone.core.types import Detection
+        return Detection(camera_id="z#0", capture_ts=0.0, cls=cls,
+                         confidence=conf, bbox_xyxy=(x1, y1, x2, y2),
+                         foot_uv=((x1 + x2) / 2, y2), keypoints_uv=None, mask=mask)
+
+    # One object spanning 0..200 x 0..160, seen as 4 quadrants with a ~20 px
+    # shared band (the tile overlap).
+    quads = [
+        det(0, 0, 110, 90, 0.9),
+        det(90, 0, 200, 90, 0.8),
+        det(0, 70, 110, 160, 0.7),
+        det(90, 70, 200, 160, 0.6),
+    ]
+    merged = _merge_tile_dets(quads)
+    assert len(merged) == 1, f"quadrants must merge to ONE, got {len(merged)}"
+    assert merged[0].bbox_xyxy == (0.0, 0.0, 200.0, 160.0)   # the union hull
+    assert merged[0].confidence == 0.9                        # max of members
+    assert merged[0].foot_uv == (100.0, 160.0)                # hull bottom-centre
+
+    # Two genuinely distinct same-class objects (no shared band) stay separate.
+    separate = [det(0, 0, 60, 60, 0.9), det(140, 100, 200, 160, 0.8)]
+    assert len(_merge_tile_dets(separate)) == 2
+
+    # Different classes never merge even when overlapping.
+    mixed = [det(0, 0, 100, 100, 0.9, cls="palette"),
+             det(20, 20, 120, 120, 0.8, cls="carton")]
+    assert len(_merge_tile_dets(mixed)) == 2
+
+
+def test_merge_tile_dets_or_composes_masks():
+    from backbone.core.types import Detection
+
+    from monitor_web.zone_worker import _merge_tile_dets
+
+    m1 = np.zeros((160, 200), dtype=bool)
+    m1[0:90, 0:110] = True
+    m2 = np.zeros((160, 200), dtype=bool)
+    m2[0:90, 90:200] = True
+    dets = [
+        Detection(camera_id="z#0", capture_ts=0.0, cls="palette", confidence=0.9,
+                  bbox_xyxy=(0, 0, 110, 90), foot_uv=(55, 90), keypoints_uv=None, mask=m1),
+        Detection(camera_id="z#1", capture_ts=0.0, cls="palette", confidence=0.8,
+                  bbox_xyxy=(90, 0, 200, 90), foot_uv=(145, 90), keypoints_uv=None, mask=m2),
+    ]
+    merged = _merge_tile_dets(dets)
+    assert len(merged) == 1
+    assert merged[0].mask is not None
+    assert merged[0].mask[10, 10] and merged[0].mask[10, 190]   # both halves present
+
+
+def test_enhance_preserves_detection_geometry():
+    """ENH must change pixel VALUES only — a detection on the enhanced crop
+    remaps to the same source coords as on the raw crop (the fed→crop meta
+    follows the fed size, which ENH may upscale)."""
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    frame[60:100, 90:120] = 255
+    base = _patch("z", 0, 0, 200, 160)
+
+    det = WhiteBoxDetector(supports_batch=True)
+    plain = dict(base)
+    w1, _ = _sahi_worker([plain], det, frame=frame)
+    w1._detect_all_zones(frame, [plain])
+    d_plain = w1.snapshot()["zones"]["z"][0].bbox_xyxy
+
+    enh = dict(base)
+    enh["enhance"] = True
+    w2, _ = _sahi_worker([enh], det, frame=frame)
+    w2._detect_all_zones(frame, [enh])
+    d_enh = w2.snapshot()["zones"]["z"][0].bbox_xyxy
+
+    for a, b in zip(d_plain, d_enh, strict=True):
+        assert abs(a - b) <= 2.0, f"geometry drifted: {d_plain} vs {d_enh}"
+
+
+def test_enhance_off_is_byte_identical():
+    """Default (enhance off) must not touch the fed image at all."""
+    w, _, _ = _worker([], running=True)
+    frame = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+    patch = _patch("z", 0, 0, 200, 160)
+    fed, _meta = w._build_zone_crop(frame, patch, 320, 240)
+    assert np.array_equal(fed, frame[0:160, 0:200])
+
+
+def test_enhance_upscales_small_crop_to_infer_size():
+    """A far zone smaller than the model input is fed UPSCALED (cubic) instead
+    of tiny + linear letterbox upscale at the detector."""
+    w, _, _ = _worker([], running=True)
+    frame = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
+    patch = _patch("z", 0, 0, 200, 160)
+    patch["enhance"] = True
+    fed, meta = w._build_zone_crop(frame, patch, 320, 240)
+    assert max(fed.shape[:2]) == 320          # infer_size
+    assert (meta["fw"], meta["fh"]) == (fed.shape[1], fed.shape[0])
+
+
+def test_enhance_ema_reduces_noise_and_resets_on_shape_change():
+    """The EMA temporal denoise: static scene + per-tick noise → variance of
+    the fed crop drops across ticks; a crop-size change resets the state
+    instead of blending mismatched shapes."""
+    from monitor_web.zone_worker import _enhance_crop
+
+    rng = np.random.default_rng(3)
+    base = np.full((100, 100, 3), 128, dtype=np.uint8)
+
+    ema = None
+    first_noise = None
+    for i in range(6):
+        noisy = np.clip(base.astype(np.int16)
+                        + rng.integers(-40, 40, base.shape), 0, 255).astype(np.uint8)
+        _out, ema = _enhance_crop(noisy, 100, ema)
+        resid = float(np.std(ema.astype(np.float32) - 128.0))
+        if i == 0:
+            first_noise = resid
+    assert resid < first_noise * 0.6, (
+        f"EMA must average noise down (tick0 {first_noise:.1f} -> {resid:.1f})")
+
+    # Shape change: prev EMA ignored, no crash.
+    _out, ema2 = _enhance_crop(np.zeros((50, 80, 3), dtype=np.uint8), 100, ema)
+    assert ema2.shape == (50, 80, 3)
+
+
+def test_enhance_survives_tiny_and_thin_tiles():
+    """The live crash: a thin SAHI tile with a fixed 8x8 CLAHE grid produced
+    zero-size tile ROIs and cv2 asserted. Tiny/thin inputs must enhance (or
+    pass through contrast) without raising."""
+    from monitor_web.zone_worker import _enhance_crop
+
+    for shape in [(8, 8, 3), (12, 300, 3), (300, 10, 3), (33, 40, 3)]:
+        img = np.random.randint(0, 255, shape, dtype=np.uint8)
+        out, ema = _enhance_crop(img, 320, None)
+        assert out.dtype == np.uint8 and out.size > 0
+        # second tick with EMA state — still fine
+        out2, _ = _enhance_crop(img, 320, ema)
+        assert out2.size > 0
+
+
+# ---- motion gate ------------------------------------------------------------
+
+
+def test_motion_gate_skips_inference_for_static_crop():
+    """The same frame twice within the refresh window → the second tick serves
+    the cached detections without calling the detector, published as ok."""
+    patches = [_patch("z1", 10, 10, 60, 60)]
+    w, _hub, detector = _worker(patches, [_det(bbox=(20.0, 20.0, 30.0, 30.0))])
+    frame = np.full((240, 320, 3), 60, dtype=np.uint8)
+    w._detect_all_zones(frame, patches)
+    assert detector.calls == 1
+    first = w.zone_dets("z1")
+    w._detect_all_zones(frame, patches)               # identical frame → gated
+    assert detector.calls == 1
+    assert w.snapshot()["status"]["z1"] == "ok"
+    assert len(w.zone_dets("z1")) == len(first)       # cached dets republished
+
+
+def test_motion_gate_reruns_on_change_and_after_refresh():
+    import monitor_web.zone_worker as zw
+
+    patches = [_patch("z1", 10, 10, 60, 60)]
+    w, _hub, detector = _worker(patches, [_det(bbox=(20.0, 20.0, 30.0, 30.0))])
+    frame = np.full((240, 320, 3), 60, dtype=np.uint8)
+    w._detect_all_zones(frame, patches)
+    assert detector.calls == 1
+    moved = frame.copy()
+    moved[20:50, 20:50] = 220                          # in-zone change
+    w._detect_all_zones(moved, patches)
+    assert detector.calls == 2
+    # Static again → gated…
+    w._detect_all_zones(moved, patches)
+    assert detector.calls == 2
+    # …until the forced-refresh interval elapses (self-heal for gradual drift).
+    w._motion["z1"]["last_infer"] -= (zw.MOTION_REFRESH_S + 1.0)
+    w._detect_all_zones(moved, patches)
+    assert detector.calls == 3
+
+
+def test_motion_state_cleared_on_set_patches():
+    patches = [_patch("z1", 10, 10, 60, 60)]
+    w, _hub, _detector = _worker(patches, [_det(bbox=(20.0, 20.0, 30.0, 30.0))])
+    w._detect_all_zones(np.full((240, 320, 3), 60, dtype=np.uint8), patches)
+    assert w._motion
+    w.set_patches(patches)                             # geometry may have changed
+    assert not w._motion

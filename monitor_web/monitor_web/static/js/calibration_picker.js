@@ -68,7 +68,7 @@ async function open() {
     });
   } else if (configured.length === 2) {
     el("cal-mode2")?.classList.remove("hidden");
-    // S18.B replaces this placeholder with a full Multical capture-and-run UX.
+    _cleanupCurrentMode = mountMode2Path(status);
   } else {
     // No cameras configured yet — show the Mode 1 panel with a coaching hint.
     el("cal-mode1")?.classList.remove("hidden");
@@ -86,6 +86,50 @@ async function open() {
   root.addEventListener("click", _backdropHandler);
 
   root.classList.remove("hidden");
+}
+
+// Mode 2: the calibration.json is produced elsewhere (isical Studio / Multical
+// CLI); the picker just asks for its PATH, validates it server-side, and the
+// Backbone loads it in place — no copying.
+function mountMode2Path(status) {
+  const input = el("cal-mode2-path");
+  const useBtn = el("cal-mode2-use");
+  if (input && status && status.calibration_path && !input.value) {
+    input.value = status.calibration_path;
+  }
+  if (useBtn) {
+    useBtn.onclick = async () => {
+      const path = (input?.value || "").trim();
+      if (!path) {
+        showResultInline(false, t("calibrate_mode2_path_missing",
+          "Enter the path to a calibration.json"));
+        return;
+      }
+      useBtn.disabled = true;
+      try {
+        const res = await fetch("/api/calibrate/mode2-path", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showResultInline(false, data.detail
+            || t("calibrate_mode2_path_invalid", "Not a usable calibration.json"));
+          return;
+        }
+        showResultInline(true,
+          `${t("calibrate_mode2_path_ok", "Calibration loaded")}: `
+          + `${(data.calibrated_cameras || []).join(", ")} (${data.calibration_mode})`);
+        document.dispatchEvent(new CustomEvent("calibration:saved"));
+      } catch {
+        showResultInline(false, t("calibrate_mode2_path_failed", "Request failed"));
+      } finally {
+        useBtn.disabled = false;
+      }
+    };
+  }
+  return () => { if (useBtn) useBtn.onclick = null; };
 }
 
 function showResultInline(ok, msg) {

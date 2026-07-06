@@ -28,6 +28,7 @@ from ..detection_overlay import (
     display_fps,
     distance_line_style,
     distances_enabled,
+    get_async_pose,
     get_detector,
     get_pose_detector,
     masks_enabled,
@@ -156,11 +157,13 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
     cross-zone deduped at publish time) — naturally empty when the camera has no
     zones.
 
-    POSE INHERITS CAMERA FPS: the pose model runs on EVERY cam-view frame, so it
-    follows the Camera-FPS video rate (the cam-view frames already arrive at the
-    source ``capture_fps`` = Camera FPS — no extra throttle here). The cam view
-    stays fluid because that rate is itself the operator-chosen Camera FPS; the
-    separate "Zones FPS" preference governs only the zone workers, not pose.
+    POSE IS ASYNC: the video loop never waits on the pose model. A per-camera
+    background worker (``AsyncPoseRunner``) infers on the newest frame at
+    whatever rate the GPU allows; every rendered frame overlays the LATEST
+    completed skeletons. The view therefore stays at the camera rate even while
+    the GPU is busy with the live Backbone; skeletons refresh at the
+    pose-achievable rate. The separate "Zones FPS" preference governs only the
+    zone workers, not pose.
     Zone-worker detections and distance lines are re-drawn on every frame too
     (cheap — the worker already ran the inference; we just draw its cached result)."""
     pose = dist_view = dets = None
@@ -176,14 +179,26 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
             continue
         dist_view = _warp_camera(cfg, camera_id) if distances_enabled(cfg) else None
         dist_style = distance_line_style(cfg)
-        # Pose runs every frame → inherits the Camera-FPS cam-view rate (fluid).
-        pose = get_pose_detector(cfg)
+        # Async pose: the runner infers in a background worker on the newest
+        # frame; the video loop just overlays the latest skeletons — the view
+        # stays at camera rate even when the GPU is busy with the Backbone.
+        pose = get_async_pose(cfg, camera_id)
         dets = get_zone_dets() if get_zone_dets is not None else []
-        yield annotate_frame(image, None, cam_id=camera_id, detections=dets,
+        # show_occupancy stays False on the CAM views: the raw machine labels
+        # ('palette_vide' / 'palette_carton_…') read as noise here — the human
+        # summary lives in the COMMUNICATION zone cards. Zone panels + the MP4
+        # dev viewer keep the badge (still governed by the Settings toggle).
+        out = annotate_frame(image, None, cam_id=camera_id, detections=dets,
                              show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
                              show_boxes=boxes_enabled(cfg), pose_detector=pose,
                              dist_view=dist_view, dist_max_m=person_pallet_max_m(cfg),
-                             show_occupancy=occupancy_enabled(cfg), dist_style=dist_style)
+                             show_occupancy=False, dist_style=dist_style)
+        # No fused-track ring markers here (the '#id cls' amber/green circles
+        # were retired as clutter, like the mirrored rings before them): every
+        # zone has a detecting TWIN on the other camera, so boxes/masks appear
+        # in both views natively, and the metric proof lives in the Settings
+        # triangulation test + the warp view's unified-track overlay.
+        yield out
 
 
 def _warp_camera(cfg, camera_id: str):

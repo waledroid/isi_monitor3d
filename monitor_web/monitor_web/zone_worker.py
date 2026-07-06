@@ -38,7 +38,7 @@ from .camera_hub import get_hub
 from .detection_overlay import (
     ZoneModelUnavailable,
     display_fps,
-    get_pose_detector,
+    get_async_pose,
     get_zone_detector,
     read_backbone,
     resolve_model,
@@ -69,6 +69,19 @@ def _snapshot_fresh(snap: dict) -> bool:
 # for this long, then retried — so a refused/broken model self-heals when VRAM
 # frees up, while the other zones keep running undisturbed in between.
 ZONE_RETRY_COOLDOWN_S = 30.0
+
+# Motion gate: a zone whose crop hasn't visibly changed since its last
+# inference SKIPS the model and republishes its cached detections — in a
+# mostly-static warehouse this removes the bulk of zone GPU work (the nano
+# model is launch-overhead-bound, so fewer calls is the real lever). "Changed"
+# = > MOTION_FRAC of the 32x32 gray signature moved by > MOTION_PIX_DELTA
+# levels (robust to sensor/compression noise). A forced re-inference every
+# MOTION_REFRESH_S self-heals anything the gate misses (gradual light drift).
+MOTION_GATE_ENABLED = True
+MOTION_REFRESH_S = 2.0
+MOTION_SIG_PX = 32
+MOTION_PIX_DELTA = 15
+MOTION_FRAC = 0.02
 
 # SAHI frame-skip: the heavy tiled pass runs only every Nth genuine frame. Between
 # passes the worker re-publishes the cached snapshot with a bumped frame_ts (the
@@ -138,6 +151,113 @@ def _zone_objects(dets, *, iou_thresh: float = 0.5) -> list:
             continue
         kept.append(d)
     return kept
+
+
+def _enhance_crop(img, infer_size: int, prev_ema):
+    """Far/dim-zone slice enhancement (the per-zone ENH toggle). Returns
+    ``(enhanced_uint8, new_ema_uint8)``. Deliberately MINIMAL — measured on a
+    320^2 crop, CLAHE-style contrast cost 15 ms and unsharp 2.4 ms per tile
+    (a full CPU core at zone rates) for marginal CNN gain, so both were cut.
+    What remains is ~0.5 ms:
+
+    1. EMA temporal denoise (alpha=0.5, uint8 ``cv2.addWeighted`` — the float
+       version cost 4.3 ms in conversions alone): fixed camera + mostly-static
+       pallets => averaging across ticks removes IR/night sensor noise WITHOUT
+       blurring object detail. Movers ghost slightly; people are pose's job.
+    2. Cubic upscale to ``infer_size`` when the crop is smaller (otherwise the
+       detector letterbox does a plain linear upscale of a tiny crop).
+    """
+    if prev_ema is not None and prev_ema.shape == img.shape:
+        out = cv2.addWeighted(img, 0.5, prev_ema, 0.5, 0)
+    else:
+        out = img
+    ema = out
+
+    h, w = out.shape[:2]
+    longest = max(h, w)
+    if 0 < longest < infer_size:
+        sc = infer_size / float(longest)
+        out = cv2.resize(out, (max(1, round(w * sc)), max(1, round(h * sc))),
+                         interpolation=cv2.INTER_CUBIC)
+    return out, ema
+
+
+def _merge_tile_dets(dets, *, ios_thresh: float = 0.15) -> list:
+    """UNION-merge tile detections describing one physical object (SAHI).
+
+    NMS-style suppression is wrong for tiled inference: a large object split
+    across a 2x2 grid yields four PARTIAL boxes whose pairwise overlap is only
+    the thin tile-overlap band — suppression either keeps all four (the
+    observed un-joined quadrants) or keeps ONE quarter. Here same-class boxes
+    that are connected (IoU, centre containment, or intersection-over-smaller
+    >= ``ios_thresh``) merge into their UNION: bbox hull, max confidence,
+    OR-composed masks, foot at the hull's bottom-centre. Greedy over clusters,
+    repeated until stable so chains (TL-TR-BL-BR) collapse to one object."""
+    from backbone.core.types import Detection
+    objs = _drop_persons(dets)
+
+    def connected(a, b) -> bool:
+        if _iou(a, b) > 0.5:
+            return True
+        acx, acy = (a[0] + a[2]) / 2.0, (a[1] + a[3]) / 2.0
+        bcx, bcy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
+        if (b[0] <= acx <= b[2] and b[1] <= acy <= b[3]) or \
+           (a[0] <= bcx <= a[2] and a[1] <= bcy <= a[3]):
+            return True
+        ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+        iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+        inter = ix * iy
+        smaller = min(max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1]),
+                      max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1]))
+        return smaller > 0.0 and inter / smaller >= ios_thresh
+
+    clusters: list[dict] = []
+    for d in sorted(objs, key=lambda x: float(getattr(x, "confidence", 0.0)),
+                    reverse=True):
+        clusters.append({"cls": str(getattr(d, "cls", "")).lower(),
+                         "bbox": list(d.bbox_xyxy), "members": [d]})
+    changed = True
+    while changed:
+        changed = False
+        i = 0
+        while i < len(clusters):
+            j = i + 1
+            while j < len(clusters):
+                a, b = clusters[i], clusters[j]
+                if a["cls"] == b["cls"] and connected(a["bbox"], b["bbox"]):
+                    a["bbox"] = [min(a["bbox"][0], b["bbox"][0]),
+                                 min(a["bbox"][1], b["bbox"][1]),
+                                 max(a["bbox"][2], b["bbox"][2]),
+                                 max(a["bbox"][3], b["bbox"][3])]
+                    a["members"].extend(b["members"])
+                    del clusters[j]
+                    changed = True
+                else:
+                    j += 1
+            i += 1
+
+    merged: list = []
+    for c in clusters:
+        best = max(c["members"], key=lambda x: float(getattr(x, "confidence", 0.0)))
+        if len(c["members"]) == 1:
+            merged.append(best)
+            continue
+        x1, y1, x2, y2 = c["bbox"]
+        mask = None
+        member_masks = [m.mask for m in c["members"] if m.mask is not None]
+        if member_masks:
+            mask = member_masks[0].copy()
+            for mm in member_masks[1:]:
+                mask |= mm
+        merged.append(Detection(
+            camera_id=best.camera_id, capture_ts=best.capture_ts, cls=best.cls,
+            confidence=float(best.confidence),
+            bbox_xyxy=(float(x1), float(y1), float(x2), float(y2)),
+            foot_uv=((x1 + x2) / 2.0, float(y2)),
+            keypoints_uv=None, mask=mask,
+        ))
+    merged.sort(key=lambda d: float(getattr(d, "confidence", 0.0)), reverse=True)
+    return merged
 
 
 def _remap_det(d, x0, y0, rx, ry, iw, ih, ch, cw):
@@ -220,6 +340,10 @@ class ZoneDetectionWorker:
         self._thread: threading.Thread | None = None
         # Per-zone isolation state (worker-thread only — no locking needed):
         # circuit breaker {zone_id: (blocked_until_monotonic, reason)}.
+        self._ema: dict[str, np.ndarray] = {}   # per-zone/tile EMA denoise state
+        # Motion gate state: zone_id -> {"sig", "dets", "last_infer"} (see the
+        # MOTION_* constants). Cleared with the EMA state on any zone change.
+        self._motion: dict[str, dict] = {}
         self._zone_breaker: dict[str, tuple[float, str]] = {}
         # SAHI frame-skip counter (worker-thread only): counts genuine frames so
         # the heavy tiled pass runs every SAHI_PERIOD-th frame; between passes the
@@ -243,6 +367,16 @@ class ZoneDetectionWorker:
             self._thread.join(timeout=join_timeout)
             self._thread = None
 
+    def _apply_enhance(self, patch: dict, fed, key: str):
+        """Run the ENH chain on a fed crop/tile when the patch opts in; EMA
+        state is keyed per zone (and per tile) and self-resets on shape change."""
+        if not patch.get("enhance"):
+            return fed
+        infer_size = int(patch.get("infer_size") or 320)
+        fed, ema = _enhance_crop(fed, infer_size, self._ema.get(key))
+        self._ema[key] = ema
+        return fed
+
     def set_patches(self, patches: list[dict], src_cfg: dict | None = None) -> None:
         """Swap in a fresh zone list (and optionally a new camera source); the loop
         picks it up at the next iteration via the reload event. Clears the per-zone
@@ -251,6 +385,8 @@ class ZoneDetectionWorker:
         if src_cfg is not None:
             self._src_cfg = dict(src_cfg)
         self._zone_breaker.clear()
+        self._ema.clear()          # zone set/geometry changed — fresh denoise state
+        self._motion.clear()       # geometry changed — cached dets/signatures stale
         self._reload.set()
 
     # ---- read API (any thread) ----
@@ -369,6 +505,7 @@ class ZoneDetectionWorker:
         # `get_zone_detector` caches on), so they can be fed in ONE detect() call.
         groups: dict[tuple, list[dict]] = {}
         sahi_patches: list[dict] = []
+        pending_sig: dict[str, np.ndarray] = {}
         for patch in patches:
             zone_id = str(patch.get("id"))
             polys[zone_id] = _scaled_polygon(patch, (iw, ih))
@@ -377,6 +514,20 @@ class ZoneDetectionWorker:
                 # Breaker open → excluded from the batch entirely (it isn't run).
                 per_zone[zone_id], statuses[zone_id] = [], reason
                 continue
+            # Motion gate (applies to plain AND SAHI zones — SAHI passes are the
+            # most expensive, so skipping static ones saves the most).
+            if MOTION_GATE_ENABLED:
+                sig = self._motion_signature(frame, patch, iw, ih)
+                cached = self._motion.get(zone_id)
+                if (sig is not None and cached is not None
+                        and now - cached["last_infer"] < MOTION_REFRESH_S
+                        and float((np.abs(sig - cached["sig"])
+                                   > MOTION_PIX_DELTA).mean()) <= MOTION_FRAC):
+                    per_zone[zone_id] = list(cached["dets"])
+                    statuses[zone_id] = "ok"
+                    continue
+                if sig is not None:
+                    pending_sig[zone_id] = sig
             if patch.get("sahi"):
                 # SAHI zones never share a batch — each owns a tiled detect pass.
                 sahi_patches.append(patch)
@@ -456,11 +607,22 @@ class ZoneDetectionWorker:
                 continue
             self._zone_breaker.pop(zid, None)
             per_zone[zid], statuses[zid] = dets, "ok"
+        # Commit motion state for every zone that RAN this tick and succeeded —
+        # its detections become the cached result served while the crop is still.
+        for zid, sig in pending_sig.items():
+            if statuses.get(zid) == "ok":
+                self._motion[zid] = {"sig": sig,
+                                     "dets": list(per_zone.get(zid) or []),
+                                     "last_infer": now}
         resolved = self._resolve_overlaps(per_zone, polys)
         # People (full-frame pose, foot points in source px) — best-effort.
+        # SHARED async runner (same one the cam view uses): submit the frame,
+        # read the LATEST completed skeletons. The zone tick never blocks on
+        # pose, and pose runs ONCE per camera on the GPU instead of twice
+        # (worker + cam view each ran their own full-frame pass before).
         people: list = []
         try:
-            pose = get_pose_detector(self._cfg)
+            pose = get_async_pose(self._cfg, self.camera_id)
             if pose is not None:
                 for p in pose.predict(frame):
                     foot = getattr(p, "foot_uv", None)
@@ -487,6 +649,26 @@ class ZoneDetectionWorker:
                           "zones": resolved, "status": statuses, "people": people,
                           "valid_s": valid_s}
 
+    def _motion_signature(self, frame, patch: dict, iw: int, ih: int):
+        """Tiny gray thumbnail of the zone's crop region (``MOTION_SIG_PX``²,
+        int16 for signed diffs) — ~0.1 ms. ``None`` for degenerate crops."""
+        try:
+            rect = patch_rect(patch)
+            if rect is None:
+                return None
+            box = patch_pixel_box(rect, patch.get("frame_wh"), (iw, ih))
+            if box is None:
+                return None
+            x0, y0, x1, y1 = box
+            if x1 - x0 < 4 or y1 - y0 < 4:
+                return None
+            crop = frame[y0:y1, x0:x1]
+            small = cv2.resize(crop, (MOTION_SIG_PX, MOTION_SIG_PX),
+                               interpolation=cv2.INTER_AREA)
+            return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.int16)
+        except Exception:
+            return None
+
     def _build_zone_crop(self, frame, patch: dict, iw: int, ih: int):
         """ROI-crop + pre-resize one zone to its ``infer_size``. Returns
         ``(fed, meta)`` where ``fed`` is the BGR image to feed the detector and
@@ -511,6 +693,9 @@ class ZoneDetectionWorker:
             s = infer_size / float(longest)
             fed = cv2.resize(crop, (max(1, round(cw * s)), max(1, round(ch * s))),
                              interpolation=cv2.INTER_AREA)
+        # ENH toggle (before meta: the chain may upscale small crops, and
+        # fw/fh below must describe the FED image for the det remap).
+        fed = self._apply_enhance(patch, fed, str(patch.get("id")))
         fh, fw = fed.shape[:2]
         meta = {"x0": x0, "y0": y0, "rect": rect, "cw": cw, "ch": ch,
                 "fw": fw, "fh": fh}
@@ -597,10 +782,10 @@ class ZoneDetectionWorker:
         if cw <= 0 or ch <= 0:
             return None
         crop = frame[y0:y1, x0:x1]
-        rows = max(1, min(4, int(patch.get("sahi_rows") or 2)))
-        cols = max(1, min(4, int(patch.get("sahi_cols") or 2)))
         overlap = max(0.0, min(0.5, float(patch.get("sahi_overlap") or 0.2)))
         infer_size = int(patch.get("infer_size") or 320)
+        rows = max(1, min(4, int(patch.get("sahi_rows") or 2)))
+        cols = max(1, min(4, int(patch.get("sahi_cols") or 2)))
         # Tile step = crop / count; tile size = step grown by the overlap fraction,
         # clamped to the crop. Origins step by the base size so the grid spans the
         # whole crop with neighbour tiles sharing an `overlap`-wide band.
@@ -626,6 +811,9 @@ class ZoneDetectionWorker:
                     s = infer_size / float(longest)
                     fed = cv2.resize(sub, (max(1, round(tw * s)), max(1, round(th * s))),
                                      interpolation=cv2.INTER_AREA)
+                # ENH toggle — per-tile EMA key; rx/ry below use the FED size.
+                fed = self._apply_enhance(patch, fed,
+                                          f"{patch.get('id')}#{r}x{c}")
                 fh, fw = fed.shape[:2]
                 # fed→crop scale: a tile-fed pixel maps to (tw/fw, th/fh) crop px.
                 tmeta = {"tx0": tx0, "ty0": ty0, "tw": tw, "th": th,
@@ -677,7 +865,7 @@ class ZoneDetectionWorker:
                 _tile_det_to_crop(d, tm, zmeta["cw"], zmeta["ch"])
                 for d in out.get(keys[i], [])
             )
-        merged = _zone_objects(crop_dets, iou_thresh=0.5)
+        merged = _merge_tile_dets(crop_dets)
         return self._postprocess_zone(merged, patch, zmeta, iw, ih, global_conf)
 
     def _detect_group_batched(self, frame, group: list[dict], detector,

@@ -1149,7 +1149,7 @@ button.btn-stop:hover {
   box-shadow: none;
 }
 
-/* Zone rows */
+/* ── Camera zone rows (Settings ▸ Zones ▸ Camera zones) ─────────────────────── */
 
 .config-zone-list {
   display: flex;
@@ -1157,89 +1157,191 @@ button.btn-stop:hover {
   gap: 10px;
 }
 
+/* Card wrapper — flex column so header / controls / info-bar stack cleanly */
 .config-zone-row {
-  /* num | name | model | size | conf | fps | colour | delete — the slice/dims
-     text moved into the .zm-coords line below (beside the polygon info). */
-  display: grid;
-  grid-template-columns: 28px minmax(80px, 1.4fr) 120px 78px 70px 70px 40px 32px;
-  align-items: center;
-  gap: 8px 12px;
-  padding: 12px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
   background: rgba(0, 0, 0, 0.2);
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  transition: all 0.25s ease;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
-
 .config-zone-row:hover {
-  background: rgba(0, 0, 0, 0.35);
-  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.32);
+  border-color: rgba(255, 255, 255, 0.11);
 }
 
-/* Per-zone outline-colour swatch (compact, overrides the generic input padding). */
-.config-zone-row input.zm-color {
-  grid-column: 7;
-  width: 36px;
-  height: 30px;
-  padding: 2px !important;
-  cursor: pointer;
+/* ── Header: [#]  [name input]  [CAM badge]  [delete] ── */
+.czr-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.czr-header .zm-name {
+  flex: 1;
   min-width: 0;
 }
 
-/* Per-zone delete (trash) icon — last column; reddens on hover. */
-.config-zone-row .zm-delete {
-  grid-column: 8;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-}
-.config-zone-row .zm-delete:hover { color: #f87171; }
-
-/* Per-zone confidence + FPS boxes — tighter padding so the small fields fit. */
-.config-zone-row input.zm-conf,
-
-/* Saved polygon vertices — spans the whole row, wraps under the controls. */
-.config-zone-row .zm-coords {
-  grid-column: 1 / -1;
-  font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
-  color: var(--text-muted);
-  opacity: 0.85;
-  word-break: break-word;
-}
-.config-zone-row .zm-coords b {
-  color: var(--text);
-  font-weight: 600;
-  opacity: 0.7;
-}
-
+/* Zone-number badge (circle) */
 .config-zone-num {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
   width: 24px;
   height: 24px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+/* Camera source badge (CAM 1 / CAM 2) */
+.czr-cam-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--start-blue, #4f63ff);
+  background: rgba(79, 99, 255, 0.12);
+  border: 1px solid rgba(79, 99, 255, 0.25);
+  border-radius: 6px;
+  padding: 2px 7px;
+  line-height: 1.6;
+  text-transform: uppercase;
+}
+
+/* Delete (trash) icon button */
+.config-zone-row .zm-delete {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border-radius: 8px;
+  margin-left: auto;
+}
+.config-zone-row .zm-delete:hover { color: #f87171; }
+
+/* ── Controls row: labelled field groups ── */
+.czr-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+}
+
+/* A labelled field group — label stacked above input/select */
+.czr-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 120px;
+  min-width: 0;
+}
+.czr-field--narrow { flex: 0 1 72px; }
+.czr-field--color  { flex: 0 0 56px; }
+
+.czr-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+/* Colour swatch — compact, square */
+.config-zone-row input.zm-color {
+  width: 36px;
+  height: 30px;
+  padding: 2px !important;
+  cursor: pointer;
+  border-radius: 6px;
+  min-width: 0;
+}
+
+/* SAHI toggle — checkbox + label text, vertically centred */
+.czr-sahi-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.czr-sahi-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+.czr-sahi-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--start-blue, #4f63ff);
+  cursor: pointer;
+}
+
+/* ── Info bar: monospace chips showing slice + polygon coords ── */
+.czr-info-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.czr-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font: 10.5px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 100%;
+}
+.czr-chip--poly {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.czr-chip-key {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+}
+.czr-chip-verts {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* .zm-iconbtn — shared with other icon buttons in the panel */
 .zm-iconbtn {
-  padding: 8px;
+  padding: 6px;
   border-radius: 8px;
   line-height: 0;
 }
+.zm-iconbtn svg { display: block; }
 
-.zm-iconbtn svg {
-  display: block;
-}
-
+/* .zm-polygon — used in floor zones (retained for compatibility) */
 .zm-polygon {
   font-family: "JetBrains Mono", "Menlo", monospace;
   font-size: 10px;
@@ -1253,7 +1355,6 @@ button.btn-stop:hover {
   white-space: nowrap;
   max-width: 140px;
 }
-
 .zm-polygon.has-points {
   color: var(--status-green);
   background: rgba(46, 213, 115, 0.08);
@@ -1729,6 +1830,55 @@ button.btn-stop:hover {
   align-items: center;
   gap: 6px;
   font-size: 11px;
+}
+
+/* Zone-status cards — one per floor zone, fed by the MQTT zone_state.
+   Default (no broker/backbone): dashed outline in the zone's kind colour,
+   TRANSPARENT and dimmed, no background. Live: full opacity; the inline style
+   adds the translucent kind-colour background (border colour is inline too). */
+#comms-zone-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.comms-zone-card {
+  border: 1.5px dashed currentColor;   /* colour overridden inline per zone */
+  border-radius: 6px;
+  background: transparent;
+  padding: 5px 8px;
+  opacity: 0.45;                        /* dimmed until live */
+  transition: opacity 0.25s ease, background-color 0.25s ease;
+}
+
+.comms-zone-card.is-live {
+  opacity: 1;
+}
+
+.comms-zone-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.comms-zone-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.comms-zone-line {
+  font-size: 12.5px;
+  font-weight: 600;
+  padding-left: 14px;   /* align under the name, past the status dot */
+  color: var(--text-muted);
+}
+
+.comms-zone-card.is-live .comms-zone-line {
+  color: inherit;
 }
 
 .comms-node-id {
