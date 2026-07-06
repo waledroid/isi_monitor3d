@@ -33,7 +33,9 @@ from .detect import (
 )
 
 _PAIR_WINDOW_S = 0.5      # both cameras must gate-pass within this window for a pair
-FLOOR_TARGET = 3          # distinct flat ChArUco placements (synchronized pairs) wanted
+FLOOR_TARGET = 4          # distinct flat ChArUco placements (synchronized pairs) wanted
+                          # — 4 spread placements over-determine the plane fit, so one
+                          # poorly-detected board can't skew the world anchor
 
 # Targetless texture-quality readout tunables (cheap per-frame; NOT SuperPoint).
 _TEXTURE_MIN_FEATURES = 150   # below this a view is flagged low-texture
@@ -96,8 +98,12 @@ def wipe_phase_captures(project_dir: Path, phase: str, cameras: list[str]) -> in
     sub = {"intrinsic": "intrinsic", "floor": "floor"}.get(phase, "extrinsic")
     removed = 0
     for cid in cameras:
-        for f in (Path(project_dir) / sub / cid).glob("*.jpg"):
+        cam_dir = Path(project_dir) / sub / cid
+        for f in cam_dir.glob("*.jpg"):
             f.unlink(missing_ok=True)
+            # The per-shot metadata sidecar goes with its image — a stale .json
+            # would otherwise outlive a retake with a smaller shot count.
+            f.with_suffix(".json").unlink(missing_ok=True)
             removed += 1
     return removed
 
@@ -393,7 +399,8 @@ class CaptureSession:
     """A live capture run for one project + phase across its configured cameras."""
 
     def __init__(self, project_dir: Path, cfg, phase: str, *,
-                 cameras: list[str] | None = None, source_factory=_open_source) -> None:
+                 cameras: list[str] | None = None, source_factory=_open_source,
+                 floor_extend: bool = False) -> None:
         from ..core.project import charuco_spec
         self.project_dir = Path(project_dir)
         self.cfg = cfg
@@ -405,6 +412,15 @@ class CaptureSession:
         self.pair_count = 0
         configured = cfg.configured_cameras()
         cams = [c for c in (cameras or configured) if c in configured]
+        # [+ FLOOR]: append MORE placements to an already-registered floor set —
+        # extend the target past the shots on disk, else the session would seed
+        # at target and finish instantly (the "clicking does nothing" trap).
+        if phase == "floor" and floor_extend:
+            existing = min(
+                (len(list((self.project_dir / "floor" / cid).glob("*.jpg"))) for cid in cams),
+                default=0,
+            )
+            self.floor_target = existing + FLOOR_TARGET
         sub = {"intrinsic": "intrinsic", "floor": "floor"}.get(phase, "extrinsic")
         self.workers: dict[str, _CamWorker] = {
             cid: _CamWorker(self, cid, cfg.cameras[cid],

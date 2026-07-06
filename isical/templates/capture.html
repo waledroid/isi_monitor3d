@@ -47,6 +47,13 @@
       <input id="tag-gap-cm" type="number" min="0" max="50" step="0.1"
              value="{{ tag_gap_cm }}">
     </label>
+    <label class="board-measure-label" title="Measure ONE square of the printed ChArUco
+board (intrinsics + floor anchor). Wrong value = every metric distance wrong by the
+same factor — the default 3.5 cm silently mis-scaled a 12 cm board by 3.5×.">
+      ChArUco square (cm):
+      <input id="square-cm" type="number" min="0.5" max="100" step="0.1"
+             value="{{ square_cm }}">
+    </label>
     <span id="board-derived" class="msg board-derived"></span>
     <button id="cap-start" class="primary">Start capture</button>
     {% endif %}
@@ -65,6 +72,8 @@
   <div class="toolbar" id="floor-tools">
     <span class="msg">Floor anchor — single-button, both-camera synchronized auto-snap:</span>
     <button id="floor-run" class="floor-btn primary">[FLOOR]</button>
+    <button id="floor-add" class="floor-btn" hidden
+            title="Append more floor placements to the existing set (no wipe)">[+ FLOOR]</button>
     <span id="floor-run-status" class="msg floor-status"></span>
   </div>
   <div id="floor-live" class="floor-preview" hidden>

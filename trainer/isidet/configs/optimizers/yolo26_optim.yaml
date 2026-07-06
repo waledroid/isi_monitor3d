@@ -13,12 +13,12 @@ optimizer:
   scheduler:
     type: "CosineAnnealing"
     warmup_epochs: 3
-    T_max: 200     # synced with total epochs
+    T_max: 100     # synced with total epochs
     eta_min: 0.00001
 
 early_stopping:
   enabled: true
-  patience: 25     # 🛑 stop if fitness hasn't improved in 25 epochs (keeps best).
+  patience: 20     # 🛑 stop if fitness hasn't improved in 25 epochs (keeps best).
                    # NOTE: a crash + --resume RESETS Ultralytics' early-stop
                    # counter, so on a resumed run enforce it by watching results.csv.
   min_delta: 0.0005

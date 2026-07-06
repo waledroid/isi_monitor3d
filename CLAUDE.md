@@ -112,6 +112,8 @@ The Backbone is a single process that turns RTSP video into metric, identity-sta
 
 ### Two methods, one Backbone
 
+**Zone-scoped detection (default).** The system is zone-based: with `detection.scope: zones` (the default) the Backbone's object detector sees only the configured floor zones — each zone polygon is projected into each camera (z=0 and z=2 m, distortion-aware) once at build, cropped per pair, batched through the detector at `detection.zone_imgsz` (default 384, needs a dynamic export), and remapped (`backbone/detection/zone_scope.py`). **No zones configured ⇒ the object detector is not built at all — pose-only Backbone** (person tracks continue; the pose model is the stated global exception). `scope: full_frame` restores the everything-visible behaviour (existing tests pin it). The dashboard's zone *patches* are a separate display-only layer; the COMMUNICATION zone cards are fed by the dashboard zone workers (`/api/zone-patches/state`), not by the Backbone's world-zone MQTT.
+
 - **Homography** runs always, per frame, per detection. Foot point → undistort → `H` → `(X, Y) m` → cross-camera fusion + disagreement gate → ByteTrack in meters → temporal vote → publish `Track2D`.
 - **Triangulation** runs only in **Mode 2** for subscribed tracks. Identity inherited from the 2D tracker; 2-cam DLT (`cv2.triangulatePoints`) by default, N-cam via `aniposelib.CameraGroup` when ≥3 cameras saw the track (S5.5); reprojection-gated; 3D Kalman; publish `Track3D` with the same `track_id`.
 
@@ -128,7 +130,7 @@ The orchestrator chooses an operational mode at build time from `len(cfg["camera
 
 **One mechanism, both cases.** The same solo-emit code in `FrameSynchronizer._try_emit_solo` covers Mode 1 startup (only 1 camera ever configured) and Mode 2 degradation (one of 2 cameras dies mid-run). Downstream (`CrossCamFusion`, `DisagreementGate`, `Orchestrator.step()`) handles N=1 input naturally.
 
-**Latency note.** Solo emission adds ≈`degraded_emit_after_ms` (default 100 ms) to per-frame latency for the surviving / single camera. Within the < 200 ms KPI but tightens the budget — tune down if you have headroom to spare.
+**Latency note.** Solo emission is LATEST-FRAME-ONLY via a sticky per-camera degraded flag: Mode 1 (single camera configured) emits every frame immediately (no `degraded_emit_after_ms` tax); Mode 2 degradation pays the wait once at entry — the NEWEST buffered frame emits, older ones are discarded — then streams the survivor at full input fps with zero buffering. The flag clears automatically when aligned pairing resumes.
 
 ### The five plugin seams (and only these)
 

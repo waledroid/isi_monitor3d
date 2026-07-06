@@ -116,6 +116,7 @@ def run_extrinsic(project_dir: Path) -> dict:
     from calibration.calibrate import (
         EXTRINSIC_REPROJECTION_RMS_HARD_LIMIT_PX,
         assemble_calibration,
+        check_extrinsic_floor_consistency,
         estimate_floor_anchor_charuco,
         run_multical_extrinsics,
     )
@@ -141,6 +142,13 @@ def run_extrinsic(project_dir: Path) -> dict:
     logger.info("extrinsic: solving rig %s with K fixed", cams)
     progress.report(0, 3, "extrinsic:multical")
     solution = run_multical_extrinsics(extr, target, work, intrinsic_json)
+    # Honesty gate: the floor pairs independently imply the relative camera
+    # pose — refuse to write a calibration the two data sources disagree on
+    # (catches board-scale mistakes and extrinsic-solve failures that
+    # per-camera reprojection RMS is blind to).
+    consistency = check_extrinsic_floor_consistency(floors, solution, board)
+    if consistency.get("checked"):
+        logger.info("extrinsic: floor-consistency %s", consistency)
     progress.report(1, 3, "extrinsic:floor-anchor")
     anchor = estimate_floor_anchor_charuco(floors, solution, board)
     progress.report(2, 3, "extrinsic:assemble")

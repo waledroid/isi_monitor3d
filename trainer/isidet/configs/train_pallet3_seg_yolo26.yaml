@@ -19,15 +19,15 @@ hooks:
 
 # --- model: YOLO26 SEGMENTATION ---
 model_type: "yolo"
-model_size: "m"
-weights: "yolo26m-seg.pt"     # *-seg.pt → Ultralytics auto-selects task=segment
+model_size: "n"
+weights: "yolo26n-seg.pt"     # *-seg.pt → Ultralytics auto-selects task=segment
 dataset_path: "data/pallet3_yolo_seg"   # same 3-class set as the yolo11m run
 optimizer_config: "configs/optimizers/yolo26_optim.yaml"   # AdamW + patience 25
 
 # 12 GB RTX 5070: 640 is far lighter than 1024, so batch 4 is comfortable and
 # coexists with the dashboard's GPU detector.
-batch_size: 4
-imgsz: 640
+batch_size: 8 #4 normaly
+imgsz: 320
 mixed_precision: true
 epochs: 200
 workers: 2

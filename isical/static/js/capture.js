@@ -128,9 +128,17 @@ async function pollStatus() {
 }
 
 // ---- floor-prompt state (extrinsic) ----
+let floorRegistered = false;   // on-disk floor pairs exist → button = [REDO FLOOR]
+
+function floorIdleLabel() {
+  return floorRegistered ? "[REDO FLOOR]" : "[FLOOR]";
+}
+
 async function refreshFloorState() {
   // Reflect on-disk floor presence (phase_status.floor booleans): when both
-  // cameras have ≥1 floor pair, show the "ready to Solve" confirmation.
+  // cameras have ≥1 floor pair, show the "ready to Solve" confirmation and
+  // flip the capture button to [REDO FLOOR] (a fresh session would otherwise
+  // start at target and instantly finish — "clicking does nothing").
   const prompt = document.getElementById("floor-prompt");
   if (!prompt) return;
   let floors = {};
@@ -140,6 +148,10 @@ async function refreshFloorState() {
   } catch { return; }
   const cams = Object.keys(floors);
   const allFloor = cams.length > 0 && cams.every((c) => floors[c]);
+  floorRegistered = allFloor;
+  if (floorRunBtn && !floorRunning) floorRunBtn.textContent = floorIdleLabel();
+  // [+ FLOOR] only makes sense once a floor set exists (append, no wipe).
+  if (floorAddBtn) floorAddBtn.hidden = !allFloor || floorRunning;
   const doneEl = document.getElementById("floor-prompt-done");
   if (doneEl) doneEl.hidden = !allFloor;
 }
@@ -188,7 +200,12 @@ function deriveBoard() {
     boardDerived.textContent = `→ tag_length_m ${tag_length_m.toFixed(2)}, tag_spacing ${tag_spacing.toFixed(2)}`;
     boardDerived.className = "msg board-derived";
   }
-  return { tag_length_cm: len, tag_gap_cm: gap };
+  const body = { tag_length_cm: len, tag_gap_cm: gap };
+  // ChArUco square (intrinsics + floor anchor) — optional field, sent when valid.
+  const sqEl = document.getElementById("square-cm");
+  const sq = sqEl ? parseFloat(sqEl.value) : NaN;
+  if (Number.isFinite(sq) && sq > 0) body.square_cm = sq;
+  return body;
 }
 
 let _boardSaveTimer = null;
@@ -201,7 +218,8 @@ async function saveBoardConfig() {
 
 if (tagLenInput && tagGapInput) {
   deriveBoard();   // show the derived config on load
-  for (const el of [tagLenInput, tagGapInput]) {
+  const squareInput = document.getElementById("square-cm");
+  for (const el of [tagLenInput, tagGapInput, squareInput].filter(Boolean)) {
     el.addEventListener("input", () => {
       deriveBoard();
       clearTimeout(_boardSaveTimer);
@@ -268,6 +286,7 @@ window.addEventListener("beforeunload", () => {
 let floorRunning = false;
 let floorTimer = null;
 const floorRunBtn = document.getElementById("floor-run");
+const floorAddBtn = document.getElementById("floor-add");
 const floorRunStatus = document.getElementById("floor-run-status");
 const floorLive = document.getElementById("floor-live");
 
@@ -296,13 +315,33 @@ async function pollFloor() {
   if (target > 0 && pairs >= target) { await stopFloor(); await refreshFloorState(); }
 }
 
-async function startFloor() {
+async function startFloor(extend = false) {
   if (!stopBtn.disabled) await stopCapture();       // cameras are exclusive
+  // Three entry points:
+  //   [FLOOR]      — first capture (nothing on disk): plain start.
+  //   [REDO FLOOR] — floor set exists: restart (wipes old shots + starts fresh),
+  //                  else the session would seed AT target and finish instantly
+  //                  (the "clicking does nothing" trap).
+  //   [+ FLOOR]    — append MORE placements: start?extend=1 grows the target
+  //                  past the on-disk count; nothing is deleted.
+  let ep;
+  if (extend) {
+    ep = `/api/p/${project}/capture/floor/start?extend=1`;
+  } else if (floorRegistered) {
+    const ok = window.confirm(
+      "Redo the floor anchor? The existing floor shots will be deleted and retaken.");
+    if (!ok) return;
+    ep = `/api/p/${project}/capture/floor/restart`;
+  } else {
+    ep = `/api/p/${project}/capture/floor/start`;
+  }
   try {
-    await sendJSON(`/api/p/${project}/capture/floor/start`, "POST", {});
+    await sendJSON(ep, "POST", {});
   } catch (e) { if (floorRunStatus) flash(floorRunStatus, e.message, false); return; }
+  if (!extend) floorRegistered = false;
   floorRunning = true;
   if (floorRunBtn) floorRunBtn.textContent = "[STOP FLOOR]";
+  if (floorAddBtn) floorAddBtn.hidden = true;
   if (floorLive) floorLive.hidden = false;
   floorStreams(true);
   if (!floorTimer) floorTimer = setInterval(pollFloor, 700);
@@ -315,13 +354,16 @@ async function stopFloor() {
   clearInterval(floorTimer); floorTimer = null;
   floorStreams(false);
   floorRunning = false;
-  if (floorRunBtn) floorRunBtn.textContent = "[FLOOR]";
   if (floorLive) floorLive.hidden = true;
-  await refreshFloorState();
+  await refreshFloorState();   // sets the idle label: [FLOOR] or [REDO FLOOR]
+  if (floorRunBtn) floorRunBtn.textContent = floorIdleLabel();
 }
 
 if (floorRunBtn) {
   floorRunBtn.onclick = () => (floorRunning ? stopFloor() : startFloor());
+}
+if (floorAddBtn) {
+  floorAddBtn.onclick = () => { if (!floorRunning) startFloor(true); };
 }
 
 // On load (extrinsic), reflect any floor shots already on disk.

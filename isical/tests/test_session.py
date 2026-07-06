@@ -359,3 +359,53 @@ def test_probe_streams_skew(tmp_path):
     assert r["cameras"]["cam_a"]["fps"] > 0
     assert "sync" in r and r["sync"]["pairs"] > 0
     assert r["sync"]["mean_skew_ms"] >= 0    # measured a skew
+
+
+def test_wipe_floor_removes_json_sidecars(tmp_path):
+    """A redo must clear the per-shot metadata sidecars with the images —
+    stale .json would outlive a retake with a smaller shot count."""
+    from isical.capture.session import wipe_phase_captures
+    pdir, _cfg = _two_cam_project(tmp_path)
+    d = pdir / "floor" / "cam_a"
+    d.mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        (d / f"cam_a_{i:03d}.jpg").write_bytes(b"x")
+        (d / f"cam_a_{i:03d}.json").write_text("{}")
+    removed = wipe_phase_captures(pdir, "floor", ["cam_a"])
+    assert removed == 3
+    assert not list(d.glob("*.jpg"))
+    assert not list(d.glob("*.json"))
+
+
+def test_floor_target_is_four():
+    """4 flat placements over-determine the floor-plane fit (user-requested)."""
+    from isical.capture.session import FLOOR_TARGET
+    assert FLOOR_TARGET == 4
+
+
+def test_floor_extend_grows_target_past_existing(tmp_path, monkeypatch):
+    """[+ FLOOR]: with N pairs on disk, extend=True sets target N + FLOOR_TARGET
+    (append); extend=False keeps FLOOR_TARGET (which an existing full set would
+    instantly satisfy — the [REDO FLOOR] path wipes first instead)."""
+    monkeypatch.setattr(sess_mod, "CharucoBoardDetector", _StubCharuco)
+    from isical.capture.session import FLOOR_TARGET
+    from isical.core.project import CameraSpec, create_project, load_project
+    cams = {"cam_a": CameraSpec(id="cam_a", url="rtsp://x/a"),
+            "cam_b": CameraSpec(id="cam_b", url="rtsp://x/b")}
+    pdir = create_project(tmp_path / "data", "rig", cams)
+    cfg = load_project(pdir)
+    for cid in cams:
+        d = pdir / "floor" / cid
+        d.mkdir(parents=True, exist_ok=True)
+        for i in range(3):
+            (d / f"{cid}_{i:03d}.jpg").write_bytes(b"x")
+
+    fac = lambda spec, cid: _StubSource(4)   # noqa: E731
+    s = sess_mod.CaptureSession(pdir, cfg, "floor", source_factory=fac,
+                                floor_extend=True)
+    assert s.floor_target == 3 + FLOOR_TARGET
+    assert s.pair_count == 3                          # seeds from disk
+    assert all(w.target == 3 + FLOOR_TARGET for w in s.workers.values())
+
+    s2 = sess_mod.CaptureSession(pdir, cfg, "floor", source_factory=fac)
+    assert s2.floor_target == FLOOR_TARGET            # default unchanged

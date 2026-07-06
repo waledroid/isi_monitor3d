@@ -35,4 +35,5 @@ async def capture_page(request: Request, name: str, phase: str) -> HTMLResponse:
                  "extrinsic_target": cfg.capture.extrinsic_target,
                  "extrinsic_target_min": EXTRINSIC_TARGET_MIN,
                  "tag_length_cm": round(cm["tag_length_cm"], 2),
-                 "tag_gap_cm": round(cm["tag_gap_cm"], 2)})
+                 "tag_gap_cm": round(cm["tag_gap_cm"], 2),
+                 "square_cm": round(cfg.board.square_length_m * 100.0, 2)})

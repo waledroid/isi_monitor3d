@@ -44,13 +44,18 @@ def _resolve_cameras(cfg, phase: str, cam: str | None) -> list[str]:
 
 
 @router.post("/api/p/{name}/capture/{phase}/start")
-async def start(request: Request, name: str, phase: str, cam: str | None = None) -> dict:
+async def start(request: Request, name: str, phase: str, cam: str | None = None,
+                extend: bool = False) -> dict:
+    """Start a capture session. ``extend=1`` (floor only) APPENDS more shots to
+    an already-registered set: the session's target grows past the on-disk
+    count instead of instantly self-completing at it."""
     if phase not in _PHASES:
         raise HTTPException(status_code=404, detail=f"capture phase must be one of {_PHASES}")
     d, cfg = project_cfg(request, name)
     cameras = _resolve_cameras(cfg, phase, cam)
     try:
-        st = request.app.state.capture.start(name, d, cfg, phase, cameras=cameras)
+        st = request.app.state.capture.start(name, d, cfg, phase, cameras=cameras,
+                                             floor_extend=bool(extend))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"capture start failed: {exc}") from exc
     return {"ok": True, "status": st}

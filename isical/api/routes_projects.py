@@ -143,25 +143,34 @@ async def put_capture_config(request: Request, name: str,
 class BoardConfigBody(BaseModel):
     tag_length_cm: float = Field(gt=0)
     tag_gap_cm: float = Field(ge=0)
+    # ChArUco (intrinsics + floor anchor) — optional so existing callers that
+    # only submit the AprilGrid fields keep working. The metric solve depends
+    # on square_cm: the c1 rig shipped with the 3.5 cm DEFAULT while the
+    # physical board square is ~12.2 cm — a silent 3.5x scale error in every
+    # extrinsic/floor solve. Measure the printed board and enter it here.
+    square_cm: float | None = Field(default=None, gt=0)
+    marker_cm: float | None = Field(default=None, gt=0)
 
 
 @router.get("/api/p/{name}/board-config")
 async def get_board_config(request: Request, name: str) -> dict:
-    """AprilGrid board measurements for the extrinsic form, in cm (operator units).
+    """Board measurements for the capture forms, in cm (operator units).
 
-    Reverses the stored ``board.tag_length_m`` / ``tag_spacing`` back to the ruler
-    measurements: ``tag_length_cm`` and ``tag_gap_cm``, plus the derived config the
-    form echoes back to the operator."""
+    AprilGrid: reverses the stored ``board.tag_length_m`` / ``tag_spacing`` back
+    to the ruler measurements. ChArUco: ``square_cm`` / ``marker_cm`` for the
+    intrinsics + floor board."""
     _d, cfg = project_cfg(request, name)
     cm = board_cm_from_config(cfg.board.tag_length_m, cfg.board.tag_spacing)
     return {**cm,
             "tag_length_m": cfg.board.tag_length_m,
-            "tag_spacing": cfg.board.tag_spacing}
+            "tag_spacing": cfg.board.tag_spacing,
+            "square_cm": round(cfg.board.square_length_m * 100.0, 3),
+            "marker_cm": round(cfg.board.marker_length_m * 100.0, 3)}
 
 
 @router.put("/api/p/{name}/board-config")
 async def put_board_config(request: Request, name: str, body: BoardConfigBody) -> dict:
-    """Persist AprilGrid board geometry from cm measurements (422 on bad input)."""
+    """Persist board geometry from cm measurements (422 on bad input)."""
     d, cfg = project_cfg(request, name)
     try:
         derived = board_config_from_cm(body.tag_length_cm, body.tag_gap_cm)
@@ -169,6 +178,17 @@ async def put_board_config(request: Request, name: str, body: BoardConfigBody) -
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     cfg.board.tag_length_m = derived["tag_length_m"]
     cfg.board.tag_spacing = derived["tag_spacing"]
+    if body.square_cm is not None:
+        marker_cm = body.marker_cm if body.marker_cm is not None \
+            else body.square_cm * (cfg.board.marker_length_m / cfg.board.square_length_m)
+        if not marker_cm < body.square_cm:
+            raise HTTPException(status_code=422,
+                                detail="ChArUco marker must be smaller than the square")
+        cfg.board.square_length_m = body.square_cm / 100.0
+        cfg.board.marker_length_m = marker_cm / 100.0
+        derived = {**derived,
+                   "square_length_m": cfg.board.square_length_m,
+                   "marker_length_m": cfg.board.marker_length_m}
     save_project(d, cfg)
     return {"ok": True, **derived}
 

@@ -7,13 +7,26 @@ import yaml
 import logging
 from pathlib import Path
 
-# 1. System Path Setup
+# 1. System Path Setup — INSERT at the front, don't append: a leftover
+# PYTHONPATH pointing at another isidet checkout (e.g. the old ~/logistic
+# tree) would otherwise shadow THIS tree's src/ — observed as a run silently
+# training with old code (imgsz ignored, date-only run dirs, missing hooks).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.append(str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT))
 
 # 2. Registry and hooks (hooks have no optional dependencies so always safe to import)
 from src.shared.registry import TRAINERS
 import src.training.hooks
+
+# Fail loudly if the imported src is not OURS (shadowing would waste a full
+# training run on stale code).
+import src as _src
+_src_root = Path(_src.__file__).resolve().parent.parent
+if _src_root != PROJECT_ROOT:
+    print(f"FATAL: 'src' imported from {_src_root}, not {PROJECT_ROOT}. "
+          f"Check PYTHONPATH (echo $PYTHONPATH) for a stale isidet checkout.",
+          file=sys.stderr)
+    sys.exit(1)
 
 # Trainer module registry — add new trainers here without touching any other code
 _TRAINER_MODULES = {
