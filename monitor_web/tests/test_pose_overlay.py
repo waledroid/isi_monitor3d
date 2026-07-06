@@ -214,3 +214,35 @@ def test_get_pose_detector_passes_and_reloads_on_imgsz(tmp_path, monkeypatch) ->
     eng2 = do.get_pose_detector(cfg)
     assert eng2 is not eng1 and built[-1]["imgsz"] == 384
     do.reset_detector()
+
+
+def test_pose_display_smoothing_converges_and_snaps() -> None:
+    """predict() blends the drawn skeleton toward the newest result per rendered
+    frame (no more N-fps stepping) but SNAPS for far jumps / new persons."""
+    import numpy as np
+
+    from monitor_web.pose_overlay import Pose, _advance_smoothing
+
+    def pose_at(x):
+        return Pose(box_xyxy=np.array([x, 0.0, x + 50, 100.0]), score=0.9,
+                    keypoints=np.array([[x, 10.0, 0.8]] * 3),
+                    foot_uv=(x, 100.0))
+
+    prev, target = [pose_at(100.0)], [pose_at(140.0)]
+    # A 55 ms frame at tau=0.12 → alpha ≈ 0.37: moves toward, doesn't jump.
+    out = _advance_smoothing(prev, target, 0.055, tau_s=0.12, snap_px=120.0)
+    assert 100.0 < out[0].keypoints[0, 0] < 140.0
+    assert 100.0 < out[0].foot_uv[0] < 140.0
+    # Iterating converges to the target.
+    cur = prev
+    for _ in range(30):
+        cur = _advance_smoothing(cur, target, 0.055, tau_s=0.12, snap_px=120.0)
+    assert abs(cur[0].keypoints[0, 0] - 140.0) < 1.0
+    # Far jump (> snap_px) snaps instead of rubber-banding.
+    out = _advance_smoothing([pose_at(100.0)], [pose_at(600.0)], 0.055,
+                             tau_s=0.12, snap_px=120.0)
+    assert out[0].keypoints[0, 0] == 600.0
+    # Empty target clears; empty prev snaps to target.
+    assert _advance_smoothing([pose_at(1.0)], [], 0.055, tau_s=0.12, snap_px=120.0) == []
+    assert _advance_smoothing([], [pose_at(5.0)], 0.055, tau_s=0.12,
+                              snap_px=120.0)[0].keypoints[0, 0] == 5.0

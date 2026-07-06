@@ -43,6 +43,52 @@ class Pose:
     foot_uv: tuple[float, float]
 
 
+def _centroid(p: Pose) -> np.ndarray:
+    b = p.box_xyxy
+    return np.array([(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0])
+
+
+def _lerp_pose(prev: Pose, target: Pose, alpha: float) -> Pose:
+    """Move ``prev`` toward ``target`` by ``alpha`` (display smoothing only —
+    confidences always come from the target, positions are blended)."""
+    kp = target.keypoints.copy()
+    kp[:, :2] = prev.keypoints[:, :2] + alpha * (target.keypoints[:, :2]
+                                                 - prev.keypoints[:, :2])
+    box = prev.box_xyxy + alpha * (target.box_xyxy - prev.box_xyxy)
+    fu = (prev.foot_uv[0] + alpha * (target.foot_uv[0] - prev.foot_uv[0]),
+          prev.foot_uv[1] + alpha * (target.foot_uv[1] - prev.foot_uv[1]))
+    return Pose(box_xyxy=box, score=target.score, keypoints=kp, foot_uv=fu)
+
+
+def _advance_smoothing(prev: list[Pose], target: list[Pose], dt_s: float,
+                       *, tau_s: float, snap_px: float) -> list[Pose]:
+    """One smoothing step: match previous smoothed poses to the newest result
+    by nearest box centroid and blend; unmatched or far-jumped targets snap."""
+    if not target:
+        return []
+    if not prev:
+        return list(target)
+    alpha = 1.0 - float(np.exp(-max(0.0, min(dt_s, 0.25)) / tau_s))
+    prev_c = [_centroid(p) for p in prev]
+    used: set[int] = set()
+    out: list[Pose] = []
+    for t in target:
+        tc = _centroid(t)
+        best, best_d = None, float("inf")
+        for i, pc in enumerate(prev_c):
+            if i in used:
+                continue
+            d = float(np.hypot(*(tc - pc)))
+            if d < best_d:
+                best, best_d = i, d
+        if best is None or best_d > snap_px:
+            out.append(t)                       # new person / fast mover: snap
+        else:
+            used.add(best)
+            out.append(_lerp_pose(prev[best], t, alpha))
+    return out
+
+
 def _foot(keypoints: np.ndarray, box: np.ndarray, kpt_conf: float) -> tuple[float, float]:
     vis = [keypoints[i] for i in (LEFT_ANKLE, RIGHT_ANKLE) if keypoints[i, 2] >= kpt_conf]
     if vis:
@@ -152,6 +198,14 @@ class AsyncPoseRunner:
 
     _STALE_S = 2.0
     _IDLE_STOP_S = 30.0
+    # Display smoothing: inference completes at ~10-15 Hz while the video
+    # renders at 17-24 fps, so a raw skeleton visibly "steps" every couple of
+    # frames. Each predict() (= one rendered frame) advances a smoothed copy
+    # toward the newest result with a time-based exponential (tau below); a
+    # person whose match moved further than _SNAP_PX snapped instead (fast
+    # motion / new person must not rubber-band across the frame).
+    _SMOOTH_TAU_S = 0.12
+    _SNAP_PX = 120.0
 
     def __init__(self, engine: PoseEngine) -> None:
         self.engine = engine
@@ -159,6 +213,8 @@ class AsyncPoseRunner:
         self._pending: np.ndarray | None = None
         self._poses: list[Pose] = []
         self._result_ts = 0.0
+        self._smoothed: list[Pose] = []
+        self._smooth_ts = 0.0
         self._stopped = False
         self._thread: threading.Thread | None = None
 
@@ -199,8 +255,13 @@ class AsyncPoseRunner:
                 self._thread.start()
             self._cond.notify()
             if now - self._result_ts > self._STALE_S:
+                self._smoothed = []
                 return []
-            return list(self._poses)
+            self._smoothed = _advance_smoothing(
+                self._smoothed, self._poses, now - self._smooth_ts,
+                tau_s=self._SMOOTH_TAU_S, snap_px=self._SNAP_PX)
+            self._smooth_ts = now
+            return list(self._smoothed)
 
     def draw(self, image: np.ndarray, poses: list[Pose]) -> None:
         eng = self.engine
