@@ -56,3 +56,6 @@ calibration/.venv-multical/
 # isical calibration Studio — captures, workspaces, job logs (not source)
 isical/data/
 isical/runs/
+
+# runtime backups of the dashboard config store
+config/*.yaml.bak

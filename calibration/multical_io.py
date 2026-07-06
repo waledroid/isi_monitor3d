@@ -25,6 +25,18 @@ Multical's output structure (v0.4.0):
       "image_sets": { ... }    # ignored here
     }
 
+**Pose convention (load-bearing).** Multical's exported ``camera_poses`` are
+OpenCV-style **camera ← rig** extrinsics: ``p_cam = R @ p_rig + T`` (pinned
+against multical's own ``project_points``, which projects world points through
+``camera_pose`` with zero rvec/tvec). :class:`CameraInRig` stores the INVERSE —
+**rig ← camera** (``p_rig = R_in_rig @ p_cam + t_in_rig``) — because that is
+what every consumer (``_board_pose_in_rig``, ``compose_camera_in_world``, the
+targetless path) composes with. The inversion happens once, in
+``_resolve_poses``. Storing multical's matrices verbatim silently inverts every
+non-master camera's pose: per-camera reprojection RMS cannot catch it, but the
+same physical point observed by two cameras maps metres apart in world
+coordinates (the c1 rig showed a constant 1.65 m cross-camera offset).
+
 Multical does *not* write per-camera reprojection RMS into the JSON — it logs
 it during optimization. RMS values are captured separately from Multical's
 stdout/stderr in :mod:`calibration.calibrate`; this parser stores them only
@@ -62,8 +74,8 @@ class CameraInRig:
     image_size_wh: tuple[int, int]
     K: np.ndarray
     D: np.ndarray
-    R_in_rig: np.ndarray   # world ← camera, where "world" here = rig frame
-    t_in_rig: np.ndarray   # 3-vector
+    R_in_rig: np.ndarray   # rig ← camera: p_rig = R_in_rig @ p_cam + t_in_rig
+    t_in_rig: np.ndarray   # 3-vector (the camera's CENTER in rig coordinates)
     rms_px: float = UNKNOWN_RMS_PX
 
 
@@ -149,11 +161,22 @@ def from_dict(data: dict) -> MultiCalSolution:
     return MultiCalSolution(master_camera=master, cameras=parsed)
 
 
+def _invert_rt(R: np.ndarray, T: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Invert an OpenCV extrinsic: camera←rig ``(R, T)`` → rig←camera.
+
+    Multical exports camera←rig; :class:`CameraInRig` stores rig←camera
+    (see the module docstring — this single inversion is the convention seam).
+    """
+    Rt = R.T
+    return Rt, -Rt @ T
+
+
 def _resolve_poses(
     camera_ids: set[str],
     poses_block: dict,
 ) -> tuple[dict[str, tuple[np.ndarray, np.ndarray]], str]:
-    """Normalize Multical's two key conventions into ``{cam_id: (R, t)}``.
+    """Normalize Multical's two key conventions into ``{cam_id: (R, t)}``,
+    INVERTED into the rig←camera convention ``CameraInRig`` stores.
 
     Returns also the master camera identifier (the one whose pose is identity
     in the rig frame, or — when there is no master — an arbitrary deterministic
@@ -186,13 +209,13 @@ def _resolve_poses(
         master = masters.pop()
         out: dict[str, tuple[np.ndarray, np.ndarray]] = {master: (np.eye(3), np.zeros(3))}
         for other, (_m, R, T) in relative.items():
-            out[other] = (R, T)
+            out[other] = _invert_rt(R, T)   # camera←rig → rig←camera
         return out, master
 
     if not direct:
         raise MultiCalParseError("camera_poses contains no usable entries")
     master = sorted(direct.keys())[0]
-    return direct, master
+    return {cid: _invert_rt(R, T) for cid, (R, T) in direct.items()}, master
 
 
 # ---------------------------------------------------------------------------

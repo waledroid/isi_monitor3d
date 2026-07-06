@@ -113,6 +113,20 @@ def _current_mode(cfg) -> int:
     return 1 if len(_configured_cameras(cfg)) <= 1 else 2
 
 
+def _default_mode_calibration_path(cfg, mode: int) -> Path:
+    """The dashboard-managed calibration file for a mode: ``mode{N}/calibration.json``
+    beside ``backbone.yaml``."""
+    base = Path(cfg.backbone_config_path).resolve().parent
+    return base / f"mode{mode}" / "calibration.json"
+
+
+def _mode2_path_override(cfg) -> str:
+    """Operator-set path to an external Mode-2 calibration.json (e.g. produced by
+    the isical Studio), stored in the UI-settings YAML. Empty string = unset."""
+    from .routes_config import _read_ui_settings
+    return str(_read_ui_settings(cfg).get("mode2_calibration_path") or "").strip()
+
+
 def _mode_calibration_path(cfg, mode: int | None = None) -> Path:
     """The calibration file for a given mode (defaults to the current mode).
 
@@ -120,11 +134,19 @@ def _mode_calibration_path(cfg, mode: int | None = None) -> Path:
     ``backbone.yaml`` so switching camera count in Settings re-applies the saved
     calibration for that mode without re-calibrating: ``mode1/calibration.json`` /
     ``mode2/calibration.json``.
+
+    Mode 2 honours an operator-set **path override** (``mode2_calibration_path``
+    in the UI-settings YAML, set via ``POST /api/calibrate/mode2-path``) so the
+    node can point directly at a calibration produced elsewhere (the isical
+    Studio project dir) without copying files around.
     """
     if mode is None:
         mode = _current_mode(cfg)
-    base = Path(cfg.backbone_config_path).resolve().parent
-    return base / f"mode{mode}" / "calibration.json"
+    if mode == 2:
+        override = _mode2_path_override(cfg)
+        if override:
+            return Path(override)
+    return _default_mode_calibration_path(cfg, mode)
 
 
 def _write_json_atomic(path: Path, payload: str) -> None:
@@ -293,6 +315,52 @@ async def calibrate_single_cam(body: SingleCamBody, request: Request) -> JSONRes
     })
 
 
+class Mode2PathBody(BaseModel):
+    path: str = Field(..., min_length=1, description="Path to a calibration.json")
+
+
+@router.post("/api/calibrate/mode2-path")
+async def calibrate_mode2_path(body: Mode2PathBody, request: Request) -> JSONResponse:
+    """Point Mode 2 at an existing ``calibration.json`` by path (no copy).
+
+    The Mode-2 calibration is produced outside the dashboard (the isical Studio
+    or the Multical CLI). Rather than copying the artefact into
+    ``config/mode2/``, the operator gives its path; we validate it loads and
+    covers ≥2 cameras, persist it as the ``mode2_calibration_path`` UI setting,
+    and stamp ``backbone.yaml``'s ``calibration_path`` (when Mode 2 is active)
+    so the orchestrator uses it on START. Re-calibrating in the Studio then
+    takes effect on the next Backbone restart with no further steps.
+    """
+    cfg = request.app.state.settings
+    target = Path(body.path).expanduser()
+    if not target.is_file():
+        raise HTTPException(status_code=422, detail=f"no such file: {target}")
+    try:
+        rig = CameraRig.from_file(target)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422, detail=f"not a readable calibration.json: {exc}"
+        ) from exc
+    if len(rig.camera_ids) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Mode 2 needs ≥2 cameras; {target.name} has {list(rig.camera_ids)}",
+        )
+
+    from .routes_config import _merge_ui_settings
+    resolved = target.resolve()
+    _merge_ui_settings(cfg, {"mode2_calibration_path": str(resolved)})
+    if _current_mode(cfg) == 2:
+        _register_calibration_in_backbone_yaml(cfg, resolved)
+
+    return JSONResponse({
+        "ok": True,
+        "calibration_path": str(resolved),
+        "calibrated_cameras": list(rig.camera_ids),
+        "calibration_mode": rig.calibration_mode,
+    })
+
+
 @router.post("/api/calibrate/clear")
 async def calibrate_clear(request: Request) -> JSONResponse:
     """Remove the CURRENT mode's calibration (the green-button "clear" action).
@@ -300,11 +368,23 @@ async def calibrate_clear(request: Request) -> JSONResponse:
     Deletes the current-mode calibration file so the CAM feeds stop auto-warping
     and the button returns to white; the other mode's saved calibration is left
     untouched. The operator can then recalibrate the current mode.
+
+    When Mode 2 points at an **external** file via the path override, clearing
+    only forgets the override (and re-stamps ``backbone.yaml`` to the default
+    managed path) — it never deletes the operator's artefact (e.g. an isical
+    project's calibration.json).
     """
     cfg = request.app.state.settings
+    mode = _current_mode(cfg)
     target = _mode_calibration_path(cfg)
+    default = _default_mode_calibration_path(cfg, mode)
     removed = False
-    if target.exists():
+    if mode == 2 and target != default:
+        from .routes_config import _merge_ui_settings
+        _merge_ui_settings(cfg, {"mode2_calibration_path": ""})
+        _register_calibration_in_backbone_yaml(cfg, default)
+        target = default
+    elif target.exists():
         try:
             target.unlink()
             removed = True
@@ -314,7 +394,7 @@ async def calibrate_clear(request: Request) -> JSONResponse:
     return JSONResponse({
         "ok": True,
         "removed": removed,
-        "mode": _current_mode(cfg),
+        "mode": mode,
         "calibration_path": str(target),
         "calibrated_cameras": [],
     })

@@ -574,6 +574,39 @@ def _detect_charuco_in_image(
     return ch_corners.reshape(-1, 2), object_points.reshape(-1, 3)
 
 
+def _compose_board_in_rig(
+    cam: CameraInRig,
+    R_cam_board: np.ndarray,
+    t_cam_board: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Lift a board pose from a camera's frame into the rig frame.
+
+    Camera pose in rig frame is (cam.R_in_rig, cam.t_in_rig) — the rig←camera
+    convention ``CameraInRig`` documents (multical_io inverts Multical's
+    camera←rig export exactly once, at parse):
+        R_rig_board = R_rig_cam @ R_cam_board
+        t_rig_board = R_rig_cam @ t_cam_board + t_rig_cam
+    Pure math — split out so the convention seam is testable without images.
+    """
+    R_rig_board = cam.R_in_rig @ R_cam_board
+    t_rig_board = cam.R_in_rig @ t_cam_board + cam.t_in_rig
+    return R_rig_board, t_rig_board
+
+
+def _board_pose_in_camera(
+    shot_path: Path,
+    cam: CameraInRig,
+    board: CharucoBoardSpec,
+) -> tuple[np.ndarray, np.ndarray]:
+    """One shot → the board's (R, t) pose in the CAMERA frame via solvePnP."""
+    corners_uv, object_xyz = _detect_charuco_in_image(shot_path, board)
+    ok, rvec, tvec = cv2.solvePnP(object_xyz, corners_uv, cam.K, cam.D)
+    if not ok:
+        raise RuntimeError(f"cv2.solvePnP failed for floor shot {shot_path}")
+    R_cam_board, _ = cv2.Rodrigues(rvec)
+    return R_cam_board, tvec.reshape(3)
+
+
 def _board_pose_in_rig(
     shot_path: Path,
     cam: CameraInRig,
@@ -584,19 +617,105 @@ def _board_pose_in_rig(
     ``cv2.solvePnP`` recovers the board pose in the camera frame; composing with the
     camera's rig-frame pose (from Multical) lifts it into rig coordinates.
     """
-    corners_uv, object_xyz = _detect_charuco_in_image(shot_path, board)
-    ok, rvec, tvec = cv2.solvePnP(object_xyz, corners_uv, cam.K, cam.D)
-    if not ok:
-        raise RuntimeError(f"cv2.solvePnP failed for floor shot {shot_path}")
-    R_cam_board, _ = cv2.Rodrigues(rvec)
-    t_cam_board = tvec.reshape(3)
-    # Board pose in camera frame is (R_cam_board, t_cam_board).
-    # Camera pose in rig frame is (cam.R_in_rig, cam.t_in_rig) [world←camera convention].
-    #   R_rig_board = R_rig_cam @ R_cam_board
-    #   t_rig_board = R_rig_cam @ t_cam_board + t_rig_cam
-    R_rig_board = cam.R_in_rig @ R_cam_board
-    t_rig_board = cam.R_in_rig @ t_cam_board + cam.t_in_rig
-    return R_rig_board, t_rig_board
+    R_cam_board, t_cam_board = _board_pose_in_camera(shot_path, cam, board)
+    return _compose_board_in_rig(cam, R_cam_board, t_cam_board)
+
+
+class ExtrinsicFloorMismatchError(ValueError):
+    """The floor pairs and the Multical extrinsics disagree beyond tolerance."""
+
+
+def check_extrinsic_floor_consistency(
+    floor_shots_by_camera: dict[str, Path | list[Path]],
+    solution: MultiCalSolution,
+    board: CharucoBoardSpec,
+    *,
+    max_baseline_ratio_dev: float = 0.10,
+    max_rotation_deg: float = 10.0,
+    pose_fn=None,
+) -> dict:
+    """Cross-check the rig extrinsics against the synchronized floor pairs.
+
+    Each floor pair shows the SAME physical board to both cameras, so the
+    relative camera pose it implies (per-camera ChArUco PnP) must agree with
+    the Multical AprilGrid solve. Per-camera reprojection RMS can NOT catch a
+    disagreement here — this is the honesty gate that would have caught both
+    c1 bugs instantly (the pose-convention inversion: ~143 deg rotation mismatch;
+    the 3.5 cm-vs-12.2 cm ChArUco square: an exact 3.49x baseline ratio).
+
+    Raises :class:`ExtrinsicFloorMismatchError` when the baseline ratio deviates
+    more than ``max_baseline_ratio_dev`` (board scale mismatch — measure the
+    printed boards) or the relative rotation disagrees by more than
+    ``max_rotation_deg``. Returns the measured stats when consistent (also when
+    fewer than 2 cameras / no usable pair — ``{"checked": False}``).
+
+    ``pose_fn(shot_path, cam, board) -> (R_cam_board, t_cam_board)`` is
+    injectable for hermetic tests; defaults to the ChArUco PnP.
+    """
+    pose_fn = pose_fn or _board_pose_in_camera
+    shots_by_cam = _normalize_floor_shots(floor_shots_by_camera)
+    solved = getattr(solution, "cameras", None)
+    if not isinstance(solved, dict):   # stubbed/partial solution → nothing to check
+        return {"checked": False}
+    cams = [c for c in shots_by_cam if c in solved and shots_by_cam[c]]
+    if len(cams) < 2:
+        return {"checked": False}
+    a, b = cams[0], cams[1]
+
+    rel_R: list[np.ndarray] = []
+    rel_t: list[np.ndarray] = []
+    for shot_a, shot_b in zip(shots_by_cam[a], shots_by_cam[b], strict=False):
+        try:
+            Ra, ta = pose_fn(shot_a, solution.cameras[a], board)
+            Rb, tb = pose_fn(shot_b, solution.cameras[b], board)
+        except Exception:
+            continue   # undetectable pair — skip, others carry the check
+        # T_camB←camA = T_camB←board ∘ inv(T_camA←board)
+        R = Rb @ Ra.T
+        rel_R.append(R)
+        rel_t.append(tb - R @ ta)
+    if not rel_R:
+        return {"checked": False}
+
+    baseline_pnp = float(np.median([np.linalg.norm(t) for t in rel_t]))
+    A, B = solution.cameras[a], solution.cameras[b]
+    # Same relative pose from the solved rig (rig←camera convention):
+    R_solved = B.R_in_rig.T @ A.R_in_rig
+    baseline_solved = float(np.linalg.norm(A.t_in_rig - B.t_in_rig))
+
+    rot_devs = [
+        float(np.degrees(np.arccos(np.clip((np.trace(R_solved.T @ R) - 1.0) / 2.0, -1.0, 1.0))))
+        for R in rel_R
+    ]
+    rot_dev_deg = float(np.median(rot_devs))
+    ratio = baseline_pnp / max(baseline_solved, 1e-9)
+
+    stats = {
+        "checked": True,
+        "pairs_used": len(rel_R),
+        "baseline_floor_m": round(baseline_pnp, 4),
+        "baseline_solved_m": round(baseline_solved, 4),
+        "baseline_ratio": round(ratio, 4),
+        "rotation_dev_deg": round(rot_dev_deg, 2),
+    }
+    # Rotation first: a rotation mismatch corrupts the derived baseline too,
+    # so it is the more truthful diagnosis when both trip.
+    if rot_dev_deg > max_rotation_deg:
+        raise ExtrinsicFloorMismatchError(
+            f"extrinsic/floor inconsistency: the relative camera rotation from the floor "
+            f"pairs disagrees with the extrinsic solve by {rot_dev_deg:.1f}° "
+            f"(> {max_rotation_deg}°). Re-shoot the AprilGrid extrinsic captures with the "
+            f"board well-lit and visible to BOTH cameras. {stats}"
+        )
+    if abs(ratio - 1.0) > max_baseline_ratio_dev:
+        raise ExtrinsicFloorMismatchError(
+            f"board-scale mismatch: the floor pairs imply a {baseline_pnp:.2f} m camera "
+            f"baseline but the extrinsic solve says {baseline_solved:.2f} m "
+            f"(ratio {ratio:.2f}). MEASURE the printed boards: the ChArUco square and "
+            f"the AprilGrid tag length must both match reality (a wrong ChArUco square "
+            f"scales every floor/anchor distance by the same factor). {stats}"
+        )
+    return stats
 
 
 def _normalize_floor_shots(
@@ -610,6 +729,27 @@ def _normalize_floor_shots(
         else:
             out[cam_id] = [Path(s) for s in shots]
     return out
+
+
+def _ensure_cameras_above_floor(
+    R_world_rig: np.ndarray,
+    t_world_rig: np.ndarray,
+    solution: MultiCalSolution,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Guarantee world +Z points from the floor TOWARD the cameras.
+
+    The board's PnP +Z (and hence the plane normal) can point either way —
+    anchoring to it directly can put every camera at a NEGATIVE height. If the
+    mean camera height comes out below the floor, rotate the world frame 180°
+    about its X axis (Z->-Z, Y->-Y: still right-handed, X preserved).
+    """
+    centers = np.stack([c.t_in_rig for c in solution.cameras.values()])
+    heights = (R_world_rig @ centers.T).T[:, 2] + t_world_rig[2]
+    if float(np.mean(heights)) < 0.0:
+        flip = np.diag([1.0, -1.0, -1.0])
+        R_world_rig = flip @ R_world_rig
+        t_world_rig = flip @ t_world_rig
+    return R_world_rig, t_world_rig
 
 
 def estimate_floor_anchor_charuco(
@@ -677,6 +817,8 @@ def estimate_floor_anchor_charuco(
         R_board, t_board = poses_by_placement[0]
         R_world_rig = R_board.T
         t_world_rig = -R_world_rig @ t_board
+        R_world_rig, t_world_rig = _ensure_cameras_above_floor(
+            R_world_rig, t_world_rig, solution)
         return FloorAnchor(
             method="charuco_floor",
             note=f"ChArUco floor board across {len(shots_by_cam)} cameras",
@@ -724,6 +866,8 @@ def estimate_floor_anchor_charuco(
         y_axis = -y_axis
         R_world_rig = np.vstack([x_axis, y_axis, z_axis])
     t_world_rig = -R_world_rig @ origin
+    R_world_rig, t_world_rig = _ensure_cameras_above_floor(
+        R_world_rig, t_world_rig, solution)
 
     return FloorAnchor(
         method="charuco_floor",

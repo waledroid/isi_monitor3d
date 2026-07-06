@@ -46,14 +46,45 @@ def _pallet_corner_pixels(H_world_to_pixel: np.ndarray, w: float, h: float):
 
 
 def _build_app(tmp_path: Path, *, cameras: dict | None = None, calibration_path: Path | None = None):
-    """An app whose backbone.yaml lists the supplied cameras."""
+    """An app whose backbone.yaml lists the supplied cameras.
+
+    ``ui_settings_path`` is pointed into tmp_path so the Mode-2 calibration path
+    override (a UI setting) never leaks between tests or from the real repo.
+    """
     bb_yaml = tmp_path / "backbone.yaml"
     body = {"cameras": cameras if cameras is not None else {}}
     if calibration_path is not None:
         body["calibration_path"] = str(calibration_path)
     bb_yaml.write_text(yaml.safe_dump(body))
-    cfg = Settings(backbone_config_path=bb_yaml, udp_port=0, port=0)
+    cfg = Settings(backbone_config_path=bb_yaml, udp_port=0, port=0,
+                   ui_settings_path=tmp_path / "monitor_web_ui.yaml")
     return create_app(cfg), bb_yaml
+
+
+def _write_mode2_cal(path: Path, cameras: tuple[str, ...] = ("cam_a", "cam_b")) -> Path:
+    """A minimal but fully-loadable Multical-style calibration.json."""
+    H = np.diag([0.01, 0.01, 1.0]).tolist()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "version": CALIBRATION_VERSION,
+        "created_at": "2026-07-02T00:00:00+00:00",
+        "floor_anchor_method": "charuco_floor",
+        "floor_origin_note": "test",
+        "calibration_mode": "multical_full",
+        "cameras": {
+            cam: {
+                "camera_id": cam,
+                "image_size_wh": [1920, 1080],
+                "K": np.eye(3).tolist(), "D": [0.0] * 5,
+                "R": np.eye(3).tolist(), "t": [0.0, 0.0, 0.0],
+                "H": H,
+                "P": np.hstack([np.eye(3), np.zeros((3, 1))]).tolist(),
+                "reprojection_rms_px": 1.6,
+            }
+            for cam in cameras
+        },
+    }))
+    return path
 
 
 # ---- /api/calibrate/status ----
@@ -442,3 +473,98 @@ def test_clear_is_idempotent_when_absent(tmp_path: Path) -> None:
         res = c.post("/api/calibrate/clear")
         assert res.status_code == 200
         assert res.json()["removed"] is False
+
+
+# ---- POST /api/calibrate/mode2-path — external calibration by path ----
+
+
+def test_mode2_path_accepts_valid_file_and_stamps_backbone(tmp_path: Path) -> None:
+    """A valid 2-cam calibration.json anywhere on disk (e.g. an isical project)
+    becomes the Mode-2 calibration: UI setting persisted + backbone.yaml stamped."""
+    external = _write_mode2_cal(tmp_path / "isical" / "c1" / "calibration.json")
+    app, bb_yaml = _build_app(tmp_path, cameras={"cam_a": {}, "cam_b": {}})
+    with TestClient(app) as client:
+        res = client.post("/api/calibrate/mode2-path", json={"path": str(external)})
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["ok"] is True
+        assert set(data["calibrated_cameras"]) == {"cam_a", "cam_b"}
+        assert data["calibration_mode"] == "multical_full"
+
+        # backbone.yaml now points at the external file (no copy made).
+        bb = yaml.safe_load(bb_yaml.read_text())
+        assert bb["calibration_path"] == str(external.resolve())
+        assert not (tmp_path / "mode2" / "calibration.json").exists()
+
+        # Status reads the external file for Mode 2.
+        status = client.get("/api/calibrate/status").json()
+        assert status["calibration_path"] == str(external.resolve())
+        assert status["is_fully_calibrated"] is True
+        assert status["calibration_mode"] == "multical_full"
+
+
+def test_mode2_path_rejects_missing_file(tmp_path: Path) -> None:
+    app, _ = _build_app(tmp_path, cameras={"cam_a": {}, "cam_b": {}})
+    with TestClient(app) as client:
+        res = client.post("/api/calibrate/mode2-path",
+                          json={"path": str(tmp_path / "nope.json")})
+        assert res.status_code == 422
+        assert "no such file" in res.json()["detail"]
+
+
+def test_mode2_path_rejects_unreadable_file(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    app, _ = _build_app(tmp_path, cameras={"cam_a": {}, "cam_b": {}})
+    with TestClient(app) as client:
+        res = client.post("/api/calibrate/mode2-path", json={"path": str(bad)})
+        assert res.status_code == 422
+
+
+def test_mode2_path_rejects_single_camera_file(tmp_path: Path) -> None:
+    """A Mode-1 (1-cam) file can't serve Mode 2 triangulation."""
+    external = _write_mode2_cal(tmp_path / "solo.json", cameras=("cam_a",))
+    app, _ = _build_app(tmp_path, cameras={"cam_a": {}, "cam_b": {}})
+    with TestClient(app) as client:
+        res = client.post("/api/calibrate/mode2-path", json={"path": str(external)})
+        assert res.status_code == 422
+        assert "2 cameras" in res.json()["detail"]
+
+
+def test_settings_save_preserves_mode2_path_override(tmp_path: Path) -> None:
+    """_ensure_launchable must not stomp the override back to config/mode2/."""
+    from monitor_web.api.routes_config import _ensure_launchable
+
+    external = _write_mode2_cal(tmp_path / "isical" / "c1" / "calibration.json")
+    app, _bb_yaml = _build_app(tmp_path, cameras={"cam_a": {}, "cam_b": {}})
+    with TestClient(app) as client:
+        client.post("/api/calibrate/mode2-path", json={"path": str(external)})
+        # Simulate a Settings save rebuilding backbone.yaml (2 cameras → Mode 2).
+        cfg = client.app.state.settings
+        data = {"cameras": {"cam_a": {}, "cam_b": {}}}
+        _ensure_launchable(data, cfg)
+        assert data["calibration_path"] == str(external.resolve())
+
+
+def test_clear_with_override_forgets_but_never_deletes(tmp_path: Path) -> None:
+    """Clearing Mode 2 with an external override must NOT delete the operator's
+    artefact — it forgets the override and re-stamps the managed default."""
+    external = _write_mode2_cal(tmp_path / "isical" / "c1" / "calibration.json")
+    app, bb_yaml = _build_app(tmp_path, cameras={"cam_a": {}, "cam_b": {}})
+    with TestClient(app) as client:
+        client.post("/api/calibrate/mode2-path", json={"path": str(external)})
+        res = client.post("/api/calibrate/clear")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["ok"] is True
+        assert data["removed"] is False
+        assert external.exists(), "external calibration must never be deleted"
+
+        default = tmp_path / "mode2" / "calibration.json"
+        assert data["calibration_path"] == str(default)
+        bb = yaml.safe_load(bb_yaml.read_text())
+        assert bb["calibration_path"] == str(default)
+
+        # Status is back on the (absent) managed default → not calibrated.
+        status = client.get("/api/calibrate/status").json()
+        assert status["is_fully_calibrated"] is False

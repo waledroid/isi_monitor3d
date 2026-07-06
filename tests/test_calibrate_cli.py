@@ -21,9 +21,9 @@ from calibration.calibrate import (
     FloorAnchor,
     IntrinsicsResult,
     _average_rotation,
+    _detect_charuco_in_image,
     assemble_calibration,
     build_parser,
-    _detect_charuco_in_image,
     calibrate_intrinsics,
     compose_camera_in_world,
     find_multical_binary,
@@ -356,3 +356,119 @@ def test_calibrate_intrinsics_rejects_empty_dir(tmp_path: Path) -> None:
     empty.mkdir()
     with pytest.raises(FileNotFoundError):
         calibrate_intrinsics(empty, CharucoBoardSpec(8, 6, 0.04, 0.03))
+
+
+def test_ensure_cameras_above_floor_flips_downward_frame() -> None:
+    """A world frame whose +Z points INTO the floor (negative camera heights)
+    must be flipped 180° about X — heights positive, rotation stays proper."""
+    from calibration.calibrate import _ensure_cameras_above_floor
+    from calibration.multical_io import CameraInRig, MultiCalSolution
+
+    def cam(cid, center):
+        return CameraInRig(
+            camera_id=cid, image_size_wh=(1920, 1080),
+            K=np.eye(3), D=np.zeros(5),
+            R_in_rig=np.eye(3), t_in_rig=np.asarray(center, dtype=np.float64),
+        )
+
+    sol = MultiCalSolution(master_camera="cam_a", cameras={
+        "cam_a": cam("cam_a", [0.0, 0.0, 2.4]),
+        "cam_b": cam("cam_b", [2.0, 0.1, 2.5]),
+    })
+    # Identity anchor → heights +2.4/+2.5 (already above): unchanged.
+    R, t = _ensure_cameras_above_floor(np.eye(3), np.zeros(3), sol)
+    np.testing.assert_allclose(R, np.eye(3))
+
+    # Z-down anchor (heights negative) → flipped: heights positive, det=+1.
+    R_down = np.diag([1.0, -1.0, -1.0])
+    R, t = _ensure_cameras_above_floor(R_down, np.zeros(3), sol)
+    heights = [(R @ c.t_in_rig + t)[2] for c in sol.cameras.values()]
+    assert all(h > 0 for h in heights), heights
+    assert np.isclose(np.linalg.det(R), 1.0)
+
+
+# ---- extrinsic/floor consistency guardrail ----------------------------------
+
+
+def _guard_solution(baseline_x: float = 2.0):
+    from calibration.multical_io import CameraInRig, MultiCalSolution
+    return MultiCalSolution(master_camera="cam_a", cameras={
+        "cam_a": CameraInRig("cam_a", (1920, 1080), np.eye(3), np.zeros(5),
+                             R_in_rig=np.eye(3), t_in_rig=np.zeros(3)),
+        "cam_b": CameraInRig("cam_b", (1920, 1080), np.eye(3), np.zeros(5),
+                             R_in_rig=np.eye(3),
+                             t_in_rig=np.array([baseline_x, 0.0, 0.0])),
+    })
+
+
+def _pose_fn_consistent(scale: float = 1.0, extra_rot_deg: float = 0.0):
+    """Fake per-camera board PnP consistent with the _guard_solution rig
+    (identity rotations, 2 m x-baseline): the board sits at z=3 in cam_a; in
+    cam_b's frame the SAME board is offset by the baseline. ``scale`` mimics a
+    wrong ChArUco square (scales all PnP translations); ``extra_rot_deg``
+    injects a rotation error into cam_b's view."""
+    from scipy.spatial.transform import Rotation
+
+    def pose(shot_path, cam, board):
+        t_board_rig = np.array([1.0, 0.2, 3.0])
+        R = np.eye(3)
+        t = t_board_rig - cam.t_in_rig            # board in this camera's frame
+        if cam.camera_id == "cam_b" and extra_rot_deg:
+            R = Rotation.from_euler("y", extra_rot_deg, degrees=True).as_matrix()
+        return R, scale * t
+    return pose
+
+
+def test_floor_consistency_passes_when_consistent() -> None:
+    from calibration.calibrate import check_extrinsic_floor_consistency
+
+    stats = check_extrinsic_floor_consistency(
+        {"cam_a": [Path("a0"), Path("a1")], "cam_b": [Path("b0"), Path("b1")]},
+        _guard_solution(), object(),
+        pose_fn=_pose_fn_consistent(),
+    )
+    assert stats["checked"] is True
+    assert stats["pairs_used"] == 2
+    assert abs(stats["baseline_ratio"] - 1.0) < 0.01
+
+
+def test_floor_consistency_catches_board_scale_mismatch() -> None:
+    """A 3.5x ChArUco-square error (the real c1 bug) must refuse the solve."""
+    from calibration.calibrate import (
+        ExtrinsicFloorMismatchError,
+        check_extrinsic_floor_consistency,
+    )
+
+    with pytest.raises(ExtrinsicFloorMismatchError, match="board-scale"):
+        check_extrinsic_floor_consistency(
+            {"cam_a": [Path("a0")], "cam_b": [Path("b0")]},
+            _guard_solution(), object(),
+            pose_fn=_pose_fn_consistent(scale=1.0 / 3.489),
+        )
+
+
+def test_floor_consistency_catches_rotation_mismatch() -> None:
+    from calibration.calibrate import (
+        ExtrinsicFloorMismatchError,
+        check_extrinsic_floor_consistency,
+    )
+
+    with pytest.raises(ExtrinsicFloorMismatchError, match="inconsistency"):
+        check_extrinsic_floor_consistency(
+            {"cam_a": [Path("a0")], "cam_b": [Path("b0")]},
+            _guard_solution(), object(),
+            pose_fn=_pose_fn_consistent(extra_rot_deg=25.0),
+        )
+
+
+def test_floor_consistency_skips_single_camera() -> None:
+    from calibration.calibrate import check_extrinsic_floor_consistency
+    from calibration.multical_io import CameraInRig, MultiCalSolution
+
+    sol = MultiCalSolution(master_camera="cam_a", cameras={
+        "cam_a": CameraInRig("cam_a", (1920, 1080), np.eye(3), np.zeros(5),
+                             R_in_rig=np.eye(3), t_in_rig=np.zeros(3)),
+    })
+    stats = check_extrinsic_floor_consistency(
+        {"cam_a": [Path("a0")]}, sol, object())
+    assert stats == {"checked": False}
