@@ -30,7 +30,7 @@ ingestion:
     default_maxsize: 2
 detection:
   plugin: yolo_onnx_seg
-  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26l-seg_e200_640px_09-06-2026_00-24-57/weights/best.onnx
+  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
   class_names:
   - palette
   - carton
