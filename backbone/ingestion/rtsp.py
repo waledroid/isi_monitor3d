@@ -55,24 +55,48 @@ PIPELINE_TEMPLATE = (
     "rtspsrc name=src "
     "location={url} "
     "latency={latency_ms} "
-    "drop-on-latency=true "
+    # drop-on-latency=false: over TCP the jitterbuffer's per-packet dropping
+    # only loses frames (measured ~1 fps on the site cameras) — the appsink's
+    # max-buffers=1 drop=true already keeps end-to-end latency bounded by
+    # always serving the newest decoded frame.
+    "drop-on-latency=false "
     "protocols=tcp "
     "ntp-sync=true "
     "buffer-mode=auto "
     "! {depay} "
-    "! {decoder} "
-    "! videoconvert "
-    "! video/x-raw,format=BGR "
+    "! {decode_chain} "
+    "! {sink_caps} "
     "! appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true"
 )
 
-# codec name (ffprobe `codec_name`) -> (depay element, decoder element).
+# Final appsink caps. `output_wh` appends width/height so the upstream
+# converter performs the downscale IN the pipeline — on the GPU for the nvdec
+# chain (cudaconvertscale), via an extra `videoscale` for the software chain.
+_SINK_CAPS = "video/x-raw,format=BGR"
+
+# codec name (ffprobe `codec_name`) -> (depay element, SOFTWARE decode chain).
 _CODEC_ELEMENTS = {
-    "h264": ("rtph264depay", "avdec_h264"),
-    "hevc": ("rtph265depay", "avdec_h265"),
-    "h265": ("rtph265depay", "avdec_h265"),
+    "h264": ("rtph264depay", "avdec_h264 ! videoconvert"),
+    "hevc": ("rtph265depay", "avdec_h265 ! videoconvert"),
+    "h265": ("rtph265depay", "avdec_h265 ! videoconvert"),
+}
+# codec -> NVDEC decode chain (Phase 0.5 of the DeepStream plan): hardware
+# decode + GPU colorspace conversion, delivered to the appsink as plain
+# system-memory BGR so _on_sample is untouched. Proven live on the site
+# cameras (docs/deepstream-ingestion-plan.md, Phase 0 results).
+_NVDEC_ELEMENTS = {
+    "h264": ("rtph264depay",
+             "h264parse ! nvh264dec ! cudaconvertscale "
+             "! video/x-raw(memory:CUDAMemory),format=BGR ! cudadownload"),
+    "hevc": ("rtph265depay",
+             "h265parse ! nvh265dec ! cudaconvertscale "
+             "! video/x-raw(memory:CUDAMemory),format=BGR ! cudadownload"),
+    "h265": ("rtph265depay",
+             "h265parse ! nvh265dec ! cudaconvertscale "
+             "! video/x-raw(memory:CUDAMemory),format=BGR ! cudadownload"),
 }
 _DEFAULT_CODEC = "h264"
+_DECODERS = ("software", "nvdec")
 
 
 def _probe_rtsp_codec(url: str, *, timeout_s: float = 8.0) -> str | None:
@@ -114,9 +138,18 @@ class RtspFrameSource(GstAppsinkFrameSource):
         latency_ms: int = 100,
         startup_timeout_s: float = 10.0,
         capture_fps: float | None = None,
+        decoder: str = "software",
+        output_wh: tuple[int, int] | list[int] | None = None,
     ) -> None:
         if not url.startswith(("rtsp://", "rtsps://")):
             raise ValueError(f"RtspFrameSource: bad URL {url!r}, expected rtsp:// or rtsps://")
+        if decoder not in _DECODERS:
+            raise ValueError(
+                f"RtspFrameSource: decoder={decoder!r}, expected one of {_DECODERS}")
+        if output_wh is not None:
+            output_wh = (int(output_wh[0]), int(output_wh[1]))
+            if output_wh[0] <= 0 or output_wh[1] <= 0:
+                raise ValueError(f"RtspFrameSource: bad output_wh {output_wh!r}")
         # The frame-rate cap is enforced in the appsink callback (the base class),
         # NOT a GStreamer `videorate` element: `videorate` stalls on cameras that
         # report no valid frame rate / broken buffer timestamps (e.g. some
@@ -129,24 +162,70 @@ class RtspFrameSource(GstAppsinkFrameSource):
                          capture_fps=capture_fps)
         self._url = url
         self._latency_ms = int(latency_ms)
+        self._decoder = decoder
+        # Downscale delivered frames to this (W, H) inside the pipeline. Pick a
+        # size matching the source aspect (16:9 cameras → e.g. 1280x720) — the
+        # caps force EXACT dimensions, a mismatched aspect distorts. Downstream
+        # geometry is scale-guarded (detections are mapped to calibration-frame
+        # pixels in the orchestrator), so calibration stays at native res.
+        self._output_wh = output_wh
         self._codec: str | None = None  # resolved lazily on first _build_pipeline_str
 
+    def _nvdec_available(self) -> bool:
+        """True iff the GStreamer nvcodec elements exist on this machine.
+
+        Initializes GStreamer if needed — ``ElementFactory.find`` before
+        ``Gst.init`` reports nothing and would silently fall back to software
+        decode even on a CUDA machine."""
+        try:
+            from backbone.ingestion._gst_source import Gst
+            if not Gst.is_initialized():
+                Gst.init(None)
+            return (Gst.ElementFactory.find("nvh264dec") is not None
+                    and Gst.ElementFactory.find("cudaconvertscale") is not None)
+        except Exception:
+            return False
+
     def _depay_decoder(self) -> tuple[str, str]:
-        """Probe the stream codec once and map it to (depay, decoder) elements."""
+        """Probe the stream codec once and map it to (depay, decode-chain).
+
+        ``decoder: nvdec`` selects the NVDEC hardware chain; it degrades to
+        the software chain (with a warning, never a failure) when the nvcodec
+        plugin isn't present — a shared config stays runnable on machines
+        without an NVIDIA GPU."""
         if self._codec is None:
             self._codec = _probe_rtsp_codec(self._url) or _DEFAULT_CODEC
-        depay, decoder = _CODEC_ELEMENTS.get(self._codec, _CODEC_ELEMENTS[_DEFAULT_CODEC])
-        if self._codec not in _CODEC_ELEMENTS:
+        table = _CODEC_ELEMENTS
+        if self._decoder == "nvdec":
+            if self._nvdec_available():
+                table = _NVDEC_ELEMENTS
+            else:
+                logger.warning(
+                    "%s: decoder=nvdec requested but GStreamer nvcodec is not "
+                    "available — falling back to software decode",
+                    self._log_prefix(),
+                )
+        depay, chain = table.get(self._codec, table[_DEFAULT_CODEC])
+        if self._codec not in table:
             logger.warning(
                 "%s: unrecognised codec %r, defaulting to %s",
                 self._log_prefix(), self._codec, _DEFAULT_CODEC,
             )
-        return depay, decoder
+        return depay, chain
 
     def _build_pipeline_str(self) -> str:
-        depay, decoder = self._depay_decoder()
+        depay, decode_chain = self._depay_decoder()
+        sink_caps = _SINK_CAPS
+        if self._output_wh is not None:
+            w, h = self._output_wh
+            sink_caps = f"{_SINK_CAPS},width={w},height={h}"
+            if "cudaconvertscale" not in decode_chain:
+                # Software chain: videoconvert can't scale — add videoscale.
+                # (The nvdec chain scales on the GPU in cudaconvertscale.)
+                decode_chain = f"{decode_chain} ! videoscale"
         return PIPELINE_TEMPLATE.format(
-            url=self._url, latency_ms=self._latency_ms, depay=depay, decoder=decoder
+            url=self._url, latency_ms=self._latency_ms,
+            depay=depay, decode_chain=decode_chain, sink_caps=sink_caps,
         )
 
     def _configure_pipeline(self, pipeline) -> None:

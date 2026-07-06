@@ -63,6 +63,23 @@ class FrameBus:
     def get(self, timeout: float | None = None) -> FramePair:
         return self._queue.get(timeout=timeout)
 
+    def get_latest(self, timeout: float | None = None) -> FramePair:
+        """Blocking get that then drains to the NEWEST queued pair.
+
+        ``publish`` is drop-old on write but the queue is FIFO on read, so a
+        consumer slower than the producer would otherwise always process the
+        older of the buffered pairs (stale by one interval). Skipped pairs
+        count as ``dropped``. Raises ``queue.Empty`` on timeout like ``get``.
+        """
+        item = self._queue.get(timeout=timeout)
+        while True:
+            try:
+                newer = self._queue.get_nowait()
+            except queue.Empty:
+                return item
+            self._dropped += 1
+            item = newer
+
     def get_nowait(self) -> FramePair | None:
         try:
             return self._queue.get_nowait()

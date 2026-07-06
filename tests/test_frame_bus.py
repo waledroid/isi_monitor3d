@@ -58,3 +58,27 @@ def test_depth_tracks_pending() -> None:
     assert bus.depth == 2
     bus.get_nowait()
     assert bus.depth == 1
+
+
+def test_get_latest_returns_sole_item() -> None:
+    bus = FrameBus()
+    bus.publish(_pair(1.0, 1))
+    assert bus.get_latest(timeout=0.1).frame_idx == 1
+    assert bus.dropped == 0
+
+
+def test_get_latest_skips_to_newest_and_counts_drops() -> None:
+    """The latest-only read: with two queued pairs the older is discarded
+    (counted as dropped) and the consumer gets the NEWEST."""
+    bus = FrameBus()
+    bus.publish(_pair(1.0, 1))
+    bus.publish(_pair(2.0, 2))
+    assert bus.get_latest(timeout=0.1).frame_idx == 2
+    assert bus.dropped == 1
+    assert bus.depth == 0
+
+
+def test_get_latest_times_out_like_get() -> None:
+    bus = FrameBus()
+    with pytest.raises(queue.Empty):
+        bus.get_latest(timeout=0.05)

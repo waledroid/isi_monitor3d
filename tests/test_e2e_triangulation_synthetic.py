@@ -308,3 +308,77 @@ def test_tracker3d_gc_drops_removed_2d_tracks() -> None:
     # 2D tracker reported nothing alive this frame → 3D tracker GCs everything.
     tracker.gc(set())
     assert tracker.active_track_ids == ()
+
+
+# ---- lens distortion (the real-rig case: c1 calibration has k1 ≈ -0.45) ----
+
+
+def _distorted_rig(D: list[float]) -> CameraRig:
+    def cal(camera_id: str, position_xy: tuple[float, float]) -> CameraCalibration:
+        t = np.array([position_xy[0], position_xy[1], 3.0])
+        return CameraCalibration(
+            camera_id=camera_id,
+            image_size_wh=(1000, 1000),
+            K=K.tolist(),
+            D=D,
+            R=R_LOOK_DOWN.tolist(),
+            t=t.tolist(),
+            H=floor_homography_from_K_R_t(K, R_LOOK_DOWN, t).tolist(),
+            P=projection_from_K_R_t(K, R_LOOK_DOWN, t).tolist(),
+            reprojection_rms_px=0.1,
+        )
+    return CameraRig(CalibrationFile(
+        version=CALIBRATION_VERSION,
+        created_at="2026-05-18T00:00:00Z",
+        floor_anchor_method="synthetic",
+        floor_origin_note="test",
+        cameras={"cam_a": cal("cam_a", (0.0, 0.0)), "cam_b": cal("cam_b", (2.0, 0.0))},
+    ))
+
+
+def test_distorted_pixels_still_triangulate_within_tolerance() -> None:
+    """Cameras observe DISTORTED pixels; the layer must undistort before the
+    DLT/gate or the 3D output is biased by several cm and the gate misfires."""
+    import cv2
+
+    D = [-0.4, 0.1, 0.0, 0.0, 0.0]
+    rig = _distorted_rig(D)
+    layer = _build_layer(rig, _subscriptions_accept_all())
+    truth = (1.0, 0.3)
+
+    rvec, _ = cv2.Rodrigues(R_LOOK_DOWN)
+    out = None
+    for i in range(5):
+        ts = i * 0.033
+        detections = {}
+        for cam_id in rig.camera_ids:
+            cam = rig[cam_id]
+            world = np.array([[truth[0], truth[1], 0.0]])
+            # ``cam.t`` is the camera CENTER (P = K[R | -R·C]); projectPoints
+            # wants the extrinsic translation tvec = -R·C.
+            tvec = -R_LOOK_DOWN @ cam.t.reshape(3)
+            duv, _ = cv2.projectPoints(world, rvec, tvec, cam.K, cam.D)
+            detections[cam_id] = [_make_detection(
+                cam_id, (float(duv[0, 0, 0]), float(duv[0, 0, 1])), ts,
+            )]
+        track = _make_track(track_id=1, xy_m=truth, capture_ts=ts)
+        _projector, associator, triangulator, gate, tracker, subs = layer
+        assert len(subs.filter([track], reference_ts=ts)) == 1
+        obs_uv = associator.resolve_foot_uv(track, detections)
+        assert len(obs_uv) == 2, "both cameras must resolve despite distortion"
+        xyz = triangulator.triangulate_point(obs_uv)
+        assert xyz is not None
+        assert gate.check(xyz, obs_uv), (
+            f"gate rejected: max error {gate.last_max_error_px:.2f} px — "
+            "distorted pixels reached the DLT"
+        )
+        out = tracker.update(
+            track_id=track.track_id, xyz_obs=xyz, capture_ts=ts,
+            cameras_seeing=track.cameras_seeing, cls=track.cls,
+            max_reproj_error_px=gate.last_max_error_px,
+        )
+
+    assert out is not None
+    assert out.xyz_m[0] == pytest.approx(truth[0], abs=5e-3)
+    assert out.xyz_m[1] == pytest.approx(truth[1], abs=5e-3)
+    assert out.xyz_m[2] == pytest.approx(0.0, abs=5e-3)

@@ -160,3 +160,139 @@ def test_epipolar_line_passes_through_correspondence() -> None:
     ub = project_world_to_pixel(w.reshape(1, 3), P_b).reshape(2)
     line = epipolar_line(ua, F)
     assert point_line_distance_px(ub, line) < 1e-6
+
+
+# ---- floor_to_pixel_distorted: overlays on RAW (distorted) frames ----------
+
+
+def test_floor_to_pixel_distorted_equals_pinhole_when_no_distortion() -> None:
+    from backbone.shared.geometry import (
+        floor_homography_from_K_R_t,
+        floor_to_pixel,
+        floor_to_pixel_distorted,
+    )
+    K = np.array([[1000.0, 0.0, 500.0], [0.0, 1000.0, 500.0], [0.0, 0.0, 1.0]])
+    R = np.diag([1.0, -1.0, -1.0])
+    t = np.array([0.0, 0.0, 3.0])
+    H = floor_homography_from_K_R_t(K, R, t)
+    pts = np.array([[0.5, 0.2], [-0.8, 1.0], [1.2, -0.4]])
+    a = floor_to_pixel(pts, H)
+    b = floor_to_pixel_distorted(pts, K, np.zeros(5), R, t, (1000, 1000))
+    np.testing.assert_allclose(a, b, atol=1e-6)
+
+
+def test_floor_to_pixel_distorted_round_trips_through_undistort() -> None:
+    """Distorted output must undistort back to the pinhole coordinates —
+    i.e. the helper really applies the lens model (the raw-frame overlay fix)."""
+    from backbone.shared.geometry import (
+        floor_homography_from_K_R_t,
+        floor_to_pixel,
+        floor_to_pixel_distorted,
+        undistort_points,
+    )
+    K = np.array([[1000.0, 0.0, 500.0], [0.0, 1000.0, 500.0], [0.0, 0.0, 1.0]])
+    D = np.array([-0.35, 0.08, 0.0, 0.0, 0.0])   # real-rig-like barrel
+    R = np.diag([1.0, -1.0, -1.0])
+    t = np.array([0.0, 0.0, 3.0])
+    H = floor_homography_from_K_R_t(K, R, t)
+    pts = np.array([[0.9, 0.6], [-0.7, 0.8]])    # inside the view
+    distorted = floor_to_pixel_distorted(pts, K, D, R, t, (1000, 1000))
+    pinhole = floor_to_pixel(pts, H)
+    # Distortion must actually move the points…
+    assert np.linalg.norm(distorted - pinhole, axis=1).min() > 2.0
+    # …and undistorting recovers the pinhole coordinates.
+    np.testing.assert_allclose(undistort_points(distorted, K, D), pinhole, atol=0.05)
+
+
+def test_floor_to_pixel_distorted_out_of_field_falls_back_to_pinhole() -> None:
+    """Far outside the calibrated field the polynomial diverges — those points
+    must keep their (clippable) pinhole coordinates instead of exploding."""
+    from backbone.shared.geometry import (
+        floor_homography_from_K_R_t,
+        floor_to_pixel,
+        floor_to_pixel_distorted,
+    )
+    K = np.array([[1000.0, 0.0, 500.0], [0.0, 1000.0, 500.0], [0.0, 0.0, 1.0]])
+    D = np.array([-0.45, 0.1, 0.0, 0.0, 0.0])
+    R = np.diag([1.0, -1.0, -1.0])
+    t = np.array([0.0, 0.0, 3.0])
+    H = floor_homography_from_K_R_t(K, R, t)
+    far = np.array([[8.0, 8.0]])                 # way outside the view
+    out = floor_to_pixel_distorted(far, K, D, R, t, (1000, 1000))
+    np.testing.assert_allclose(out, floor_to_pixel(far, H), atol=1e-6)
+    assert np.abs(out).max() < 1e5               # sane, clippable coordinates
+
+
+def test_densify_polygon_counts_and_endpoints() -> None:
+    from backbone.shared.geometry import densify_polygon
+    poly = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])
+    dense = densify_polygon(poly, segments_per_edge=5)
+    assert len(dense) == 4 * 5
+    # Original vertices are preserved (t=0 sample of each edge).
+    for v in poly:
+        assert (np.linalg.norm(dense - v, axis=1) < 1e-9).any()
+
+
+def test_undistort_points_checked_flags_divergent_border_points() -> None:
+    """cv2.undistortPoints diverges near the edge of a strong barrel lens —
+    the checked variant must flag exactly those samples (the real-rig case:
+    border pixel x=75 'undistorted' to x=-1412 and spiked a zone outline)."""
+    from backbone.shared.geometry import undistort_points_checked
+
+    # The site cam_b lens: the k3 term is what makes the iterative inversion
+    # genuinely non-invertible near the border (k1-only lenses displace far
+    # but still round-trip).
+    K = np.array([[1000.0, 0.0, 960.0], [0.0, 1000.0, 540.0], [0.0, 0.0, 1.0]])
+    D = np.array([-0.36, 0.162, -0.003, -0.001, -0.069])
+    central = np.array([[960.0, 540.0], [700.0, 400.0], [1300.0, 700.0]])
+    border = np.array([[75.0, 509.0], [99.0, 498.0]])   # the real spiking pixels
+
+    und_c, ok_c = undistort_points_checked(central, K, D)
+    assert ok_c.all()
+    # Central points barely move under a barrel lens near the centre.
+    assert np.linalg.norm(und_c[0] - central[0]) < 1.0
+
+    _und_b, ok_b = undistort_points_checked(border, K, D)
+    assert not ok_b.any(), "divergent border undistortions must be flagged invalid"
+
+
+def test_floor_to_pixel_distorted_checked_flags_folded_projections() -> None:
+    """The FORWARD polynomial of the site cam_b lens folds beyond normalized
+    r = 1.11 (frame corners sit at 1.03): a floor point just outside the view
+    projects back INSIDE the frame at a folded position (observed warping a
+    zone twin). The checked variant must flag those; central points stay valid."""
+    from backbone.shared.geometry import (
+        floor_to_pixel_distorted_checked,
+        projection_from_K_R_t,
+    )
+    K = np.array([[1077.0, 0.0, 961.0], [0.0, 1077.0, 550.0], [0.0, 0.0, 1.0]])
+    D = np.array([-0.36, 0.162, -0.003, -0.001, -0.069])   # site cam_b
+    R = np.diag([1.0, -1.0, -1.0])
+    t = np.array([0.0, 0.0, 2.5])                          # nadir at world origin
+    img_wh = (1920, 1080)
+
+    central = np.array([[0.3, 0.2], [-0.8, 0.5], [1.2, -0.4]])
+    _uv, ok = floor_to_pixel_distorted_checked(central, K, D, R, t, img_wh)
+    assert ok.all()
+
+    # Normalized pinhole radius 3.0/2.5 = 1.2 > the 1.11 fold: within the
+    # projection margin, so the old path distorted-projected it — folded.
+    folded_world = np.array([[3.0, 0.0], [-2.9, 0.6]])
+    _uv, ok = floor_to_pixel_distorted_checked(folded_world, K, D, R, t, img_wh)
+    assert not ok.any(), "folded forward projections must be flagged invalid"
+
+    # The hazard being guarded: the raw forward model puts the fold INSIDE the
+    # frame — indistinguishable from a legitimate pixel without the check.
+    from backbone.shared.geometry import floor_to_pixel_distorted
+    raw = floor_to_pixel_distorted(folded_world, K, D, R, t, img_wh)
+    assert (raw[:, 0] >= 0).all() and (raw[:, 0] < img_wh[0]).all()
+
+    # Well beyond the margin the pinhole fallback kicks in — also invalid
+    # (clippable coordinates, but not trustworthy distorted pixels).
+    far = np.array([[8.0, 8.0]])
+    _uv, ok_far = floor_to_pixel_distorted_checked(far, K, D, R, t, img_wh)
+    assert not ok_far.any()
+    # Sanity: pinhole ideal of a central point matches the unchecked helper's
+    # contract (the checked variant returns the same coordinates).
+    P = projection_from_K_R_t(K, R, t)
+    assert P.shape == (3, 4)

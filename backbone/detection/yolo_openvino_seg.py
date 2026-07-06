@@ -52,6 +52,7 @@ class YoloOpenvinoSegDetector(Detector):
         keep_classes: list[str] | None = None,
         device: str = "AUTO",
         mask_threshold: float = 0.5,
+        decode_masks: bool = True,
     ) -> None:
         xml_file = Path(model_xml)
         if not xml_file.exists():
@@ -83,6 +84,10 @@ class YoloOpenvinoSegDetector(Detector):
         self._iou_threshold = float(iou_threshold)
         self._keep_classes = list(keep_classes) if keep_classes else None
         self._mask_threshold = float(mask_threshold)
+        # False = boxes/foot points only (mask=None) — skips the per-detection
+        # full-frame mask assembly, which is pure CPU cost for consumers that
+        # never read masks (the Backbone pipeline sets this False).
+        self._decode_masks = bool(decode_masks)
 
         core = ov.Core()
         model = core.read_model(str(xml_file))
@@ -180,5 +185,6 @@ class YoloOpenvinoSegDetector(Detector):
                 iou_threshold=self._iou_threshold,
                 keep_classes=self._keep_classes,
                 mask_threshold=self._mask_threshold,
+                decode_masks=self._decode_masks,
             )
         return result

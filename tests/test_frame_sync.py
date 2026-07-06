@@ -127,38 +127,32 @@ def test_unknown_camera_id_ignored() -> None:
 # ---------- single-camera (Mode 1) ----------
 
 
-def test_single_camera_emits_solo_after_degraded_threshold() -> None:
-    """Mode 1: every frame becomes a solo FramePair after the timeout."""
+def test_single_camera_emits_solo_immediately() -> None:
+    """Mode 1: a single-camera config is permanently degraded — every frame
+    emits AT ONCE with its own capture_ts (no 100 ms partner-wait tax, no
+    stale backlog)."""
     sync = FrameSynchronizer(
         camera_ids=["cam_a"], max_skew_ms=33.0, degraded_emit_after_ms=100.0,
     )
-    # First frame: not yet aged enough → no emit.
-    assert sync.submit(_frame("cam_a", 1.000)) is None
-    # Submit a much later frame; the OLDER buffered frame (1.000) has now
-    # waited >= 100 ms relative to `latest_capture_ts`, so it emits solo.
-    pair = sync.submit(_frame("cam_a", 1.200))
+    pair = sync.submit(_frame("cam_a", 1.000))
     assert pair is not None
     assert set(pair.frames) == {"cam_a"}
     assert pair.frames["cam_a"].capture_ts == 1.000
+    pair2 = sync.submit(_frame("cam_a", 1.033))
+    assert pair2 is not None and pair2.frames["cam_a"].capture_ts == 1.033
 
 
-def test_solo_emission_consumes_one_frame_at_a_time() -> None:
+def test_solo_emission_is_latest_only_never_a_backlog() -> None:
+    """LATEST-FRAME-ONLY: single-cam emits every frame immediately, so the
+    buffer never grows and no submit ever re-serves an older frame."""
     sync = FrameSynchronizer(
         camera_ids=["cam_a"], degraded_emit_after_ms=50.0,
     )
     for i in range(3):
-        sync.submit(_frame("cam_a", 1.000 + i * 0.020))
-    # buffer now has frames at 1.000, 1.020, 1.040; latest_capture_ts = 1.040
-    # 1.000 has aged 40 ms — not enough yet.
-    assert sync.buffer_depths == {"cam_a": 3}
-    # Push latest forward by 100 ms.
-    pair = sync.submit(_frame("cam_a", 1.140))
-    assert pair is not None
-    assert pair.frames["cam_a"].capture_ts == 1.000
-    # The remaining frames keep draining one per submit as they age past the gate.
-    pair2 = sync.submit(_frame("cam_a", 1.180))
-    assert pair2 is not None
-    assert pair2.frames["cam_a"].capture_ts == 1.020
+        pair = sync.submit(_frame("cam_a", 1.000 + i * 0.020))
+        assert pair is not None
+        assert pair.frames["cam_a"].capture_ts == 1.000 + i * 0.020
+    assert sync.buffer_depths == {"cam_a": 0}
 
 
 # ---------- dual-cam runtime degradation ----------
@@ -180,9 +174,16 @@ def test_dual_cam_solo_emits_when_partner_stops_feeding() -> None:
     # cam_b stops. cam_a keeps feeding.
     assert sync.submit(_frame("cam_a", 1.033)) is None    # too young to solo
     assert sync.submit(_frame("cam_a", 1.066)) is None    # 1.033 still young
-    pair2 = sync.submit(_frame("cam_a", 1.150))           # 1.033 aged 117 ms → solo
+    pair2 = sync.submit(_frame("cam_a", 1.150))           # 1.033 aged 117 ms → degraded
     assert pair2 is not None
     assert set(pair2.frames) == {"cam_a"}
+    # LATEST-only entry: the NEWEST frame (1.150) emits and the older backlog
+    # (1.033/1.066) is discarded — never drained stale-first.
+    assert pair2.frames["cam_a"].capture_ts == 1.150
+    assert sync.buffer_depths["cam_a"] == 0
+    # While degraded, subsequent frames emit immediately (full input fps).
+    pair3 = sync.submit(_frame("cam_a", 1.183))
+    assert pair3 is not None and pair3.frames["cam_a"].capture_ts == 1.183
 
 
 def test_dual_cam_recovery_resumes_pairing_after_solo_phase() -> None:
@@ -195,9 +196,42 @@ def test_dual_cam_recovery_resumes_pairing_after_solo_phase() -> None:
     sync.submit(_frame("cam_a", 1.000))
     sync.submit(_frame("cam_b", 1.010))     # paired
     sync.submit(_frame("cam_a", 1.033))     # waits
-    sync.submit(_frame("cam_a", 1.150))     # solo emit of 1.033
-    # cam_b comes back; new aligned pair.
-    sync.submit(_frame("cam_a", 1.183))
-    pair = sync.submit(_frame("cam_b", 1.193))
+    solo = sync.submit(_frame("cam_a", 1.150))   # degraded entry: newest emits
+    assert solo is not None and solo.frames["cam_a"].capture_ts == 1.150
+    # While degraded, cam_a emits immediately.
+    solo2 = sync.submit(_frame("cam_a", 1.183))
+    assert solo2 is not None and set(solo2.frames) == {"cam_a"}
+    # cam_b comes back; the next close cam_a frame pairs strictly again.
+    assert sync.submit(_frame("cam_b", 1.193)) is None    # buffered, waits for cam_a
+    pair = sync.submit(_frame("cam_a", 1.200))
     assert pair is not None
     assert set(pair.frames) == {"cam_a", "cam_b"}
+    # Recovery cleared the degraded flag: a lone young cam_a frame BUFFERS
+    # again (waits for its partner) instead of emitting solo at once.
+    assert sync.submit(_frame("cam_a", 1.233)) is None
+
+
+def test_capture_ts_monotonic_across_degrade_and_recovery() -> None:
+    """Latest-only emission must keep the pair capture_ts monotonic through a
+    degrade → recover cycle (downstream trackers assume a forward clock)."""
+    sync = FrameSynchronizer(
+        camera_ids=["cam_a", "cam_b"], max_skew_ms=33.0, degraded_emit_after_ms=80.0,
+    )
+    emitted: list[float] = []
+
+    def push(cid, ts):
+        pair = sync.submit(_frame(cid, ts))
+        if pair is not None:
+            emitted.append(pair.capture_ts)
+
+    push("cam_a", 1.000)
+    push("cam_b", 1.010)          # aligned
+    push("cam_a", 1.040)          # cam_b dies
+    push("cam_a", 1.080)
+    push("cam_a", 1.150)          # degraded entry → newest solo
+    push("cam_a", 1.183)          # immediate solo
+    push("cam_b", 1.193)          # partner back, buffers
+    push("cam_a", 1.200)          # aligned again
+    push("cam_a", 1.233)          # buffers (flag cleared)
+    assert emitted == sorted(emitted), f"capture_ts went backwards: {emitted}"
+    assert len(emitted) >= 4

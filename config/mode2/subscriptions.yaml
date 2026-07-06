@@ -1,0 +1,39 @@
+# Triangulation subscriptions for THIS deployment (see subscriptions.yaml.example
+# for the format reference).
+#
+# Zone-free first light-up: config/zones.yaml is empty, so no `in_zone`
+# predicates yet — add them (e.g. `in_zone: any_danger`) once zones are drawn
+# in the dashboard. Classes match what this node detects: the object model's
+# `palette` (+ carton/polybag) and `person` from the pose detector.
+
+- name: person_3d
+  module: securite
+  match:
+    cls: person
+    cameras_seeing_min: 2
+  request: xyz
+  rate_hz: 10.0     # plenty for people; saves CPU
+
+- name: palette_3d
+  module: palettes
+  match:
+    cls: palette
+    cameras_seeing_min: 2
+  request: xyz
+  rate_hz: 5.0      # pallets move slowly
+
+- name: carton_3d
+  module: palettes
+  match:
+    cls: carton
+    cameras_seeing_min: 2
+  request: xyz
+  rate_hz: 5.0
+
+- name: polybag_3d
+  module: palettes
+  match:
+    cls: polybag
+    cameras_seeing_min: 2
+  request: xyz
+  rate_hz: 5.0

@@ -1,12 +1,25 @@
 node_id: zone_a
-calibration_path: /home/aatanda/isi_monitor3d/config/mode1/calibration.json
+calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
 cameras:
   cam_a:
     source:
       name: rtsp
-      url: rtsp://admin:admin@192.168.1.88:554/1
+      url: rtsp://admin:admin@192.168.2.201:554/1
       latency_ms: 100
-      capture_fps: 12
+      capture_fps: 25
+      decoder: nvdec
+      output_wh:
+      - 1280
+      - 720
+  cam_b:
+    source:
+      name: rtsp
+      url: rtsp://admin:admin123@192.168.2.200/cam/realmonitor?channel=1&subtype=0
+      capture_fps: 25
+      decoder: nvdec
+      output_wh:
+      - 1280
+      - 720
 ingestion:
   frame_sync:
     max_skew_ms: 33.0
@@ -23,10 +36,12 @@ detection:
   - carton
   - polybag
   confidence_threshold: 0.1
-  pose_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/tests/.cache/yolo11n-pose.onnx
-  pose_confidence_threshold: 0.5
+  pose_confidence_threshold: 0.51
   iou_threshold: 0.45
   inference_imgsz: 640
+  pose_every_n: 2
+  pose_onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/tests/.cache/yolo11n-pose.onnx
+  pose_imgsz: 640
 homography:
   cross_cam_fusion:
     match_distance_m:
@@ -49,7 +64,7 @@ homography:
   stabilizer:
     min_frames_confirmed: 1
 metadata:
-  area: "Zone A"
+  area: Zone A
   diagnostics:
     enabled: true
     interval_sec: 5.0
@@ -61,20 +76,12 @@ metadata:
   - plugin: mqtt
     host: 127.0.0.1
     port: 1883
-    # prefix is the per-node namespace: isi/<node_id>
-    prefix: isi/zone_a
-    qos: 0
-    # --- CLOUD node example (deploy/cloud/ profile) --------------------------
-    # host: <cloud-server-ip-or-dns>
-    # port: 8883
-    # tls: true
-    # ca_cert: /etc/isi/ca.crt        # copy from deploy/cloud/certs/ca.crt
-    # username: <MQTT_USERNAME>
-    # password: <MQTT_PASSWORD>
+    prefix: isiMonitor3D/v1/zone_a
   images:
     enabled: false
     out_dir: /var/lib/isi_monitor3d/snapshots
     url_base: file:///var/lib/isi_monitor3d/snapshots
     jpeg_quality: 85
-    on: enter
+    on_event: enter
 zones_path: /home/aatanda/isi_monitor3d/config/zones.yaml
+subscriptions_path: /home/aatanda/isi_monitor3d/config/mode2/subscriptions.yaml

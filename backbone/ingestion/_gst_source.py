@@ -153,7 +153,11 @@ class GstAppsinkFrameSource(FrameSource):
         if self._loop is not None and self._loop.is_running():
             self._loop.quit()
         if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=5.0)
+            # A GStreamer NULL-state transition normally completes in < 300 ms;
+            # a short join keeps STOP fast (the supervisor's SIGKILL grace is
+            # the backstop for a truly hung pipeline — a daemon thread never
+            # blocks process exit anyway).
+            self._thread.join(timeout=1.5)
             self._thread = None
 
     # ---- internals ----
@@ -208,15 +212,18 @@ class GstAppsinkFrameSource(FrameSource):
 
         # Frame-rate cap (timestamp-independent — see __init__). Keep a frame only
         # once we pass the next scheduled deadline, then advance the deadline by
-        # exactly one interval (anchored to a fixed schedule, not to each kept
-        # frame's jittery arrival — the latter over-drops to native/2). Re-anchor
-        # if we've fallen behind (e.g. after a stall) to avoid a catch-up burst.
+        # exactly one interval. The schedule may lag real time by AT MOST one
+        # interval (bounded credit): TCP-delivered RTSP arrives in bursts, and a
+        # schedule re-anchored to each kept frame enforces a minimum spacing that
+        # silently drops burst frames — measured 18 fps -> 14 fps on the site
+        # camera with a 25 fps cap. With one interval of credit, a source slower
+        # than the cap passes untouched while a faster one still caps at 1/interval
+        # (plus at most one bonus frame after a stall).
         if self._min_interval is not None:
             if capture_ts < self._next_keep_ts:
                 return Gst.FlowReturn.OK
-            self._next_keep_ts += self._min_interval
-            if self._next_keep_ts < capture_ts:
-                self._next_keep_ts = capture_ts + self._min_interval
+            self._next_keep_ts = max(self._next_keep_ts + self._min_interval,
+                                     capture_ts - self._min_interval)
 
         buf = sample.get_buffer()
         caps = sample.get_caps()

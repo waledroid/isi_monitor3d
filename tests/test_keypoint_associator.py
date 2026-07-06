@@ -147,3 +147,47 @@ def test_associator_ignores_cameras_not_in_track_cameras_seeing() -> None:
     assert set(out) == {"cam_a"}
 
 
+def test_associator_undistorts_foot_pixels() -> None:
+    """resolve_foot_uv must return UNDISTORTED pixels — the DLT and the
+    reprojection gate consume them against the pinhole P = K[R|t]."""
+    import cv2
+
+    from backbone.shared.geometry import undistort_points
+
+    D = [-0.4, 0.1, 0.0, 0.0, 0.0]   # strong barrel distortion (real-rig-like k1)
+    t = np.array([0.0, 0.0, 3.0])
+    cal = CameraCalibration(
+        camera_id="cam_a",
+        image_size_wh=(1000, 1000),
+        K=K_INTRINSIC.tolist(),
+        D=D,
+        R=R_LOOK_DOWN.tolist(),
+        t=t.tolist(),
+        H=floor_homography_from_K_R_t(K_INTRINSIC, R_LOOK_DOWN, t).tolist(),
+        P=projection_from_K_R_t(K_INTRINSIC, R_LOOK_DOWN, t).tolist(),
+        reprojection_rms_px=0.1,
+    )
+    rig = CameraRig(CalibrationFile(
+        version=CALIBRATION_VERSION,
+        created_at="2026-05-18T00:00:00Z",
+        floor_anchor_method="synthetic",
+        floor_origin_note="test",
+        cameras={"cam_a": cal},
+    ))
+    associator = KeypointAssociator(rig, FootProjector(rig))
+
+    # The camera OBSERVES the distorted pixel of world (1.0, 0.3, 0).
+    world = np.array([[1.0, 0.3, 0.0]])
+    rvec, _ = cv2.Rodrigues(R_LOOK_DOWN)
+    distorted, _ = cv2.projectPoints(world, rvec, t, K_INTRINSIC, np.asarray(D))
+    distorted_uv = (float(distorted[0, 0, 0]), float(distorted[0, 0, 1]))
+
+    track = _track(xy_m=(1.0, 0.3), cameras_seeing=("cam_a",))
+    out = associator.resolve_foot_uv(track, {"cam_a": [_det("cam_a", distorted_uv)]})
+
+    assert "cam_a" in out
+    expected = undistort_points(np.array([distorted_uv]), K_INTRINSIC, np.asarray(D))[0]
+    assert out["cam_a"][0] == pytest.approx(float(expected[0]), abs=1e-6)
+    assert out["cam_a"][1] == pytest.approx(float(expected[1]), abs=1e-6)
+    # And crucially NOT the raw distorted pixel.
+    assert abs(out["cam_a"][0] - distorted_uv[0]) > 1.0

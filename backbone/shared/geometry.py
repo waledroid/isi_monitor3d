@@ -41,6 +41,40 @@ def undistort_points(
     return out.reshape(-1, 2)
 
 
+def undistort_points_checked(
+    points_uv: np.ndarray,
+    K: np.ndarray,
+    D: np.ndarray,
+    *,
+    max_roundtrip_px: float = 2.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """:func:`undistort_points` plus a validity mask.
+
+    ``cv2.undistortPoints``'s iterative inversion DIVERGES near/beyond the edge
+    of a strong barrel lens (k1 ~ -0.4): a border pixel can "undistort" to
+    coordinates a thousand pixels off, which then authors an absurd floor
+    point (observed: cam_b pixel x=75 -> undistorted x=-1412 -> a 4.5 m outlier
+    that spiked a projected zone outline). Validity is checked by pushing the
+    undistorted point back through the FORWARD distortion model — a genuine
+    inversion returns to the original pixel within ``max_roundtrip_px``.
+
+    Returns ``(undistorted_points, valid_mask)``.
+    """
+    pts = np.asarray(points_uv, dtype=np.float64).reshape(-1, 2)
+    K = np.asarray(K, dtype=np.float64)
+    D = np.asarray(D, dtype=np.float64)
+    und = undistort_points(pts, K, D)
+    # Forward model: normalized coords of the undistorted pixel, re-distorted.
+    norm = np.hstack([
+        ((und[:, 0] - K[0, 2]) / K[0, 0]).reshape(-1, 1),
+        ((und[:, 1] - K[1, 2]) / K[1, 1]).reshape(-1, 1),
+        np.ones((len(und), 1)),
+    ])
+    redist, _ = cv2.projectPoints(norm, np.zeros(3), np.zeros(3), K, D)
+    err = np.linalg.norm(redist.reshape(-1, 2) - pts, axis=1)
+    return und, np.isfinite(err) & (err <= max_roundtrip_px)
+
+
 def pixel_to_floor(
     points_uv: np.ndarray,
     H: np.ndarray,
@@ -71,6 +105,257 @@ def floor_to_pixel(
     pts = np.asarray(points_xy_m, dtype=np.float64).reshape(-1, 1, 2)
     out = cv2.perspectiveTransform(pts, H_inv)
     return out.reshape(-1, 2)
+
+
+def has_metric_camera_model(K, R, t) -> bool:
+    """False for Mode-1 placeholder extrinsics (``K=I, R=I, t=0`` — only ``H``
+    is real). Consumers must then use the H-based :func:`floor_to_pixel`;
+    the full-model :func:`floor_to_pixel_distorted` would emit garbage."""
+    K = np.asarray(K, dtype=np.float64)
+    R = np.asarray(R, dtype=np.float64)
+    t = np.asarray(t, dtype=np.float64).reshape(-1)
+    return not (np.allclose(K, np.eye(3)) and np.allclose(R, np.eye(3))
+                and np.allclose(t, 0.0))
+
+
+def floor_to_pixel_distorted(
+    points_xy_m: np.ndarray,
+    K: np.ndarray,
+    D: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    image_size_wh: tuple[int, int],
+    *,
+    margin_frac: float = 0.25,
+) -> np.ndarray:
+    """Project floor (X, Y) metres to RAW (distorted) image pixels.
+
+    :func:`floor_to_pixel` returns PINHOLE pixels — drawing those over the live
+    (distorted) camera frame misplaces overlays by 50-150+ px near the frame
+    edges on a strong barrel lens (k1 ≈ -0.45). This variant applies the full
+    ``cv2.projectPoints`` model so overlays hug the real image.
+
+    Divergence guard: the distortion polynomial is only valid inside the
+    calibrated field — points far outside explode to absurd coordinates. A
+    point whose PINHOLE projection lies beyond ``margin_frac`` of the image
+    bounds keeps its pinhole coordinates instead (it is off-screen either way;
+    consumers clip). Points behind the camera also keep pinhole coordinates.
+    """
+    out, _pinhole, _distorted_mask = _floor_to_pixel_distorted_impl(
+        points_xy_m, K, D, R, t, image_size_wh, margin_frac=margin_frac)
+    return out
+
+
+def _floor_to_pixel_distorted_impl(
+    points_xy_m: np.ndarray,
+    K: np.ndarray,
+    D: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    image_size_wh: tuple[int, int],
+    *,
+    margin_frac: float = 0.25,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Core of :func:`floor_to_pixel_distorted`; also returns the pinhole
+    baseline and the mask of points that took the DISTORTED path (the rest
+    hold the pinhole fallback)."""
+    pts = np.asarray(points_xy_m, dtype=np.float64).reshape(-1, 2)
+    world3 = np.hstack([pts, np.zeros((len(pts), 1))])
+    R = np.asarray(R, dtype=np.float64)
+    t = np.asarray(t, dtype=np.float64).reshape(3)
+
+    # Pinhole baseline (also the fallback for out-of-field points).
+    P = projection_from_K_R_t(np.asarray(K, dtype=np.float64), R, t)
+    pinhole = project_world_to_pixel(world3, P)
+
+    # (R, t) are world←camera in this codebase (the camera POSE — see
+    # projection_from_K_R_t); cv2.projectPoints wants the camera←world
+    # extrinsic, i.e. the inverse.
+    R_cw = R.T
+    t_cw = -R_cw @ t
+
+    w, h = float(image_size_wh[0]), float(image_size_wh[1])
+    mx, my = w * margin_frac, h * margin_frac
+    cam_z = (R_cw @ world3.T).T[:, 2] + t_cw[2]
+    ok = (
+        (cam_z > 1e-6)
+        & (pinhole[:, 0] >= -mx) & (pinhole[:, 0] < w + mx)
+        & (pinhole[:, 1] >= -my) & (pinhole[:, 1] < h + my)
+    )
+    out = pinhole.copy()
+    if ok.any():
+        rvec, _ = cv2.Rodrigues(R_cw)
+        duv, _ = cv2.projectPoints(world3[ok], rvec, t_cw, np.asarray(K, dtype=np.float64),
+                                   np.asarray(D, dtype=np.float64))
+        out[ok] = duv.reshape(-1, 2)
+    return out, pinhole, ok
+
+
+def floor_to_pixel_distorted_checked(
+    points_xy_m: np.ndarray,
+    K: np.ndarray,
+    D: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    image_size_wh: tuple[int, int],
+    *,
+    max_roundtrip_px: float = 2.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """:func:`floor_to_pixel_distorted` plus a validity mask.
+
+    The FORWARD distortion polynomial of a strong lens folds back beyond a
+    critical radius (the site cam_b lens folds at normalized r = 1.11 — just
+    outside its own frame corners at r = 1.03): a floor point slightly outside
+    the view gets projected back INSIDE the frame at a wrong, folded position,
+    silently warping projected outlines. Validity is checked by undistorting
+    the projected pixel and comparing against the point's ideal PINHOLE
+    projection — a folded/non-invertible projection can't round-trip.
+
+    Returns ``(pixels, valid_mask)``. Pinhole-fallback points (out of field)
+    are always invalid — their coordinates are clippable but not trustworthy
+    distorted pixels.
+    """
+    out, pinhole, distorted = _floor_to_pixel_distorted_impl(
+        points_xy_m, K, D, R, t, image_size_wh)
+    try:
+        und = undistort_points(out, K, D)
+        err = np.linalg.norm(und - pinhole, axis=1)
+        valid = distorted & np.isfinite(err) & (err <= max_roundtrip_px)
+    except Exception:
+        valid = np.zeros(len(out), dtype=bool)
+    return out, valid
+
+
+def radial_fold_radius(D) -> float | None:
+    """The normalized radius where the FORWARD radial polynomial stops being
+    monotonic (``d/dr [r(1 + k1 r² + k2 r⁴ + k3 r⁶)] = 0``), or ``None`` for a
+    monotone lens. Beyond it the projection folds — two world rays map to the
+    same pixel — so nothing outside this radius is trustworthy. Tangential and
+    higher-order terms are ignored (the radial terms dominate the fold)."""
+    D = np.asarray(D, dtype=np.float64).ravel()
+    k1 = D[0] if len(D) > 0 else 0.0
+    k2 = D[1] if len(D) > 1 else 0.0
+    k3 = D[4] if len(D) > 4 else 0.0
+    r = np.linspace(1e-3, 5.0, 5000)
+    deriv = 1.0 + 3.0 * k1 * r**2 + 5.0 * k2 * r**4 + 7.0 * k3 * r**6
+    bad = np.flatnonzero(deriv <= 0.0)
+    return float(r[bad[0]]) if len(bad) else None
+
+
+def clip_polygon_convex(subject: np.ndarray, clip: np.ndarray) -> np.ndarray:
+    """Sutherland-Hodgman: ``subject`` ∩ ``clip`` (``clip`` must be convex).
+    Returns the intersection polygon (possibly empty)."""
+    clip = np.asarray(clip, dtype=np.float64).reshape(-1, 2)
+    # Ensure counter-clockwise clip orientation (positive signed area).
+    area2 = float(np.sum(clip[:, 0] * np.roll(clip[:, 1], -1)
+                         - np.roll(clip[:, 0], -1) * clip[:, 1]))
+    if area2 < 0:
+        clip = clip[::-1]
+    out = [p for p in np.asarray(subject, dtype=np.float64).reshape(-1, 2)]
+    for i in range(len(clip)):
+        a, b = clip[i], clip[(i + 1) % len(clip)]
+        if not out:
+            break
+        inp, out = out, []
+        e = b - a
+
+        def side(p, a=a, e=e):
+            return e[0] * (p[1] - a[1]) - e[1] * (p[0] - a[0])
+
+        def cross_at(p, q, a=a, e=e):
+            d = q - p
+            denom = e[0] * d[1] - e[1] * d[0]
+            s = (e[0] * (a[1] - p[1]) - e[1] * (a[0] - p[0])) / denom
+            return p + s * d
+
+        for j in range(len(inp)):
+            p, q = inp[j - 1], inp[j]
+            sp, sq = side(p), side(q)
+            if sq >= 0.0:
+                if sp < 0.0:
+                    out.append(cross_at(p, q))
+                out.append(q)
+            elif sp >= 0.0:
+                out.append(cross_at(p, q))
+    return np.asarray(out, dtype=np.float64).reshape(-1, 2)
+
+
+def project_floor_polygon_distorted(
+    polygon_xy_m: np.ndarray,
+    K: np.ndarray,
+    D: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    image_size_wh: tuple[int, int],
+    *,
+    margin_frac: float = 0.25,
+    fold_safety: float = 0.9,
+    circle_segments: int = 96,
+) -> np.ndarray | None:
+    """Project a floor POLYGON into RAW (distorted) pixels, clipped to the
+    camera's reliably-projectable field.
+
+    Point-wise projection cannot represent a zone that spills past the
+    camera's field: samples beyond the lens's fold radius (see
+    :func:`radial_fold_radius`) project back INSIDE the frame at folded
+    positions (warped outlines), and merely dropping them collapses the
+    outline to a sliver — the visible overlap is bounded by the FIELD RIM,
+    not by the zone's own boundary. So the polygon is clipped, in normalized
+    pinhole coordinates, against the projection margin rectangle ∩ the fold
+    disk, and only then distorted. Points behind the camera are dropped first.
+
+    Returns the clipped, distorted pixel polygon, or ``None`` when the zone
+    doesn't meaningfully overlap the field.
+    """
+    pts = np.asarray(polygon_xy_m, dtype=np.float64).reshape(-1, 2)
+    world3 = np.hstack([pts, np.zeros((len(pts), 1))])
+    K = np.asarray(K, dtype=np.float64)
+    R = np.asarray(R, dtype=np.float64)
+    t = np.asarray(t, dtype=np.float64).reshape(3)
+    R_cw = R.T
+    t_cw = -R_cw @ t
+    camp = (R_cw @ world3.T).T + t_cw
+    camp = camp[camp[:, 2] > 1e-6]
+    if len(camp) < 3:
+        return None
+    norm = camp[:, :2] / camp[:, 2:3]
+
+    w, h = float(image_size_wh[0]), float(image_size_wh[1])
+    mx, my = w * margin_frac, h * margin_frac
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    rect = np.array([
+        [(-mx - cx) / fx, (-my - cy) / fy],
+        [(w + mx - cx) / fx, (-my - cy) / fy],
+        [(w + mx - cx) / fx, (h + my - cy) / fy],
+        [(-mx - cx) / fx, (h + my - cy) / fy],
+    ])
+    poly = clip_polygon_convex(norm, rect)
+    fold = radial_fold_radius(D)
+    if fold is not None and len(poly):
+        rv = fold * fold_safety
+        ang = np.linspace(0.0, 2.0 * np.pi, circle_segments, endpoint=False)
+        disk = np.stack([rv * np.cos(ang), rv * np.sin(ang)], axis=1)
+        poly = clip_polygon_convex(poly, disk)
+    if len(poly) < 3:
+        return None
+    obj = np.hstack([poly, np.ones((len(poly), 1))])
+    duv, _ = cv2.projectPoints(obj, np.zeros(3), np.zeros(3), K,
+                               np.asarray(D, dtype=np.float64))
+    return duv.reshape(-1, 2)
+
+
+def densify_polygon(polygon: np.ndarray, segments_per_edge: int = 8) -> np.ndarray:
+    """Subdivide each polygon edge — a straight image line is CURVED after a
+    cross-camera floor round-trip (homography + lens distortion), so overlays
+    must be sampled, not just vertex-mapped."""
+    poly = np.asarray(polygon, dtype=np.float64).reshape(-1, 2)
+    n = len(poly)
+    ts = np.linspace(0.0, 1.0, segments_per_edge, endpoint=False)
+    out = []
+    for i in range(n):
+        a, b = poly[i], poly[(i + 1) % n]
+        out.extend(a + (b - a) * s for s in ts)
+    return np.asarray(out)
 
 
 def project_world_to_pixel(

@@ -386,3 +386,43 @@ def test_pose_decode_below_threshold_dropped() -> None:
         confidence_threshold=0.25,
     )
     assert dets == []
+
+
+def test_end2end_seg_decode_masks_off_returns_none_masks() -> None:
+    """``decode_masks=False`` skips mask assembly (mask=None) while boxes,
+    classes and foot points are untouched — the Backbone-pipeline fast path
+    (per-detection full-frame masks cost ~12 ms each on a 1080p feed)."""
+    head = _end2end_seg_head()
+    head[0, :6] = [100.0, 50.0, 300.0, 400.0, 0.9, 1]
+    dets = decode_yolo11_seg(
+        head, _protos(),
+        camera_id="cam_a", capture_ts=0.0,
+        letterbox_meta=_identity_letterbox(),
+        target_hw=(640, 640), class_names=CLASS_NAMES,
+        confidence_threshold=0.17, iou_threshold=0.45,
+        keep_classes=None, mask_threshold=0.5,
+        decode_masks=False,
+    )
+    assert len(dets) == 1
+    assert dets[0].mask is None
+    assert dets[0].cls == "forklift"
+    assert dets[0].bbox_xyxy == pytest.approx((100.0, 50.0, 300.0, 400.0))
+    assert dets[0].foot_uv == pytest.approx((200.0, 400.0))
+
+
+def test_raw_seg_decode_masks_off_returns_none_masks() -> None:
+    """Same contract on the raw anchor-grid branch (yolo11-style heads)."""
+    # (4 + nc + nm, A) raw head with one strong anchor: cxcywh (200,225,200,350).
+    head = np.zeros((4 + len(CLASS_NAMES) + _NM, 100), dtype=np.float32)
+    head[:4, 0] = [200.0, 225.0, 200.0, 350.0]
+    head[4 + 1, 0] = 0.9                       # cls 1 = forklift
+    dets = decode_yolo11_seg(
+        head, _protos(),
+        camera_id="cam_a", capture_ts=0.0,
+        letterbox_meta=_identity_letterbox(),
+        target_hw=(640, 640), class_names=CLASS_NAMES,
+        confidence_threshold=0.5, iou_threshold=0.45,
+        keep_classes=None, mask_threshold=0.5,
+        decode_masks=False,
+    )
+    assert dets and all(d.mask is None for d in dets)

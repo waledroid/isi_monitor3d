@@ -207,3 +207,152 @@ def test_warmup_does_not_raise(tmp_path: Path) -> None:
     det.warmup()
 
 
+
+
+# ---------- pose: static batch-1 export must still serve a 2-camera pair ----------
+
+
+def _build_constant_pose_onnx(path: Path, *, batch_dim=1, num_anchors: int = 64) -> None:
+    """Minimal YOLO11-pose head stub: (1, 4 + 1 + 17*3, A), fixed batch dim.
+
+    Mirrors the real deployment problem: ``yolo export dynamic=False`` pins
+    batch=1, but Mode 2 feeds batch=2.
+    """
+    ch = 4 + 1 + 17 * 3   # bbox + person score + 17 keypoints (x, y, conf)
+    out = np.zeros((1, ch, num_anchors), dtype=np.float32)
+    # One strong person anchor at centre with a visible ankle pair.
+    out[0, 0, 0] = 320.0   # cx
+    out[0, 1, 0] = 320.0   # cy
+    out[0, 2, 0] = 100.0   # w
+    out[0, 3, 0] = 200.0   # h
+    out[0, 4, 0] = 0.9     # person score
+    # Keypoints 15/16 (ankles): x, y, conf laid out as [x*17, y*17, c*17]? No —
+    # ultralytics pose layout is per-keypoint triplets after the 5 head channels.
+    for k in (15, 16):
+        base = 5 + k * 3
+        out[0, base + 0, 0] = 320.0
+        out[0, base + 1, 0] = 420.0
+        out[0, base + 2, 0] = 0.9
+    input_tv = helper.make_tensor_value_info(
+        "images", TensorProto.FLOAT, [batch_dim, 3, 640, 640]
+    )
+    output_tv = helper.make_tensor_value_info(
+        "output", TensorProto.FLOAT, [1, ch, num_anchors]
+    )
+    const_tensor = numpy_helper.from_array(out, name="const_pose")
+    node = helper.make_node("Constant", inputs=[], outputs=["output"], value=const_tensor)
+    graph = helper.make_graph([node], "constant_pose_stub", [input_tv], [output_tv])
+    model = helper.make_model(
+        graph, opset_imports=[helper.make_opsetid("", 17)], ir_version=10,
+    )
+    onnx.save(model, str(path))
+
+
+def _make_two_camera_pair() -> FramePair:
+    img = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    frames = {
+        cid: Frame(camera_id=cid, capture_ts=10.0, frame_idx=0, image=img)
+        for cid in ("cam_a", "cam_b")
+    }
+    return FramePair(capture_ts=10.0, frame_idx=0, frames=frames)
+
+
+def test_pose_static_batch1_model_serves_two_camera_pair(tmp_path: Path) -> None:
+    """A dynamic=False (batch=1) pose export must not fail in Mode 2 — the
+    detector falls back to per-frame inference (this is the live-rig failure:
+    'Got: 2 Expected: 1', 915 times per smoke run)."""
+    from backbone.detection.yolo_onnx_pose import YoloOnnxPoseDetector
+
+    model_path = tmp_path / "pose_b1.onnx"
+    _build_constant_pose_onnx(model_path, batch_dim=1)
+    det = YoloOnnxPoseDetector(
+        onnx_path=model_path, providers=["CPUExecutionProvider"],
+    )
+    assert det.supports_batch is False
+
+    result = det.detect(_make_two_camera_pair())
+    assert set(result) == {"cam_a", "cam_b"}
+    for cam_id in ("cam_a", "cam_b"):
+        assert len(result[cam_id]) == 1, f"{cam_id} lost its person detection"
+        assert result[cam_id][0].cls == "person"
+
+
+def test_pose_dynamic_batch_still_single_call(tmp_path: Path) -> None:
+    """A dynamic-batch pose export keeps the one-call batched path."""
+    from backbone.detection.yolo_onnx_pose import YoloOnnxPoseDetector
+
+    model_path = tmp_path / "pose_dyn.onnx"
+    # Dynamic batch dim, but the constant output is batch=1 — only usable with
+    # a single-camera pair; this test just checks supports_batch + 1-cam decode.
+    _build_constant_pose_onnx(model_path, batch_dim="N")
+    det = YoloOnnxPoseDetector(
+        onnx_path=model_path, providers=["CPUExecutionProvider"],
+    )
+    assert det.supports_batch is True
+    result = det.detect(_make_pair_with_one_image())
+    assert len(result["cam_a"]) == 1
+
+
+# ---------- sticky batch: constant input shape across solo/aligned pairs ----------
+
+
+class _ShapeRecordingSession:
+    """Delegating session wrapper that records every input batch shape."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.shapes = []
+
+    def run(self, output_names, feeds):
+        self.shapes.append(next(iter(feeds.values())).shape)
+        return self._inner.run(output_names, feeds)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def test_sticky_batch_pads_solo_pair_after_aligned(tmp_path: Path) -> None:
+    """Once a batch-2 (aligned) pair has been seen, a solo pair must be PADDED
+    to batch 2 so the ORT input shape never changes — on the live rig every
+    shape flip re-triggers a ~2.5 s CUDA re-plan, collapsing the pipeline to
+    <1 fps while isolated inference looks healthy."""
+    out = np.zeros((2, 4 + NC, NUM_ANCHORS), dtype=np.float32)
+    model_path = tmp_path / "dyn2.onnx"
+    _build_constant_yolo_onnx(out, model_path)   # dynamic batch dim
+    det = YoloOnnxDetector(onnx_path=model_path, class_names=CLASS_NAMES,
+                           providers=["CPUExecutionProvider"])
+    rec = _ShapeRecordingSession(det._session)
+    det._session = rec
+
+    img = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    pair2 = FramePair(capture_ts=0.0, frame_idx=0, frames={
+        cid: Frame(camera_id=cid, capture_ts=0.0, frame_idx=0, image=img)
+        for cid in ("cam_a", "cam_b")
+    })
+    pair1 = FramePair(capture_ts=1.0, frame_idx=1, frames={
+        "cam_a": Frame(camera_id="cam_a", capture_ts=1.0, frame_idx=1, image=img),
+    })
+
+    out2 = det.detect(pair2)
+    out1 = det.detect(pair1)
+
+    assert rec.shapes == [(2, 3, 640, 640), (2, 3, 640, 640)], (
+        f"solo pair must be padded to the sticky batch, got {rec.shapes}"
+    )
+    assert set(out2) == {"cam_a", "cam_b"}
+    assert set(out1) == {"cam_a"}, "padded slot must not produce a camera entry"
+
+
+def test_sticky_batch_not_applied_before_first_aligned_pair(tmp_path: Path) -> None:
+    """Solo-only traffic (Mode 1) keeps batch 1 — no padding overhead."""
+    out = np.zeros((1, 4 + NC, NUM_ANCHORS), dtype=np.float32)
+    model_path = tmp_path / "dyn1.onnx"
+    _build_constant_yolo_onnx(out, model_path)
+    det = YoloOnnxDetector(onnx_path=model_path, class_names=CLASS_NAMES,
+                           providers=["CPUExecutionProvider"])
+    rec = _ShapeRecordingSession(det._session)
+    det._session = rec
+
+    det.detect(_make_pair_with_one_image())
+    det.detect(_make_pair_with_one_image())
+    assert rec.shapes == [(1, 3, 640, 640), (1, 3, 640, 640)]

@@ -167,9 +167,14 @@ def decode_yolo11_seg(
     iou_threshold: float = 0.45,
     keep_classes: list[str] | None = None,
     mask_threshold: float = 0.5,
+    decode_masks: bool = True,
 ) -> list[Detection]:
     """Decode one image's YOLO11-seg outputs into ``Detection`` objects (with
     ``mask`` populated — full-frame HxW bool ndarray in source coords).
+
+    ``decode_masks=False`` skips the mask assembly entirely (``mask=None`` on
+    every Detection) — for consumers that only need boxes/foot points (the
+    Backbone pipeline), where per-detection full-frame masks are pure CPU cost.
 
     Args:
         head: ``(4 + nc + nm, A)`` float32 — per-anchor bbox + class scores +
@@ -204,6 +209,7 @@ def decode_yolo11_seg(
             letterbox_meta=letterbox_meta, target_hw=target_hw,
             class_names=class_names, confidence_threshold=confidence_threshold,
             keep_classes=keep_classes, mask_threshold=mask_threshold,
+            decode_masks=decode_masks,
         )
     expected_channels = 4 + nc + nm
     if head.shape[0] != expected_channels:
@@ -268,26 +274,28 @@ def decode_yolo11_seg(
 
     # ---- mask decode ----
     # masks_proto[i] = sigmoid( coeff[i] @ protos_flat ), reshaped to (mh, mw)
-    nm_, mh, mw = protos.shape
-    assert nm_ == nm
-    protos_flat = protos.reshape(nm, mh * mw)             # (nm, mh*mw)
-    masks_proto = _sigmoid(coeff @ protos_flat)           # (M, mh*mw)
-    masks_proto = masks_proto.reshape(-1, mh, mw)         # (M, mh, mw)
-
     target_h, target_w = target_hw
     src_h, src_w = letterbox_meta.source_shape_hw
-    sx = mw / float(target_w)
-    sy = mh / float(target_h)
+    if decode_masks:
+        nm_, mh, mw = protos.shape
+        assert nm_ == nm
+        protos_flat = protos.reshape(nm, mh * mw)             # (nm, mh*mw)
+        masks_proto = _sigmoid(coeff @ protos_flat)           # (M, mh*mw)
+        masks_proto = masks_proto.reshape(-1, mh, mw)         # (M, mh, mw)
+        sx = mw / float(target_w)
+        sy = mh / float(target_h)
 
     detections: list[Detection] = []
     for i in range(xyxy_source.shape[0]):
-        # Crop the proto-space mask to the bbox (in proto coords).
-        x1_t, y1_t, x2_t, y2_t = xyxy_target[i]
-        px1 = max(0, min(int(np.floor(x1_t * sx)), mw - 1))
-        py1 = max(0, min(int(np.floor(y1_t * sy)), mh - 1))
-        px2 = max(px1 + 1, min(int(np.ceil(x2_t * sx)),  mw))
-        py2 = max(py1 + 1, min(int(np.ceil(y2_t * sy)),  mh))
-        mp = masks_proto[i, py1:py2, px1:px2]
+        mask_full = None
+        if decode_masks:
+            # Crop the proto-space mask to the bbox (in proto coords).
+            x1_t, y1_t, x2_t, y2_t = xyxy_target[i]
+            px1 = max(0, min(int(np.floor(x1_t * sx)), mw - 1))
+            py1 = max(0, min(int(np.floor(y1_t * sy)), mh - 1))
+            px2 = max(px1 + 1, min(int(np.ceil(x2_t * sx)),  mw))
+            py2 = max(py1 + 1, min(int(np.ceil(y2_t * sy)),  mh))
+            mp = masks_proto[i, py1:py2, px1:px2]
 
         # Source-frame bbox (clipped).
         x1_s, y1_s, x2_s, y2_s = xyxy_source[i]
@@ -298,13 +306,14 @@ def decode_yolo11_seg(
         bw, bh = x2i - x1i, y2i - y1i
 
         # Resize the small proto crop to source bbox size + threshold.
-        if mp.size == 0 or bw <= 0 or bh <= 0:
-            mask_full = np.zeros((src_h, src_w), dtype=bool)
-        else:
-            mp_resized = cv2.resize(mp.astype(np.float32), (bw, bh),
-                                    interpolation=cv2.INTER_LINEAR)
-            mask_full = np.zeros((src_h, src_w), dtype=bool)
-            mask_full[y1i:y2i, x1i:x2i] = mp_resized > mask_threshold
+        if decode_masks:
+            if mp.size == 0 or bw <= 0 or bh <= 0:
+                mask_full = np.zeros((src_h, src_w), dtype=bool)
+            else:
+                mp_resized = cv2.resize(mp.astype(np.float32), (bw, bh),
+                                        interpolation=cv2.INTER_LINEAR)
+                mask_full = np.zeros((src_h, src_w), dtype=bool)
+                mask_full[y1i:y2i, x1i:x2i] = mp_resized > mask_threshold
 
         cls = class_names[int(class_idx[i])]
         conf = float(class_conf[i])
@@ -337,6 +346,7 @@ def _decode_seg_end2end(
     confidence_threshold: float = 0.25,
     keep_classes: list[str] | None = None,
     mask_threshold: float = 0.5,
+    decode_masks: bool = True,
 ) -> list[Detection]:
     """Decode an END-TO-END / NMS-free YOLO-seg head (YOLO26 / YOLOv10-style).
 
@@ -372,38 +382,40 @@ def _decode_seg_end2end(
     xyxy_source = invert_letterbox_xyxy(xyxy_target, letterbox_meta)
 
     # ---- mask decode (mirrors decode_yolo11_seg's mask assembly) ----
-    _nm, mh, mw = protos.shape
-    protos_flat = protos.reshape(nm, mh * mw)
-    masks_proto = _sigmoid(coeff @ protos_flat).reshape(-1, mh, mw)
-
     target_h, target_w = target_hw
     src_h, src_w = letterbox_meta.source_shape_hw
-    sx = mw / float(target_w)
-    sy = mh / float(target_h)
+    if decode_masks:
+        _nm, mh, mw = protos.shape
+        protos_flat = protos.reshape(nm, mh * mw)
+        masks_proto = _sigmoid(coeff @ protos_flat).reshape(-1, mh, mw)
+        sx = mw / float(target_w)
+        sy = mh / float(target_h)
 
     detections: list[Detection] = []
     for i in range(xyxy_source.shape[0]):
-        x1_t, y1_t, x2_t, y2_t = xyxy_target[i]
-        px1 = max(0, min(int(np.floor(x1_t * sx)), mw - 1))
-        py1 = max(0, min(int(np.floor(y1_t * sy)), mh - 1))
-        px2 = max(px1 + 1, min(int(np.ceil(x2_t * sx)), mw))
-        py2 = max(py1 + 1, min(int(np.ceil(y2_t * sy)), mh))
-        mp = masks_proto[i, py1:py2, px1:px2]
-
+        mask_full = None
         x1_s, y1_s, x2_s, y2_s = xyxy_source[i]
-        x1i = max(0, min(round(x1_s), src_w - 1))
-        y1i = max(0, min(round(y1_s), src_h - 1))
-        x2i = max(x1i + 1, min(round(x2_s), src_w))
-        y2i = max(y1i + 1, min(round(y2_s), src_h))
-        bw, bh = x2i - x1i, y2i - y1i
+        if decode_masks:
+            x1_t, y1_t, x2_t, y2_t = xyxy_target[i]
+            px1 = max(0, min(int(np.floor(x1_t * sx)), mw - 1))
+            py1 = max(0, min(int(np.floor(y1_t * sy)), mh - 1))
+            px2 = max(px1 + 1, min(int(np.ceil(x2_t * sx)), mw))
+            py2 = max(py1 + 1, min(int(np.ceil(y2_t * sy)), mh))
+            mp = masks_proto[i, py1:py2, px1:px2]
 
-        if mp.size == 0 or bw <= 0 or bh <= 0:
-            mask_full = np.zeros((src_h, src_w), dtype=bool)
-        else:
-            mp_resized = cv2.resize(mp.astype(np.float32), (bw, bh),
-                                    interpolation=cv2.INTER_LINEAR)
-            mask_full = np.zeros((src_h, src_w), dtype=bool)
-            mask_full[y1i:y2i, x1i:x2i] = mp_resized > mask_threshold
+            x1i = max(0, min(round(x1_s), src_w - 1))
+            y1i = max(0, min(round(y1_s), src_h - 1))
+            x2i = max(x1i + 1, min(round(x2_s), src_w))
+            y2i = max(y1i + 1, min(round(y2_s), src_h))
+            bw, bh = x2i - x1i, y2i - y1i
+
+            if mp.size == 0 or bw <= 0 or bh <= 0:
+                mask_full = np.zeros((src_h, src_w), dtype=bool)
+            else:
+                mp_resized = cv2.resize(mp.astype(np.float32), (bw, bh),
+                                        interpolation=cv2.INTER_LINEAR)
+                mask_full = np.zeros((src_h, src_w), dtype=bool)
+                mask_full[y1i:y2i, x1i:x2i] = mp_resized > mask_threshold
 
         cls = class_names[int(cls_idx[i])]
         conf = float(scores[i])

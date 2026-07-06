@@ -9,12 +9,21 @@ Algorithm (ROS-style approximate-time policy, single capture-time axis):
     * Per-camera bounded deque of incoming ``Frame``s.
     * **Strict alignment (preferred):** on each new frame, if every camera's
       head is within ``max_skew_ms``, consume the heads → multi-cam pair.
-    * **Solo emit (degraded / Mode 1):** if no strict alignment fired AND the
-      oldest buffered frame across all cameras has waited more than
-      ``degraded_emit_after_ms`` since the latest capture seen, emit it as a
-      single-camera ``FramePair``. This covers two cases with one mechanism:
-        - Mode 1 deployments where only one camera is configured.
-        - Mode 2 deployments where one camera has failed at runtime.
+    * **Solo emit (degraded / Mode 1):** LATEST-FRAME-ONLY via a sticky
+      per-camera *degraded* flag. A camera ENTERS degraded when its oldest
+      buffered frame has waited more than ``degraded_emit_after_ms`` since the
+      latest capture seen (the partner is overdue); at that moment the NEWEST
+      buffered frame emits as a single-camera ``FramePair`` and everything
+      older is discarded — never an oldest-first backlog drain (the old
+      behaviour re-served up to ``max_age_ms`` of stale frames when the
+      consumer was slow). WHILE degraded, every subsequent frame emits
+      immediately (full input fps, zero buffering). The flag clears when a
+      strict alignment fires again (partner recovered). Two cases, one
+      mechanism:
+        - Mode 1 (single camera configured): permanently degraded from
+          construction — every frame emits immediately, no 100 ms tax.
+        - Mode 2 with a camera failed at runtime: pays the wait once at
+          entry, then streams the survivor in real time.
     * **Eviction:** drop frames older than ``max_age_ms`` from the reference
       time so a slow consumer doesn't accumulate unbounded backlog.
 
@@ -53,6 +62,10 @@ class FrameSynchronizer:
         self._max_age_s = max_age_ms / 1000.0
         self._degraded_after_s = degraded_emit_after_ms / 1000.0
         self._buffers: dict[str, deque[Frame]] = {cid: deque(maxlen=buffer_size) for cid in ids}
+        # Sticky degraded flag (see module docstring). A single-camera config
+        # is degraded from the start: there is no partner to wait for, so
+        # every frame emits immediately.
+        self._degraded: dict[str, bool] = {cid: len(ids) == 1 for cid in ids}
         self._lock = threading.Lock()
         self._pair_counter = 0
         self._latest_capture_ts: float = 0.0
@@ -118,34 +131,39 @@ class FrameSynchronizer:
                 self._buffers[cid].remove(f)
             except ValueError:
                 pass
+        # An aligned pair means the partner is back — leave degraded mode.
+        for cid in self._camera_ids:
+            self._degraded[cid] = False
         return pair
 
     def _try_emit_solo(self) -> FramePair | None:
-        """Emit the oldest frame as a solo pair if it has waited too long.
+        """Latest-only solo emission (see module docstring).
 
-        Fires when:
-            * The configuration is single-camera (Mode 1) — every buffered
-              frame eventually ages past ``degraded_emit_after_s`` relative to
-              the latest seen on the same camera.
-            * The configuration is multi-camera but one camera has stopped
-              feeding (Mode 2 with a failed cam) — the surviving camera's
-              oldest frame ages past the threshold and emits solo.
-
-        Subsequent ``submit()`` calls drain the buffer at the input rate.
+        A camera already in degraded mode emits its NEWEST buffered frame
+        immediately (steady state: the frame just submitted — zero latency,
+        zero buffering). A camera not yet degraded enters the mode when its
+        oldest frame has aged past ``degraded_emit_after_s`` (partner overdue):
+        the NEWEST frame emits and every older one is discarded, so a slow
+        consumer or a dead partner never causes a stale-frame backlog drain.
+        Emitting newest-only keeps ``capture_ts`` monotonic per camera.
         """
         for cid in self._camera_ids:
             buf = self._buffers[cid]
             if not buf:
                 continue
-            age = self._latest_capture_ts - buf[0].capture_ts
-            if age >= self._degraded_after_s:
-                head = buf.popleft()
-                self._pair_counter += 1
-                return FramePair(
-                    capture_ts=head.capture_ts,
-                    frame_idx=self._pair_counter,
-                    frames={cid: head},
-                )
+            if not self._degraded[cid]:
+                age = self._latest_capture_ts - buf[0].capture_ts
+                if age < self._degraded_after_s:
+                    continue
+                self._degraded[cid] = True
+            newest = buf[-1]
+            buf.clear()
+            self._pair_counter += 1
+            return FramePair(
+                capture_ts=newest.capture_ts,
+                frame_idx=self._pair_counter,
+                frames={cid: newest},
+            )
         return None
 
     @property

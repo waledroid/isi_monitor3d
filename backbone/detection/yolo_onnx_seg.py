@@ -28,7 +28,7 @@ from backbone.shared.ort_session import build_onnx_session
 
 from .onnx_meta import read_embedded_class_names
 from .postprocess import decode_yolo11_seg
-from .preprocess import batch_letterbox
+from .preprocess import batch_letterbox, pad_batch
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ class YoloOnnxSegDetector(Detector):
         keep_classes: list[str] | None = None,
         providers: list[str] | None = None,
         mask_threshold: float = 0.5,
+        decode_masks: bool = True,
     ) -> None:
         onnx_file = Path(onnx_path)
         if not onnx_file.exists():
@@ -66,6 +67,10 @@ class YoloOnnxSegDetector(Detector):
         self._iou_threshold = float(iou_threshold)
         self._keep_classes = None
         self._mask_threshold = float(mask_threshold)
+        # False = boxes/foot points only (mask=None) — skips the per-detection
+        # full-frame mask assembly, which is pure CPU cost for consumers that
+        # never read masks (the Backbone pipeline sets this False).
+        self._decode_masks = bool(decode_masks)
         self._providers = list(providers) if providers else list(DEFAULT_PROVIDERS)
 
         try:
@@ -94,6 +99,9 @@ class YoloOnnxSegDetector(Detector):
         # Letterboxing to a different size triggers the run() error
         # "Got invalid dimensions for input: images ... Got 640 Expected 1024".
         self._input_shape = inputs[0].shape
+        # Largest batch fed so far (sticky) — solo pairs are padded up to this
+        # so the CUDA session never sees a shape change (each one costs ~2.5 s).
+        self._max_batch_seen = 1
         ishape = self._input_shape
         if (len(ishape) == 4 and isinstance(ishape[2], int) and isinstance(ishape[3], int)
                 and ishape[2] > 0 and ishape[3] > 0):
@@ -177,6 +185,11 @@ class YoloOnnxSegDetector(Detector):
         images = [pair.frames[cid].image for cid in cam_ids]
 
         batch_tensor, lb_results = batch_letterbox(images, target=self._input_size)
+        # Sticky batch: never let the input shape shrink back after an aligned
+        # pair — pad solo pairs with zero images instead (see ``pad_batch``).
+        if self.supports_batch:
+            self._max_batch_seen = max(self._max_batch_seen, batch_tensor.shape[0])
+            batch_tensor = pad_batch(batch_tensor, self._max_batch_seen)
         outputs = self._session.run(None, {self._input_name: batch_tensor})
         if len(outputs) != 2:
             raise RuntimeError(
@@ -197,15 +210,17 @@ class YoloOnnxSegDetector(Detector):
                 f"YoloOnnxSegDetector: cannot identify head/protos from output ranks "
                 f"{out_a.ndim} and {out_b.ndim} (expected one 3D head, one 4D protos)"
             )
-        if head_batch.shape[0] != len(cam_ids):
+        # N is the (possibly padded) batch; only the first len(cam_ids) entries
+        # are real frames.
+        if head_batch.shape[0] != batch_tensor.shape[0]:
             raise RuntimeError(
                 f"YoloOnnxSegDetector: unexpected head shape {head_batch.shape} "
-                f"(expected (N={len(cam_ids)}, 4+nc+nm, A))"
+                f"(expected (N={batch_tensor.shape[0]}, 4+nc+nm, A))"
             )
-        if protos_batch.shape[0] != len(cam_ids):
+        if protos_batch.shape[0] != batch_tensor.shape[0]:
             raise RuntimeError(
                 f"YoloOnnxSegDetector: unexpected protos shape {protos_batch.shape} "
-                f"(expected (N={len(cam_ids)}, nm, mh, mw))"
+                f"(expected (N={batch_tensor.shape[0]}, nm, mh, mw))"
             )
 
         # `_input_size` is (w, h); target_hw needed by the decode is (h, w).
@@ -225,5 +240,6 @@ class YoloOnnxSegDetector(Detector):
                 iou_threshold=self._iou_threshold,
                 keep_classes=self._keep_classes,
                 mask_threshold=self._mask_threshold,
+                decode_masks=self._decode_masks,
             )
         return result

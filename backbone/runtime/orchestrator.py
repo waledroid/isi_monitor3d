@@ -46,6 +46,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any
 
+import numpy as np
 import yaml
 
 # Importing each layer's package triggers `@register` for its plugin(s).
@@ -59,7 +60,14 @@ import backbone.ingestion
 import backbone.triangulation  # noqa: F401  — registers opencv_dlt
 from backbone.comms import Publisher
 from backbone.comms.diagnostics_publisher import DiagnosticsPublisher
-from backbone.comms.schemas import CalibrationFactCheck, ConfigMessage, ZoneSpec
+from backbone.comms.schemas import (
+    CalibrationFactCheck,
+    ConfigMessage,
+    ProximityMessage,
+    ProximityPair,
+    ZoneSpec,
+    ZoneStateMessage,
+)
 from backbone.core.interfaces import (
     detector_registry,
     frame_source_registry,
@@ -81,6 +89,7 @@ from backbone.ingestion import FrameBus, FrameSynchronizer
 from backbone.shared.camera_rig import CameraRig
 from backbone.shared.snapshot_writer import SnapshotWriter
 from backbone.shared.timestamps import LatencyMeter, elapsed_ms, now
+from backbone.shared.zone_state import ZoneStateTracker
 from backbone.shared.zone_transitions import ZoneTransitionDetector
 from backbone.shared.zones import ZoneRegistry
 from backbone.triangulation import (
@@ -101,6 +110,7 @@ class Orchestrator:
         self._config_path = Path(config_path)
         self._config = yaml.safe_load(self._config_path.read_text())
         self._stop_event = threading.Event()
+        self._signals_installed = False   # set by install_signal_handlers()
         self._build()
 
     # ---- build ----
@@ -157,12 +167,54 @@ class Orchestrator:
         # not a kwarg of the object detector, so drop it before constructing one.
         det_cfg.pop("pose_onnx_path", None)
         det_cfg.pop("pose_confidence_threshold", None)   # pose-engine setting, not an object-detector kwarg
+        det_cfg.pop("pose_imgsz", None)                  # pose-engine setting, not an object-detector kwarg
+        # Run the pose model on every Nth pair only (1 = every pair). Person
+        # tracks coast between pose frames — see step().
+        self._pose_every_n = max(1, int(det_cfg.pop("pose_every_n", 1)))
         # `inference_imgsz` is the runtime input size (the dashboard slider). It maps
         # to the detector's square `input_size`; effective only on a dynamic ONNX.
         imgsz = det_cfg.pop("inference_imgsz", None)
         if imgsz:
             det_cfg["input_size"] = (int(imgsz), int(imgsz))
-        self._detector = detector_registry.create(det_plugin, **det_cfg)
+        # The pipeline never reads Detection.mask except as an optional area
+        # refinement in pallet_occupancy (bbox fallback) — per-detection
+        # full-frame mask assembly is pure CPU cost here. Default it OFF for
+        # the YOLO seg plugins; a config `decode_masks: true` re-enables.
+        # (Dashboard overlays build their own detectors and keep masks.)
+        if det_plugin in ("yolo_onnx_seg", "yolo_openvino_seg"):
+            det_cfg.setdefault("decode_masks", False)
+        # The system is ZONE-BASED: with `detection.scope: zones` (the default)
+        # the object detector sees only the configured floor zones' crops —
+        # and with NO zones configured it is not built at all (pose stays
+        # global; person tracks continue). `scope: full_frame` restores the
+        # everything-visible behaviour.
+        scope = str(det_cfg.pop("scope", "zones"))
+        # Zone crops are letterboxed to the model input INDIVIDUALLY, so cost
+        # scales with CROP COUNT, not crop area — at the full-frame 640 four
+        # crops would cost MORE than two full frames. `zone_imgsz` (default
+        # 384) sizes the zone-scoped inference instead; needs a dynamic-export
+        # model (a static one keeps its baked size, same rule as the slider).
+        zone_imgsz = int(det_cfg.pop("zone_imgsz", 384) or 384)
+        if scope not in ("zones", "full_frame"):
+            raise ValueError(f"detection.scope={scope!r}, expected 'zones' or 'full_frame'")
+        if scope == "zones" and len(self._zones) == 0:
+            self._detector = None
+            logger.warning(
+                "orchestrator: detection.scope=zones with no zones configured — "
+                "object detection is OFF (pose-only). Draw zones to enable it.")
+        else:
+            if scope == "zones":
+                det_cfg["input_size"] = (zone_imgsz, zone_imgsz)
+            self._detector = detector_registry.create(det_plugin, **det_cfg)
+            if scope == "zones":
+                from backbone.detection.zone_scope import (
+                    ZoneScopedDetector,
+                    zone_crop_boxes,
+                )
+                boxes = zone_crop_boxes(self._rig, self._zones)
+                self._detector = ZoneScopedDetector(
+                    self._detector, boxes,
+                    {cid: self._rig[cid].image_size_wh for cid in self._rig.camera_ids})
 
         # Optional person-pose detector — reuses the SAME config keys the dashboard
         # overlay uses (`detection.pose_onnx_path` / `pose_confidence_threshold`), so
@@ -175,8 +227,16 @@ class Orchestrator:
         if pose_path:
             try:
                 pose_conf = float(cfg["detection"].get("pose_confidence_threshold", 0.3))
+                # `pose_imgsz` shrinks the pose input on a dynamic export (a
+                # static export keeps its baked size — same rule as the object
+                # detector's `inference_imgsz`). 480 ≈ half the 640 cost.
+                pose_kwargs: dict = {}
+                pose_imgsz = cfg["detection"].get("pose_imgsz")
+                if pose_imgsz:
+                    pose_kwargs["input_size"] = (int(pose_imgsz), int(pose_imgsz))
                 self._person_detector = detector_registry.create(
                     "yolo_onnx_pose", onnx_path=pose_path, confidence_threshold=pose_conf,
+                    **pose_kwargs,
                 )
                 logger.info("orchestrator: person-pose detector enabled (%s)", pose_path)
             except Exception as exc:
@@ -251,6 +311,29 @@ class Orchestrator:
             meta_cfg.get("passings", {}).get("enabled", True)
         )
 
+        # Person↔object proximity (the safety/AGV distance signal). Enabled by
+        # default; the horizon defaults to the SAME knob the dashboard's
+        # distance lines use so wire and screen agree.
+        prox_cfg = meta_cfg.get("proximity", {})
+        self._proximity_enabled: bool = bool(prox_cfg.get("enabled", True))
+        self._proximity_max_m = float(prox_cfg.get(
+            "max_distance_m",
+            cfg["detection"].get("person_pallet_max_distance_m", 6.0)))
+        self._proximity_interval_s = float(prox_cfg.get("refresh_interval_s", 0.5))
+        self._proximity_last_ts = 0.0
+        self._proximity_had_pairs = False
+
+        # Zone state (retained per-zone object list — the WMS/FMS signal).
+        # Enabled by default; opt-out via ``metadata.zone_state.enabled: false``.
+        zone_state_cfg = meta_cfg.get("zone_state", {})
+        if zone_state_cfg.get("enabled", True):
+            self._zone_state: ZoneStateTracker | None = ZoneStateTracker(
+                self._zones,
+                refresh_interval_s=float(zone_state_cfg.get("refresh_interval_s", 1.0)),
+            )
+        else:
+            self._zone_state = None
+
         # Image snapshots on zone-passing events (Phase C). Opt-in via
         # ``metadata.images.enabled: true`` in backbone.yaml. JPEG bytes go to
         # disk only; the published message carries the URL, never raw bytes.
@@ -274,9 +357,13 @@ class Orchestrator:
             self._snapshot_writer = None
             self._images_on = "enter"
 
-        # Latency / frame counter.
+        # Latency / frame counters. ``_frames_by_camera`` counts frames as they
+        # arrive from each source (the true per-camera capture rate, before
+        # synchronisation) — the diagnostics heartbeat diffs it into per-camera
+        # fps for the operator STATUS panel.
         self._latency_total = LatencyMeter("capture_to_publish", window=2048)
         self._frame_count = 0
+        self._frames_by_camera: dict[str, int] = {cam_id: 0 for cam_id in self._sources}
 
         # DiagnosticsPublisher — optional, enabled by default.
         diag_cfg = meta_cfg.get("diagnostics", {})
@@ -325,6 +412,11 @@ class Orchestrator:
     @property
     def frame_count(self) -> int:
         return self._frame_count
+
+    @property
+    def frames_by_camera(self) -> dict[str, int]:
+        """Frames ingested per camera since start (source rate, pre-sync)."""
+        return dict(self._frames_by_camera)
 
     @property
     def zone_count(self) -> int:
@@ -401,11 +493,32 @@ class Orchestrator:
             self._publisher.publish_config(self._build_config_message())
         except Exception:
             logger.warning("orchestrator: failed to publish config advertisement", exc_info=True)
+        # Retained empty state for every configured zone, so the whole zone/
+        # folder is discoverable by subscription before anything moves.
+        if self._zone_state is not None:
+            try:
+                for state in self._zone_state.initial_states(now()):
+                    self._publisher.publish_zone_state(ZoneStateMessage.from_state(state))
+            except Exception:
+                logger.warning("orchestrator: failed to publish initial zone states", exc_info=True)
         if self._diagnostics is not None:
             self._diagnostics.start()
 
-        # Wait for shutdown.
-        self._stop_event.wait()
+        # Re-assert OUR signal disposition now that every pipeline is up:
+        # loading the GStreamer nvcodec elements (CUDA context creation inside
+        # the source threads) was observed to clobber the process's SIGTERM
+        # handler installed before run() — the Python handler then never fired
+        # and the process hung in the wait below until the supervisor's
+        # SIGKILL (observed live with decoder=nvdec; software decode was
+        # unaffected). Re-installing after startup restores clean shutdown.
+        if self._signals_installed:
+            self.install_signal_handlers()
+
+        # Wait for shutdown. Polling wait (not a bare wait()) so the main
+        # thread returns to the bytecode loop regularly — Python signal
+        # handlers can only run there.
+        while not self._stop_event.wait(timeout=0.5):
+            pass
         self._shutdown()
 
     def request_shutdown(self) -> None:
@@ -417,15 +530,32 @@ class Orchestrator:
             self.request_shutdown()
         signal.signal(signal.SIGINT, _handler)
         signal.signal(signal.SIGTERM, _handler)
+        self._signals_installed = True
 
     def _shutdown(self) -> None:
-        for src in self._sources.values():
+        # Stop sources IN PARALLEL — each stop() joins its GStreamer thread
+        # (bounded), so a sequential loop over N cameras multiplies the wall
+        # time. Parallel stoppers make it max(join), not sum: the supervisor's
+        # SIGTERM grace (~3.5 s) must comfortably contain the whole teardown
+        # or the process gets SIGKILLed before the clean MQTT disconnect.
+        def _stop_source(src: Any) -> None:
             try:
                 src.stop()
             except Exception:
-                logger.warning("source %s failed to stop cleanly", src.camera_id, exc_info=True)
+                logger.warning("source %s failed to stop cleanly",
+                               src.camera_id, exc_info=True)
+
+        stoppers = [
+            threading.Thread(target=_stop_source, args=(src,), daemon=True,
+                             name=f"stop-{cam_id}")
+            for cam_id, src in self._sources.items()
+        ]
+        for t in stoppers:
+            t.start()
+        for t in stoppers:
+            t.join(timeout=2.0)
         if self._pipeline_thread is not None:
-            self._pipeline_thread.join(timeout=5.0)
+            self._pipeline_thread.join(timeout=2.0)
         if self._diagnostics is not None:
             self._diagnostics.stop()
         self._publisher.close()
@@ -446,6 +576,7 @@ class Orchestrator:
             for frame in source.frames():
                 if self._stop_event.is_set():
                     break
+                self._frames_by_camera[cam_id] = self._frames_by_camera.get(cam_id, 0) + 1
                 pair = self._sync.submit(frame)
                 if pair is not None:
                     self._bus.publish(pair)
@@ -465,7 +596,7 @@ class Orchestrator:
         """Consume FramePairs from the bus and run the full processing stack."""
         while not self._stop_event.is_set():
             try:
-                pair = self._bus.get(timeout=0.5)
+                pair = self._bus.get_latest(timeout=0.5)   # newest pair only — never a stale backlog
             except queue.Empty:
                 continue
             try:
@@ -475,6 +606,43 @@ class Orchestrator:
                 self._stop_event.set()
                 return
 
+    def _scale_detections_to_calibration(self, detections_by_camera, pair) -> None:
+        """Map detections from INGEST-frame pixels to CALIBRATION-frame pixels.
+
+        Ingestion may deliver downscaled frames (per-source ``output_wh``) to cut
+        decode/convert/copy cost, but every geometric consumer downstream —
+        FootProjector (H), KeypointAssociator (triangulation), occupancy — is
+        calibrated at the camera's native resolution. This is the single scale
+        boundary: past here, all pixel coordinates are calibration-frame. No-op
+        (and near-zero cost) when frames are already at calibration size.
+        """
+        for cam_id, dets in detections_by_camera.items():
+            frame = pair.frames.get(cam_id)
+            if frame is None or not dets or cam_id not in self._rig:
+                continue
+            fh, fw = frame.image.shape[:2]
+            cw, ch = self._rig[cam_id].image_size_wh
+            if (int(fw), int(fh)) == (int(cw), int(ch)):
+                continue
+            sx, sy = cw / float(fw), ch / float(fh)
+            for d in dets:
+                x0, y0, x1, y1 = d.bbox_xyxy
+                d.bbox_xyxy = (x0 * sx, y0 * sy, x1 * sx, y1 * sy)
+                u, v = d.foot_uv
+                d.foot_uv = (u * sx, v * sy)
+                if d.keypoints_uv is not None:          # (K, 3) = u, v, conf
+                    kp = np.asarray(d.keypoints_uv, dtype=np.float64).copy()
+                    kp[:, 0] *= sx
+                    kp[:, 1] *= sy
+                    d.keypoints_uv = kp
+                if d.mask is not None:
+                    # Keep the mask in the SAME space as the bbox — occupancy
+                    # compares mask/bbox areas across detections.
+                    import cv2
+                    d.mask = cv2.resize(
+                        d.mask.astype(np.uint8), (int(cw), int(ch)),
+                        interpolation=cv2.INTER_NEAREST).astype(bool)
+
     def step(self, pair: Any) -> tuple[list[Track2D], list[Any]]:
         """Process one ``FramePair`` end-to-end. Returns the published 2D + 3D tracks.
 
@@ -482,14 +650,26 @@ class Orchestrator:
         spinning up threads.
         """
         # --- detection ---
-        detections_by_camera = self._detector.detect(pair)
+        if self._detector is not None:
+            detections_by_camera = self._detector.detect(pair)
+            self._scale_detections_to_calibration(detections_by_camera, pair)
+        else:
+            # Zone-based system, no zones configured: no object detection at
+            # all — the pose path below still produces person tracks.
+            detections_by_camera = {cid: [] for cid in pair.frames}
         all_detections = [d for dets in detections_by_camera.values() for d in dets]
         # Person-pose runs as a second detector; its detections join the homography
         # path (foot → floor → Track2D) but NOT the triangulation association below
         # (that stays object-detector-only via `detections_by_camera`).
-        if self._person_detector is not None:
+        # `pose_every_n` > 1 amortises the pose model across pairs — person tracks
+        # coast on their Kalman prediction between pose frames (ByteTrack tolerates
+        # `max_lost_frames` misses), buying the object pipeline its frame budget.
+        if (self._person_detector is not None
+                and self._frame_count % self._pose_every_n == 0):
             try:
-                for dets in self._person_detector.detect(pair).values():
+                pose_by_camera = self._person_detector.detect(pair)
+                self._scale_detections_to_calibration(pose_by_camera, pair)
+                for dets in pose_by_camera.values():
                     all_detections.extend(dets)
             except Exception:
                 logger.warning("orchestrator: person detection failed", exc_info=True)
@@ -509,12 +689,21 @@ class Orchestrator:
         # track; sets occupancy_* on the Track2D before it's published.
         self._occupancy.enrich(tracks_2d, detections_by_camera)
 
-        # --- publish 2D + zone transitions ---
+        # --- publish 2D + zone transitions + zone state ---
+        # Zone membership is computed ONCE per track and shared by the
+        # transition detector (events) and the state tracker (absolute state).
+        need_membership = self._passings_enabled or self._zone_state is not None
+        memberships: dict[int, tuple[str, ...]] = {}
         for track in tracks_2d:
             self._publisher.publish_track_2d(track)
+            if not need_membership:
+                continue
+            membership = self._zones.which(track.xy_m)
+            memberships[track.track_id] = membership
             if self._passings_enabled:
                 for ev in self._transitions.update(
-                    track.track_id, track.cls, track.xy_m, pair.capture_ts
+                    track.track_id, track.cls, track.xy_m, pair.capture_ts,
+                    membership=membership,
                 ):
                     self._publisher.publish_event(ev)
                     # Snapshot on enter/leave/both — JPEG written to disk only;
@@ -534,6 +723,47 @@ class Orchestrator:
                             )
         if self._passings_enabled:
             self._transitions.forget({t.track_id for t in tracks_2d})
+
+        # --- zone state (retained per-zone object list) ---
+        if self._zone_state is not None:
+            zone_states = self._zone_state.update(
+                [(t, memberships.get(t.track_id, ())) for t in tracks_2d],
+                pair.capture_ts,
+            )
+            for state in zone_states:
+                self._publisher.publish_zone_state(ZoneStateMessage.from_state(state))
+
+        # --- person↔object proximity (safety/AGV distance on the wire) ---
+        # Floor distances between every person track and every object track
+        # within the horizon; published throttled + retained on MQTT. An
+        # explicit empty message clears the topic when the last pair leaves.
+        if (self._proximity_enabled
+                and pair.capture_ts - self._proximity_last_ts >= self._proximity_interval_s):
+            self._proximity_last_ts = pair.capture_ts
+            persons = [t for t in tracks_2d if t.cls == "person"]
+            objects = [t for t in tracks_2d if t.cls != "person"]
+            prox_pairs = []
+            for person in persons:
+                px, py = person.xy_m
+                for obj in objects:
+                    ox, oy = obj.xy_m
+                    dist = float(np.hypot(px - ox, py - oy))
+                    if dist <= self._proximity_max_m:
+                        prox_pairs.append(ProximityPair(
+                            person_track_id=person.track_id,
+                            object_track_id=obj.track_id,
+                            object_cls=obj.cls,
+                            distance_m=round(dist, 3),
+                            person_xy_m=(px, py),
+                            object_xy_m=(ox, oy),
+                        ))
+            if prox_pairs or self._proximity_had_pairs:
+                self._publisher.publish_proximity(ProximityMessage(
+                    ts=pair.capture_ts,
+                    max_distance_m=self._proximity_max_m,
+                    pairs=tuple(prox_pairs),
+                ))
+            self._proximity_had_pairs = bool(prox_pairs)
 
         # --- triangulation (Mode 2 only; subscription-driven) ---
         tracks_3d: list[Any] = []

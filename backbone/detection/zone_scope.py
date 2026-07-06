@@ -1,0 +1,209 @@
+"""Zone-scoped detection — the Backbone's object detector sees ONLY the zones.
+
+The system is zone-based: object detection (and therefore tracking, pallet
+state, MQTT) applies inside the configured floor zones; the person-pose model
+stays global (safety needs eyes everywhere). ``ZoneScopedDetector`` wraps any
+``Detector`` plugin:
+
+1. **Build time** — every floor zone polygon (metres, ``zones.yaml``) is
+   projected into every camera through the calibration (distortion-aware,
+   at ``z = 0`` and ``z = crop_height_m`` so a loaded pallet's full height
+   fits) → one pixel crop box per (camera, zone), in CALIBRATION-frame
+   pixels. Zones a camera can't see produce no box.
+2. **Per pair** — each visible zone is cropped from the (possibly
+   ingest-downscaled) frame, all crops ride ONE batched ``detect()`` call on
+   the wrapped detector (mixed sizes are letterboxed per-crop, so a small far
+   zone gets MORE model pixels than it would inside the full frame), and the
+   detections are remapped to frame pixels. Downstream — geometry, ByteTrack,
+   zone state, comms — is untouched.
+
+Deliberately NOT a plugin seam: there is one sensible way to scope detection
+to zones. The orchestrator composes it around whichever detector plugin the
+config names (``detection.scope: zones`` — the default; ``full_frame``
+restores the pre-zone-scope behaviour).
+
+Masks are dropped during remap (a crop-sized mask is not a frame-sized mask);
+``PalletOccupancy`` falls back to bbox overlap, which is what the Backbone
+runs anyway (``decode_masks`` defaults off).
+
+Overlapping zones: a detection inside two overlapping crops is reported twice
+(one per zone crop). Zones are physically disjoint in every deployment so no
+dedup pass is spent on it; if that changes, dedupe here — not downstream.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+
+import cv2
+import numpy as np
+
+from backbone.core.types import Detection, Frame, FramePair
+from backbone.shared.geometry import (
+    densify_polygon,
+    floor_to_pixel,
+    has_metric_camera_model,
+)
+
+logger = logging.getLogger(__name__)
+
+# Synthetic camera-id separator for crop frames — must never appear in a real
+# camera id (YAML keys are operator-typed identifiers like "cam_a").
+_SEP = "\x00"
+
+
+def _project_world3(world3, K, D, R, t, image_size_wh) -> np.ndarray:
+    """Project 3D world points to RAW (distorted) pixels, pose convention as in
+    :mod:`backbone.shared.geometry` (``R, t`` = camera pose, world←camera).
+
+    Same divergence guard as ``floor_to_pixel_distorted``: the distortion
+    polynomial explodes (or folds back inside the frame) for points far
+    outside the calibrated field, so points whose PINHOLE projection is beyond
+    a 25 % margin keep their pinhole coordinates. Behind-camera points → NaN.
+    """
+    world3 = np.asarray(world3, dtype=np.float64).reshape(-1, 3)
+    K = np.asarray(K, dtype=np.float64)
+    R = np.asarray(R, dtype=np.float64)
+    t = np.asarray(t, dtype=np.float64).reshape(3)
+    R_cw = R.T
+    t_cw = -R_cw @ t
+    cam = (R_cw @ world3.T).T + t_cw
+    in_front = cam[:, 2] > 1e-6
+
+    out = np.full((len(world3), 2), np.nan)
+    if not in_front.any():
+        return out
+    # Pinhole baseline (for the guard + the fallback value).
+    pin = cam[in_front, :2] / cam[in_front, 2:3]
+    pin = (K[:2, :2] @ pin.T).T + K[:2, 2]
+    out[in_front] = pin
+
+    w, h = float(image_size_wh[0]), float(image_size_wh[1])
+    mx, my = w * 0.25, h * 0.25
+    near = np.zeros(len(world3), dtype=bool)
+    near[in_front] = ((pin[:, 0] >= -mx) & (pin[:, 0] < w + mx)
+                      & (pin[:, 1] >= -my) & (pin[:, 1] < h + my))
+    if near.any():
+        rvec, _ = cv2.Rodrigues(R_cw)
+        duv, _ = cv2.projectPoints(world3[near], rvec, t_cw, K,
+                                   np.asarray(D, dtype=np.float64))
+        out[near] = duv.reshape(-1, 2)
+    return out
+
+
+def zone_crop_boxes(
+    rig,
+    zones,
+    *,
+    crop_height_m: float = 2.0,
+    margin_px: int = 16,
+    min_side_px: int = 48,
+) -> dict[str, list[tuple[str, tuple[int, int, int, int]]]]:
+    """Per-camera crop boxes, CALIBRATION-frame pixels: ``{cam: [(zone, box)]}``.
+
+    The box is the union bbox of the zone polygon projected at the floor
+    (``z=0``) and at ``crop_height_m`` (objects have height — a loaded pallet
+    extends well above its floor footprint in the image), padded by
+    ``margin_px`` and clipped to the frame. Zones whose visible box is smaller
+    than ``min_side_px`` on either side (barely/not visible) are skipped.
+
+    Mode-1 placeholder extrinsics (only ``H`` is real) can't lift the polygon
+    off the floor: the floor bbox is extended UPWARD by its own height as a
+    conservative stand-in.
+    """
+    boxes: dict[str, list[tuple[str, tuple[int, int, int, int]]]] = {}
+    for cam_id in rig.camera_ids:
+        view = rig[cam_id]
+        w, h = int(view.image_size_wh[0]), int(view.image_size_wh[1])
+        cam_boxes = []
+        for name in zones.names:
+            poly = densify_polygon(zones[name].polygon, segments_per_edge=8)
+            if has_metric_camera_model(view.K, view.R, view.t):
+                floor3 = np.hstack([poly, np.zeros((len(poly), 1))])
+                top3 = np.hstack([poly, np.full((len(poly), 1), float(crop_height_m))])
+                uv = np.vstack([
+                    _project_world3(floor3, view.K, view.D, view.R, view.t,
+                                    view.image_size_wh),
+                    _project_world3(top3, view.K, view.D, view.R, view.t,
+                                    view.image_size_wh),
+                ])
+                uv = uv[~np.isnan(uv).any(axis=1)]
+            else:
+                uv = floor_to_pixel(poly, view.H)
+            if len(uv) == 0:
+                continue
+            x0 = math.floor(uv[:, 0].min()) - margin_px
+            x1 = math.ceil(uv[:, 0].max()) + margin_px
+            y0 = math.floor(uv[:, 1].min()) - margin_px
+            y1 = math.ceil(uv[:, 1].max()) + margin_px
+            if not has_metric_camera_model(view.K, view.R, view.t):
+                y0 -= (y1 - y0)          # Mode 1: height stand-in (see docstring)
+            x0, y0 = max(0, x0), max(0, y0)
+            x1, y1 = min(w, x1), min(h, y1)
+            if (x1 - x0) < min_side_px or (y1 - y0) < min_side_px:
+                continue
+            cam_boxes.append((name, (int(x0), int(y0), int(x1), int(y1))))
+        boxes[cam_id] = cam_boxes
+        logger.info("zone_scope: %s sees %d/%d zones: %s", cam_id,
+                    len(cam_boxes), len(zones), [b[0] for b in cam_boxes])
+    return boxes
+
+
+class ZoneScopedDetector:
+    """Wrap a ``Detector`` so it runs on zone crops only (see module docstring).
+
+    ``calib_wh_by_camera`` is each camera's calibration frame size — crop boxes
+    are calibration-frame pixels, while live frames may be ingest-downscaled
+    (source ``output_wh``), so crops scale per frame.
+    """
+
+    def __init__(self, detector, boxes_by_camera,
+                 calib_wh_by_camera: dict[str, tuple[int, int]]) -> None:
+        self._detector = detector
+        self._boxes = boxes_by_camera
+        self._calib_wh = {k: (int(v[0]), int(v[1]))
+                          for k, v in calib_wh_by_camera.items()}
+
+    def detect(self, pair: FramePair) -> dict[str, list[Detection]]:
+        out: dict[str, list[Detection]] = {cid: [] for cid in pair.frames}
+        crops: dict[str, Frame] = {}
+        origin: dict[str, tuple[str, int, int]] = {}
+        for cam_id, frame in pair.frames.items():
+            cam_boxes = self._boxes.get(cam_id) or []
+            if not cam_boxes:
+                continue
+            fh, fw = frame.image.shape[:2]
+            # Crop boxes are calibration-frame px; frames may be ingest-downscaled.
+            calib_w, calib_h = self._calib_wh.get(cam_id, (fw, fh))
+            sx, sy = fw / calib_w, fh / calib_h
+            for i, (_zone, (x0, y0, x1, y1)) in enumerate(cam_boxes):
+                fx0, fy0 = max(0, int(x0 * sx)), max(0, int(y0 * sy))
+                fx1, fy1 = min(fw, math.ceil(x1 * sx)), min(fh, math.ceil(y1 * sy))
+                if fx1 - fx0 < 8 or fy1 - fy0 < 8:
+                    continue
+                sid = f"{cam_id}{_SEP}{i}"
+                crops[sid] = Frame(camera_id=sid, capture_ts=frame.capture_ts,
+                                   frame_idx=frame.frame_idx,
+                                   image=frame.image[fy0:fy1, fx0:fx1])
+                origin[sid] = (cam_id, fx0, fy0)
+        if not crops:
+            return out
+        raw = self._detector.detect(FramePair(
+            capture_ts=pair.capture_ts, frame_idx=pair.frame_idx, frames=crops))
+        for sid, dets in raw.items():
+            cam_id, ox, oy = origin[sid]
+            for d in dets:
+                d.camera_id = cam_id
+                x0, y0, x1, y1 = d.bbox_xyxy
+                d.bbox_xyxy = (x0 + ox, y0 + oy, x1 + ox, y1 + oy)
+                u, v = d.foot_uv
+                d.foot_uv = (u + ox, v + oy)
+                if d.keypoints_uv is not None:
+                    kp = np.asarray(d.keypoints_uv, dtype=np.float64).copy()
+                    kp[:, 0] += ox
+                    kp[:, 1] += oy
+                    d.keypoints_uv = kp
+                d.mask = None                     # crop-sized — see module docstring
+                out[cam_id].append(d)
+        return out

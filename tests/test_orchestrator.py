@@ -145,6 +145,7 @@ def _write_config(
     onnx_path: Path,
     udp_port: int,
     subscriptions_path: Path | None = None,
+    zones_path: Path | None = None,
 ) -> Path:
     config = {
         "calibration_path": str(calibration_path),
@@ -157,7 +158,7 @@ def _write_config(
             "frame_bus": {"default_maxsize": 8},
         },
         "detection": {
-            "plugin": "yolo_onnx",
+            "plugin": "yolo_onnx", "scope": "full_frame",
             "onnx_path": str(onnx_path),
             "class_names": CLASS_NAMES,
             "providers": ["CPUExecutionProvider"],
@@ -173,6 +174,8 @@ def _write_config(
     }
     if subscriptions_path is not None:
         config["subscriptions_path"] = str(subscriptions_path)
+    if zones_path is not None:
+        config["zones_path"] = str(zones_path)
     path = tmp_path / "backbone.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
@@ -301,7 +304,7 @@ def test_orchestrator_rejects_config_without_sinks(tmp_path: Path) -> None:
             "cam_a": {"source": {"name": "replay", "frames": []}},
             "cam_b": {"source": {"name": "replay", "frames": []}},
         },
-        "detection": {"plugin": "yolo_onnx", "onnx_path": str(onnx_path),
+        "detection": {"plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
                       "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"]},
         "metadata": {"sinks": []},
     }))
@@ -372,7 +375,7 @@ def test_mode1_build_skips_triangulator(tmp_path: Path) -> None:
                 "cam_a": {"source": {"name": "replay", "frames": []}},
             },
             "detection": {
-                "plugin": "yolo_onnx", "onnx_path": str(onnx_path),
+                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
                 "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
             },
             "homography": {
@@ -408,7 +411,7 @@ def test_mode1_emits_track2d_only_no_track3d(tmp_path: Path) -> None:
                 "cam_a": {"source": {"name": "replay", "frames": []}},
             },
             "detection": {
-                "plugin": "yolo_onnx", "onnx_path": str(onnx_path),
+                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
                 "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
             },
             "homography": {
@@ -525,9 +528,14 @@ def test_mode1_pose_detector_emits_person_and_pallet(tmp_path: Path) -> None:
             "calibration_path": str(cal_path),
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
             "detection": {
-                "plugin": "yolo_onnx", "onnx_path": str(obj_onnx),
+                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(obj_onnx),
                 "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
                 "pose_onnx_path": str(pose_onnx), "pose_confidence_threshold": 0.25,
+                # pose-engine-only key: must be POPPED before the object
+                # detector is constructed (unknown kwarg would raise) and passed
+                # to the pose detector as input_size (a static stub keeps its
+                # baked size — the kwarg must still be accepted).
+                "pose_imgsz": 480,
             },
             "homography": {
                 "tracker": {"plugin": "bytetrack"},
@@ -596,7 +604,7 @@ def test_mode1_pallet_occupancy_full_carton(tmp_path: Path) -> None:
             "calibration_path": str(cal_path),
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
             "detection": {
-                "plugin": "yolo_onnx", "onnx_path": str(onnx_path),
+                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
                 "class_names": _OCC_CLASSES, "providers": ["CPUExecutionProvider"],
                 "confidence_threshold": 0.25,
             },
@@ -651,7 +659,7 @@ def _write_config_with_diag(
             "frame_bus": {"default_maxsize": 8},
         },
         "detection": {
-            "plugin": "yolo_onnx",
+            "plugin": "yolo_onnx", "scope": "full_frame",
             "onnx_path": str(onnx_path),
             "class_names": CLASS_NAMES,
             "providers": ["CPUExecutionProvider"],
@@ -762,5 +770,253 @@ def test_orchestrator_shutdown_stops_diagnostics_before_publisher_close(
         assert stop_order.index("diag_stop") < stop_order.index("pub_close"), (
             f"diagnostics.stop must precede publisher.close; order was {stop_order}"
         )
+    finally:
+        sock.close()
+
+
+# ---- zone state (retained per-zone object list — the WMS/FMS signal) ----
+
+
+def _write_zones(tmp_path: Path) -> Path:
+    """One zone ('dock') covering the stub detection's world position (1, 0)."""
+    zones = {
+        "zones": [
+            {
+                "name": "dock",
+                "type": "palette",
+                "polygon": [[-2.0, -2.0], [4.0, -2.0], [4.0, 2.0], [-2.0, 2.0]],
+            }
+        ]
+    }
+    path = tmp_path / "zones.yaml"
+    path.write_text(yaml.safe_dump(zones))
+    return path
+
+
+def test_orchestrator_step_emits_zone_state_over_udp(tmp_path: Path) -> None:
+    cal_path = _write_calibration(tmp_path)
+    onnx_path = _write_stub_onnx(tmp_path)
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = _write_config(
+            tmp_path, calibration_path=cal_path, onnx_path=onnx_path,
+            udp_port=port, zones_path=_write_zones(tmp_path),
+        )
+        orch = Orchestrator(cfg_path)
+        assert orch._zone_state is not None
+        for i in range(3):
+            orch.step(_make_frame_pair(orch.rig, capture_ts=i * 0.033))
+
+        # Scan the datagrams for a zone_state message (track_2d and passing
+        # messages share the same UDP channel).
+        zone_state = None
+        for _ in range(20):
+            payload, _ = sock.recvfrom(8192)
+            msg = json.loads(payload.decode("utf-8"))
+            if msg["type"] == "zone_state":
+                zone_state = msg
+                break
+        assert zone_state is not None, "no zone_state message on the bus"
+        assert zone_state["zone"] == "dock"
+        assert zone_state["count"] == 1
+        obj = zone_state["objects"][0]
+        assert obj["cls"] == "person"
+        assert 0.0 < obj["confidence"] <= 1.0
+        assert -5.0 <= obj["xy_m"][0] <= 5.0
+        orch.publisher.close()
+    finally:
+        sock.close()
+
+
+def test_orchestrator_zone_state_disabled_via_config(tmp_path: Path) -> None:
+    cal_path = _write_calibration(tmp_path)
+    onnx_path = _write_stub_onnx(tmp_path)
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = _write_config(
+            tmp_path, calibration_path=cal_path, onnx_path=onnx_path,
+            udp_port=port, zones_path=_write_zones(tmp_path),
+        )
+        cfg = yaml.safe_load(cfg_path.read_text())
+        cfg["metadata"]["zone_state"] = {"enabled": False}
+        cfg_path.write_text(yaml.safe_dump(cfg))
+
+        orch = Orchestrator(cfg_path)
+        assert orch._zone_state is None
+        orch.step(_make_frame_pair(orch.rig, capture_ts=0.0))   # must not raise
+        orch.publisher.close()
+    finally:
+        sock.close()
+
+
+def test_pose_every_n_amortises_person_detector(tmp_path: Path) -> None:
+    """``detection.pose_every_n`` runs the person-pose detector on every Nth
+    pair only — person tracks coast on the Kalman between (the pose model's
+    cost stops capping the object-pipeline frame rate)."""
+    cal_path = _write_calibration(tmp_path)
+    onnx_path = _write_stub_onnx(tmp_path)
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = _write_config(tmp_path, calibration_path=cal_path,
+                                 onnx_path=onnx_path, udp_port=port)
+        cfg = yaml.safe_load(cfg_path.read_text())
+        cfg["detection"]["pose_every_n"] = 3
+        cfg_path.write_text(yaml.safe_dump(cfg))
+        orch = Orchestrator(cfg_path)
+        assert orch._pose_every_n == 3
+
+        calls: list[float] = []
+
+        class _CountingPose:
+            def detect(self, pair):
+                calls.append(pair.capture_ts)
+                return {}
+
+        orch._person_detector = _CountingPose()
+        for i in range(6):
+            orch.step(_make_frame_pair(orch.rig, capture_ts=i * 0.033))
+        # frame_count gates it: pose ran on pairs 0 and 3 only.
+        assert len(calls) == 2
+        orch.publisher.close()
+    finally:
+        sock.close()
+
+
+def test_shutdown_stops_sources_in_parallel() -> None:
+    """STOP must be fast: N sources each taking ~1 s to stop are stopped in
+    PARALLEL (wall ≈ max, not sum) — sequential stops made graceful shutdown
+    outlive the supervisor's SIGTERM grace and got the process SIGKILLed
+    mid-teardown (dirty MQTT disconnect)."""
+    import time as _t
+
+    class _SlowSource:
+        def __init__(self, cam):
+            self.camera_id = cam
+
+        def stop(self):
+            _t.sleep(1.0)
+
+    class _Pub:
+        def close(self):
+            pass
+
+    o = Orchestrator.__new__(Orchestrator)
+    o._sources = {"cam_a": _SlowSource("cam_a"), "cam_b": _SlowSource("cam_b")}
+    o._pipeline_thread = None
+    o._diagnostics = None
+    o._publisher = _Pub()
+    o._frame_count = 0
+
+    t0 = _t.perf_counter()
+    o._shutdown()
+    wall = _t.perf_counter() - t0
+    assert wall < 1.6, f"sources must stop in parallel (took {wall:.2f}s, sum would be 2s)"
+
+
+def test_output_wh_scale_guard_keeps_world_coords(tmp_path: Path) -> None:
+    """Downscaled ingest frames (source `output_wh`) must produce the SAME world
+    positions as native-resolution frames: the orchestrator scales detections to
+    calibration-frame pixels at the single scale boundary before projection."""
+    cal_path = _write_single_cam_calibration(tmp_path)          # 1000x1000 frame
+    obj_onnx = _write_stub_object_onnx_single(tmp_path, cls_idx=2)
+
+    def run(frame_px: int) -> tuple[float, float]:
+        sock, port = _bind_receiver()
+        try:
+            cfg_path = tmp_path / f"scale_{frame_px}.yaml"
+            cfg_path.write_text(yaml.safe_dump({
+                "calibration_path": str(cal_path),
+                "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
+                "detection": {
+                    "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(obj_onnx),
+                    "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
+                },
+                "homography": {
+                    "tracker": {"plugin": "bytetrack"},
+                    "track_config": {"min_hits_to_confirm": 1, "max_lost_frames": 30},
+                },
+                "metadata": {"sinks": [{"plugin": "udp", "host": "127.0.0.1", "port": port}]},
+            }))
+            orch = Orchestrator(cfg_path)
+            img = np.zeros((frame_px, frame_px, 3), dtype=np.uint8)
+            tracks: list = []
+            for i in range(3):
+                ts = i * 0.033
+                frame = Frame(camera_id="cam_a", capture_ts=ts, frame_idx=i, image=img)
+                t2, _ = orch.step(FramePair(capture_ts=ts, frame_idx=i,
+                                            frames={"cam_a": frame}))
+                tracks = t2 or tracks
+            orch.publisher.close()
+            assert tracks, f"no tracks at frame size {frame_px}"
+            return tuple(tracks[0].xy_m)
+        finally:
+            sock.close()
+
+    # The stub emits a constant letterbox-space anchor, so the RAW pixel coords
+    # at 500px are exactly half of those at 1000px — only the scale guard makes
+    # the world positions coincide.
+    native = run(1000)
+    downscaled = run(500)
+    assert abs(native[0] - downscaled[0]) < 1e-6
+    assert abs(native[1] - downscaled[1]) < 1e-6
+
+
+def test_proximity_message_published_for_person_near_pallet(tmp_path: Path) -> None:
+    """Person + pallet tracks within the horizon → a v5 ``ProximityMessage``
+    lands on the wire with their distance; identity ids match the tracks."""
+    from backbone.comms.schemas import ProximityMessage, parse_envelope
+
+    cal_path = _write_single_cam_calibration(tmp_path)
+    obj_onnx = _write_stub_object_onnx_single(tmp_path, cls_idx=2)   # pallet
+    pose_onnx = _write_stub_pose_onnx_single(tmp_path)               # person
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = tmp_path / "prox.yaml"
+        cfg_path.write_text(yaml.safe_dump({
+            "calibration_path": str(cal_path),
+            "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
+            "detection": {
+                "plugin": "yolo_onnx", "scope": "full_frame",
+                "onnx_path": str(obj_onnx),
+                "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
+                "pose_onnx_path": str(pose_onnx), "pose_confidence_threshold": 0.25,
+            },
+            "homography": {
+                "tracker": {"plugin": "bytetrack"},
+                "track_config": {"min_hits_to_confirm": 1, "max_lost_frames": 30},
+            },
+            "metadata": {
+                "proximity": {"max_distance_m": 50.0, "refresh_interval_s": 0.0},
+                "sinks": [{"plugin": "udp", "host": "127.0.0.1", "port": port}],
+            },
+        }))
+        orch = Orchestrator(cfg_path)
+        img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        for i in range(3):
+            ts = (i + 1) * 0.1
+            frame = Frame(camera_id="cam_a", capture_ts=ts, frame_idx=i, image=img)
+            orch.step(FramePair(capture_ts=ts, frame_idx=i, frames={"cam_a": frame}))
+        orch.publisher.close()
+
+        prox = []
+        try:
+            while True:
+                data, _ = sock.recvfrom(65535)
+                msg = parse_envelope(json.loads(data.decode("utf-8")))
+                if isinstance(msg, ProximityMessage):
+                    prox.append(msg)
+        except TimeoutError:
+            pass
+        assert prox, "no ProximityMessage on the wire"
+        pair_msg = prox[-1]
+        assert pair_msg.max_distance_m == 50.0
+        assert len(pair_msg.pairs) >= 1
+        p = pair_msg.pairs[0]
+        assert p.object_cls == "pallet" and p.distance_m >= 0.0
+        # Distance must equal the published track geometry it derives from.
+        import math
+        expect = math.hypot(p.person_xy_m[0] - p.object_xy_m[0],
+                            p.person_xy_m[1] - p.object_xy_m[1])
+        assert abs(p.distance_m - expect) < 1e-3
     finally:
         sock.close()

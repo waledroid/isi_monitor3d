@@ -34,7 +34,7 @@ from backbone.shared.ort_session import build_onnx_session
 
 from .onnx_meta import read_embedded_class_names
 from .postprocess import decode_yolo11_detect
-from .preprocess import batch_letterbox
+from .preprocess import batch_letterbox, pad_batch
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,9 @@ class YoloOnnxDetector(Detector):
         self._input_name = inputs[0].name
         # ONNX may declare dynamic batch ('N') or fixed; we validate shape at run time.
         self._input_shape = inputs[0].shape
+        # Largest batch fed so far (sticky) — solo pairs are padded up to this
+        # so the CUDA session never sees a shape change (each one costs ~2.5 s).
+        self._max_batch_seen = 1
         # Adopt the model's own input spatial size when it's FIXED (e.g. a YOLO
         # exported with dynamic=False imgsz=1024). The shape is [batch, 3, H, W];
         # H/W are ints when static, strings/-1 when dynamic. Letterboxing to a
@@ -178,16 +181,23 @@ class YoloOnnxDetector(Detector):
         images = [pair.frames[cid].image for cid in cam_ids]
 
         batch_tensor, lb_results = batch_letterbox(images, target=self._input_size)
+        # Sticky batch: never let the input shape shrink back after an aligned
+        # pair — pad solo pairs with zero images instead (see ``pad_batch``).
+        if self.supports_batch:
+            self._max_batch_seen = max(self._max_batch_seen, batch_tensor.shape[0])
+            batch_tensor = pad_batch(batch_tensor, self._max_batch_seen)
 
         outputs = self._session.run(None, {self._input_name: batch_tensor})
         if not outputs:
             raise RuntimeError("YoloOnnxDetector: ORT session returned no outputs")
         raw = outputs[0]
         # YOLO11 detect: (N, 4+nc, A). Some exports emit (N, A, 4+nc); detect either.
-        if raw.ndim != 3 or raw.shape[0] != len(cam_ids):
+        # N is the (possibly padded) batch; only the first len(cam_ids) entries
+        # are real frames.
+        if raw.ndim != 3 or raw.shape[0] != batch_tensor.shape[0]:
             raise RuntimeError(
                 f"YoloOnnxDetector: unexpected output shape {raw.shape} "
-                f"(expected (N={len(cam_ids)}, 4+nc, A))"
+                f"(expected (N={batch_tensor.shape[0]}, 4+nc, A))"
             )
         expected_channels = 4 + len(self._class_names)
         if raw.shape[1] == expected_channels:

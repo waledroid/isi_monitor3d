@@ -23,6 +23,7 @@ import numpy as np
 from backbone.core.types import Detection, Track2D
 from backbone.homography.foot_projector import FootProjector
 from backbone.shared.camera_rig import CameraRig
+from backbone.shared.geometry import undistort_points
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,13 @@ class KeypointAssociator:
         candidate qualifies, that camera is simply omitted from the result —
         the caller decides whether two cameras remain (triangulation requires
         ≥2 contributors).
+
+        The returned pixels are **undistorted** (lens correction applied with
+        the camera's ``K, D``): the downstream DLT and reprojection gate
+        consume them against the pinhole ``P = K[R|t]``, which knows nothing
+        about distortion. Feeding raw pixels would bias the 3D solve by
+        several centimeters on a real lens (the same reason
+        ``FootProjector`` undistorts before ``H``).
         """
         result: dict[str, tuple[float, float]] = {}
         track_xy = np.asarray(track.xy_m, dtype=np.float64)
@@ -70,7 +78,11 @@ class KeypointAssociator:
                     best = det
                     best_dist = dist
             if best is not None:
-                result[cam_id] = (float(best.foot_uv[0]), float(best.foot_uv[1]))
+                cam = self._rig[cam_id]
+                uv = undistort_points(
+                    np.asarray(best.foot_uv, dtype=np.float64), cam.K, cam.D
+                )[0]
+                result[cam_id] = (float(uv[0]), float(uv[1]))
             else:
                 logger.debug(
                     "associator: track %d on %s — no detection within %.2f m",

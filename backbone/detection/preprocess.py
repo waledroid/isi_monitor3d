@@ -69,11 +69,11 @@ def letterbox(
     new_w = round(src_w * scale)
     new_h = round(src_h * scale)
 
-    # INTER_AREA is the correct filter for shrinking (avoids aliasing); INTER_LINEAR
-    # for enlarging. scale < 1 means we're downscaling the feed to the model size
-    # (the common case: a 1080p/720p feed into a 320-1024 model input).
-    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-    resized = cv2.resize(image, (new_w, new_h), interpolation=interp)
+    # INTER_LINEAR both ways — it is what Ultralytics' own letterbox uses at
+    # train time (matching the training pixel distribution beats INTER_AREA's
+    # anti-aliasing), and it is ~2x faster on this OpenCV build. Measured on
+    # the live pipeline: AREA 5.6 ms vs LINEAR 2.7 ms per 1080p frame.
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
     # Pad to (target_h, target_w), centred.
     pad_x = (target_w - new_w) // 2
@@ -91,9 +91,13 @@ def letterbox(
         value=(LETTERBOX_PAD_VALUE, LETTERBOX_PAD_VALUE, LETTERBOX_PAD_VALUE),
     )
 
-    # BGR -> RGB, HWC -> CHW, uint8 -> float32 / 255.0
-    rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
-    tensor = rgb.astype(np.float32, copy=False).transpose(2, 0, 1) / 255.0
+    # BGR -> RGB via a numpy channel flip fused into the float conversion.
+    # Deliberately NOT cv2.cvtColor: this OpenCV build carries a pathological
+    # ~8 ms fixed dispatch cost per cvtColor call regardless of image size
+    # (measured: 8.5 ms at 640x640 — the whole rest of preprocess is ~3 ms);
+    # the flipped-view astype path does the same job in ~1 ms.
+    tensor = padded[:, :, ::-1].transpose(2, 0, 1).astype(np.float32, order="C")
+    tensor *= 1.0 / 255.0
 
     return LetterboxResult(
         tensor=tensor,
@@ -140,3 +144,21 @@ def invert_letterbox_xyxy(
     out[:, [0, 2]] = np.clip(out[:, [0, 2]], 0.0, src_w - 1)
     out[:, [1, 3]] = np.clip(out[:, [1, 3]], 0.0, src_h - 1)
     return out
+
+
+def pad_batch(batch_tensor: np.ndarray, target_n: int) -> np.ndarray:
+    """Zero-pad a ``(N, C, H, W)`` batch up to ``target_n`` along the batch dim.
+
+    Used by the ONNX detectors to keep the session's input shape CONSTANT when
+    the synchronizer alternates solo (batch-1, degraded) and aligned (batch-2)
+    pairs: on the CUDA provider every input-shape change re-triggers a ~2.5 s
+    execution re-plan, which collapses the live pipeline to <1 fps. Padding a
+    solo frame with one zero image costs ~milliseconds instead.
+
+    No-op when ``N >= target_n``.
+    """
+    n = batch_tensor.shape[0]
+    if n >= target_n:
+        return batch_tensor
+    pad = np.zeros((target_n - n, *batch_tensor.shape[1:]), dtype=batch_tensor.dtype)
+    return np.concatenate([batch_tensor, pad], axis=0)
