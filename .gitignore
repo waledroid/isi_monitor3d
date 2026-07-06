@@ -59,3 +59,7 @@ isical/runs/
 
 # runtime backups of the dashboard config store
 config/*.yaml.bak
+
+# local Claude Code state (never shared)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
