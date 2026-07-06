@@ -149,7 +149,7 @@ def test_start_refuses_when_config_missing(tmp_path) -> None:
 
 
 @pytest.mark.skipif(not Path("/proc").is_dir(), reason="needs Linux procfs")
-def test_find_and_kill_finds_strays_via_proc(tmp_path) -> None:
+def test_find_and_kill_finds_strays_via_proc(tmp_path, real_backbone_finder) -> None:
     """The reaper scans /proc for EVERY backbone.runtime process — including one
     launched under a DIFFERENT config than the supervisor's — and SIGKILLs it.
     This is the robustness upgrade over the old config-scoped pgrep match."""
@@ -165,9 +165,12 @@ def test_find_and_kill_finds_strays_via_proc(tmp_path) -> None:
         # Supervisor is wired to a *different* config — proves the scan is host-wide,
         # not scoped to its own config path.
         sup = BackboneSupervisor(config_path=tmp_path / "unrelated.yaml")
-        assert decoy.pid in sup._find_backbone_pids()
-        assert os.getpid() not in sup._find_backbone_pids()   # never targets self
+        assert decoy.pid in real_backbone_finder(sup)         # host-wide scan works
+        assert os.getpid() not in real_backbone_finder(sup)   # never targets self
 
+        # The KILL sweep must only ever target the DECOY (see the autouse
+        # guard's docstring — an unrestricted sweep kills live systems).
+        sup._find_backbone_pids = lambda exclude=None: [decoy.pid]
         killed = sup._kill_backbones(why="test-reaped")
         assert killed >= 1
         assert _wait_for(lambda: decoy.poll() is not None)    # decoy is dead
@@ -179,11 +182,11 @@ def test_find_and_kill_finds_strays_via_proc(tmp_path) -> None:
 
 
 @pytest.mark.skipif(not Path("/proc").is_dir(), reason="needs Linux procfs")
-def test_find_backbone_pids_excludes_self(tmp_path) -> None:
+def test_find_backbone_pids_excludes_self(tmp_path, real_backbone_finder) -> None:
     """Sanity: the scan never returns this process (no backbone.runtime in our argv),
     so a clean host yields no targets — the reaper is a no-op, not a footgun."""
     sup = BackboneSupervisor(config_path=tmp_path / "unrelated.yaml")
-    pids = sup._find_backbone_pids()
+    pids = real_backbone_finder(sup)           # the real (read-only) scan
     assert os.getpid() not in pids
     assert all(isinstance(p, int) for p in pids)
 

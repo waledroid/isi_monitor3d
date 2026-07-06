@@ -14,3 +14,28 @@ def _isolate_ui_settings(tmp_path_factory, monkeypatch):
     p = tmp_path_factory.mktemp("uisettings") / "monitor_web_ui.yaml"
     monkeypatch.setenv("MONITOR_WEB_UI_SETTINGS_PATH", str(p))
     yield
+
+# ---- LIVE-FIRE GUARD (suite-wide) -------------------------------------------
+# The supervisor's reaper (`_kill_backbones`, reached from app lifespan
+# `reap_orphans_on_boot`, `start()`, and `stop()`) SIGKILLs EVERY process on
+# the HOST whose cmdline contains `backbone.runtime`. Any test that boots the
+# app (`with TestClient(create_app(...))`) therefore murdered a LIVE production
+# Backbone running beside the suite (observed 2026-07-06: the operator's
+# system "crashed at random" — the random was `pytest`). Neuter the /proc scan
+# for the whole suite; the one test that needs the real scan gets it read-only
+# via `real_backbone_finder`.
+from monitor_web.backbone_supervisor import BackboneSupervisor as _BBS  # noqa: E402
+
+_REAL_BACKBONE_FINDER = _BBS._find_backbone_pids
+
+
+@pytest.fixture(autouse=True)
+def _no_host_wide_reaping(monkeypatch):
+    monkeypatch.setattr(_BBS, "_find_backbone_pids",
+                        lambda self, exclude=None: [])
+
+
+@pytest.fixture
+def real_backbone_finder():
+    """The un-neutered /proc scan, for READ-ONLY assertions."""
+    return _REAL_BACKBONE_FINDER
