@@ -271,8 +271,8 @@ def _remap_det(d, x0, y0, rx, ry, iw, ih, ch, cw):
     foot = None if d.foot_uv is None else (x0 + d.foot_uv[0] * rx, y0 + d.foot_uv[1] * ry)
     mask = None
     if d.mask is not None:
-        mr = cv2.resize(d.mask.astype(np.float32), (cw, ch),
-                        interpolation=cv2.INTER_LINEAR) >= 0.5
+        mr = cv2.resize(d.mask.astype(np.uint8), (cw, ch),
+                        interpolation=cv2.INTER_NEAREST).astype(bool)
         full = np.zeros((ih, iw), dtype=bool)
         full[y0:y0 + ch, x0:x0 + cw] = mr
         mask = full
@@ -296,8 +296,8 @@ def _tile_det_to_crop(d, tmeta: dict, cw: int, ch: int):
     foot = None if d.foot_uv is None else (tx0 + d.foot_uv[0] * rx, ty0 + d.foot_uv[1] * ry)
     mask = None
     if d.mask is not None:
-        mr = cv2.resize(d.mask.astype(np.float32), (tw, th),
-                        interpolation=cv2.INTER_LINEAR) >= 0.5
+        mr = cv2.resize(d.mask.astype(np.uint8), (tw, th),
+                        interpolation=cv2.INTER_NEAREST).astype(bool)
         full = np.zeros((ch, cw), dtype=bool)
         full[ty0:ty0 + th, tx0:tx0 + tw] = mr
         mask = full
