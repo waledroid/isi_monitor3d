@@ -187,7 +187,12 @@ function drawForCam(canvas, img, camId) {
   canvas.width = w; canvas.height = h;
   ctx.clearRect(0, 0, w, h);
 
-  drawZones(ctx, img, cameraZones.get(camId));   // S17 — projected world zones
+  // Projected FLOOR zones are deliberately NOT drawn on the cam views: floor
+  // zones are auto-derived from the zone patches (floor_zone_sync), so the
+  // projection duplicated every outline + name label right next to the patch
+  // the operator drew. The patch polygons below are the single zone layer;
+  // the floor geometry stays an engine-side concept (map + Backbone only).
+  // drawZones(ctx, img, cameraZones.get(camId));
   drawZonePatches(ctx, img, camId);              // pixel-space red ROI watch boxes
   drawPatchGhosts(ctx, img, camId);              // cross-camera ghost outlines (Mode 2)
   // Top-left per-track UDP readout disabled for now (to be surfaced elsewhere
