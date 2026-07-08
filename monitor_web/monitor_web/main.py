@@ -15,7 +15,18 @@ class _AccessLogNoiseFilter(logging.Filter):
     endpoints so the terminal shows real events instead of a flood of
     ``GET /api/status 200 OK``. The dashboard polls these every 1-5 s."""
 
-    _NOISY_PATHS = ("/api/status", "/api/logs", "/api/calibrate/status")
+    # Every 1-5 s poll the dashboard makes belongs here. This is not only
+    # cosmetic: uvicorn access lines are written from the EVENT LOOP, and a
+    # frozen/backlogged Windows terminal makes those writes BLOCK — measured
+    # 23 s request latency while the console was stuck. Fewer lines = the
+    # loop stays decoupled from console health.
+    _NOISY_PATHS = (
+        "/api/status", "/api/logs", "/api/calibrate/status",
+        "/api/zones",            # also covers /api/zones/state
+        "/api/zone-patches",     # also covers /api/zone-patches/state
+        "/api/gateway/",         # nodes + zones cards
+        "/api/ui-settings",
+    )
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
