@@ -275,7 +275,12 @@ class BusSubscriber:
         # whole handle repr including every queued message (the giant console
         # dumps). _offer_broadcast handles the full queue itself: drop the
         # OLDEST and keep the newest — latest-only, silent, bounded.
-        if self._broadcast_queue is not None and self._loop is not None:
+        # Only the types /ws/tracks actually sends (its _serialize drops the
+        # rest) — anything else scheduled here is a wasted event-loop wakeup,
+        # and at points-mode rates (~100 envelopes/s incl. mask-heavy
+        # observations) that churn measurably starves the loop.
+        if (self._broadcast_queue is not None and self._loop is not None
+                and isinstance(msg, (Track2DMessage, Track3DMessage))):
             try:
                 self._loop.call_soon_threadsafe(
                     _offer_broadcast, self._broadcast_queue, msg,

@@ -93,4 +93,4 @@ metadata:
 zones_path: /home/aatanda/isi_monitor3d/config/zones.yaml
 subscriptions_path: /home/aatanda/isi_monitor3d/config/mode2/subscriptions.yaml
 perception:
-  fps: 12.0
+  fps: 15.0
