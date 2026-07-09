@@ -243,10 +243,29 @@ async def status(request: Request) -> JSONResponse:
             # stale (> 2 heartbeats) so a stopped Backbone doesn't show a
             # frozen rate.
             "kpis": {
-                "latency_p50_ms": snap.latency_p50_ms,
-                "latency_p95_ms": snap.latency_p95_ms,
+                # The KPI latency is the ENGINE's own capture→publish measure
+                # (diagnostics heartbeat) — authoritative, unaffected by how
+                # busy this web process is. The bus thread's processing delay
+                # is reported separately as ui_lag (it's what makes panels
+                # feel behind, but it is NOT pipeline latency).
+                "latency_p50_ms": (
+                    round((snap.engine_latency_ms or {}).get("p50"), 1)
+                    if time.time() - snap.diagnostics_ts <= 12.0
+                    and (snap.engine_latency_ms or {}).get("p50") is not None
+                    else None),
+                "latency_p95_ms": (
+                    round((snap.engine_latency_ms or {}).get("p95"), 1)
+                    if time.time() - snap.diagnostics_ts <= 12.0
+                    and (snap.engine_latency_ms or {}).get("p95") is not None
+                    else None),
                 "latency_samples": snap.latency_samples,
                 "latency_target_ms": 200,
+                "ui_lag_p50_ms": snap.latency_p50_ms,
+                # points mode: fps_by_camera is the DETECTION-SET rate, not
+                # camera capture fps — the frontend relabels on this flag.
+                "points_mode": bool(
+                    getattr(request.app.state, "perception", None)
+                    and request.app.state.perception.points_mode()),
                 "reproj_rms_px": _reprojection_px(cfg),
                 "reproj_target_px": 2.0,
                 "fps_by_camera": (

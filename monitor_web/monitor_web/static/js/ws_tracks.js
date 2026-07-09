@@ -113,26 +113,37 @@ function renderStatus(status) {
   // while stopped/stale → rows hidden). Flagged red under 1 fps (camera
   // effectively stalled).
   const fpsByCam = k.fps_by_camera || {};
+  // points mode: the per-camera rate is DETECTIONS/s (the perception tick),
+  // not the camera capture fps — label it for what it is.
+  const perCamLabel = k.points_mode
+    ? (strings.det_rate_label || "Detections") : (strings.fps_label || "FPS");
+  const perCamUnit = k.points_mode ? "/s" : " fps";
   const fpsRows = Object.entries(fpsByCam).map(([cam, v]) => {
     const cls = v < 1.0 ? "kpi-bad" : "";
-    return `<div class="kpi-row"><span class="kpi-key">${strings.fps_label || "FPS"} ${cam}</span>`
-      + `<span class="kpi-val ${cls}">${Number(v).toFixed(1)} fps</span></div>`;
+    return `<div class="kpi-row"><span class="kpi-key">${perCamLabel} ${cam}</span>`
+      + `<span class="kpi-val ${cls}">${Number(v).toFixed(1)}${perCamUnit}</span></div>`;
   }).join("");
   const pipelineFpsRow = (k.pipeline_fps == null) ? "" :
     `<div class="kpi-row"><span class="kpi-key">${strings.pipeline_fps_label || "FPS pipeline"}</span>`
     + `<span class="kpi-val">${Number(k.pipeline_fps).toFixed(1)} fps</span></div>`;
+  // UI lag: how far the dashboard's own bus consumer runs behind the wire —
+  // display sluggishness, NOT pipeline latency. Amber above 500 ms.
+  const uiLagRow = (k.ui_lag_p50_ms == null) ? "" :
+    `<div class="kpi-row"><span class="kpi-key">${strings.ui_lag_label || "UI lag p50"}</span>`
+    + `<span class="kpi-val ${k.ui_lag_p50_ms > 500 ? "kpi-bad" : ""}">${fmtLat(k.ui_lag_p50_ms)}</span></div>`;
   const kpiHtml = `
     <div class="kpi-group">
       ${fpsRows}
       ${pipelineFpsRow}
       <div class="kpi-row">
-        <span class="kpi-key">${strings.latency_p95 || "Latency p95"}</span>
+        <span class="kpi-key">${strings.latency_p95 || "Engine latency p95"}</span>
         <span class="kpi-val ${latCls}">${fmtLat(k.latency_p95_ms)}<span class="kpi-target">&lt;200</span></span>
       </div>
       <div class="kpi-row">
-        <span class="kpi-key">${strings.latency_p50 || "Latency p50"}</span>
+        <span class="kpi-key">${strings.latency_p50 || "Engine latency p50"}</span>
         <span class="kpi-val">${fmtLat(k.latency_p50_ms)}</span>
       </div>
+      ${uiLagRow}
       ${reprojRows}
     </div>`;
   // Live memory rows (used out of total): GPU VRAM + system RAM (+ GPU util %).

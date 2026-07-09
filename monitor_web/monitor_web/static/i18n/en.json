@@ -110,8 +110,8 @@
   "layout_delete_last": "Delete last",
   "layout_outline": "Set work area",
   "layout_clear": "Clear all",
-  "latency_p95": "Latency p95",
-  "latency_p50": "Latency p50",
+  "latency_p95": "Engine latency p95",
+  "latency_p50": "Engine latency p50",
   "reproj_label": "Reproj",
   "display_fps": "Detection FPS (zones & overlays)",
   "camera_fps": "Camera FPS",
@@ -126,5 +126,7 @@
   "decode_masks": "Segmentation masks (backbone decode)",
   "zone_source": "Zone detections source",
   "zone_source_backbone": "Backbone (one perception)",
-  "zone_source_local": "Local models (dev/fallback)"
+  "zone_source_local": "Local models (dev/fallback)",
+  "det_rate_label": "Detections",
+  "ui_lag_label": "UI lag p50"
 }

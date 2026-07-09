@@ -110,8 +110,8 @@
   "layout_delete_last": "Supprimer le dernier",
   "layout_outline": "Définir la zone de travail",
   "layout_clear": "Tout effacer",
-  "latency_p95": "Latence p95",
-  "latency_p50": "Latence p50",
+  "latency_p95": "Latence moteur p95",
+  "latency_p50": "Latence moteur p50",
   "reproj_label": "Reproj",
   "display_fps": "FPS détection (zones & superpositions)",
   "camera_fps": "FPS caméra",
@@ -126,5 +126,7 @@
   "decode_masks": "Masques de segmentation (décodés par le Backbone)",
   "zone_source": "Source des détections de zone",
   "zone_source_backbone": "Backbone (perception unique)",
-  "zone_source_local": "Modèles locaux (dev/secours)"
+  "zone_source_local": "Modèles locaux (dev/secours)",
+  "det_rate_label": "Détections",
+  "ui_lag_label": "Latence UI p50"
 }

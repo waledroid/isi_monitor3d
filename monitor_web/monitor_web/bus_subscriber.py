@@ -85,6 +85,11 @@ class BusState:
     fps_by_camera: dict[str, float] = field(default_factory=dict)
     pipeline_fps: float | None = None
     diagnostics_ts: float = 0.0
+    # Engine-side capture→publish latency from the diagnostics heartbeat —
+    # the AUTHORITATIVE KPI (measured inside the Backbone against the frame's
+    # capture_ts). The bus's own latency_p50/p95 above measure this consumer
+    # thread's processing lag instead (UI lag), a different thing.
+    engine_latency_ms: dict | None = None
 
 
 class BusSubscriber:
@@ -161,6 +166,7 @@ class BusSubscriber:
             self._state.fps_by_camera = {}
             self._state.pipeline_fps = None
             self._state.diagnostics_ts = 0.0
+            self._state.engine_latency_ms = None
 
     def snapshot(self) -> BusState:
         with self._lock:
@@ -178,6 +184,8 @@ class BusSubscriber:
                 latency_p95_ms=self._pct(lats, 95),
                 latency_samples=len(lats),
                 fps_by_camera=dict(self._state.fps_by_camera),
+                engine_latency_ms=(dict(self._state.engine_latency_ms)
+                                   if self._state.engine_latency_ms else None),
                 pipeline_fps=self._state.pipeline_fps,
                 diagnostics_ts=self._state.diagnostics_ts,
             )
@@ -267,6 +275,10 @@ class BusSubscriber:
                 self._state.fps_by_camera = dict(msg.fps_by_camera)
                 self._state.pipeline_fps = float(msg.fps)
                 self._state.diagnostics_ts = now
+                try:
+                    self._state.engine_latency_ms = msg.latency_ms.model_dump()
+                except Exception:
+                    self._state.engine_latency_ms = None
 
         # Broadcast to live WebSocket clients via the event loop, if attached.
         # NOTE: call_soon_threadsafe only SCHEDULES the callback — an exception
