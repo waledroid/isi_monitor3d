@@ -246,3 +246,59 @@ def test_pose_display_smoothing_converges_and_snaps() -> None:
     assert _advance_smoothing([pose_at(1.0)], [], 0.055, tau_s=0.12, snap_px=120.0) == []
     assert _advance_smoothing([], [pose_at(5.0)], 0.055, tau_s=0.12,
                               snap_px=120.0)[0].keypoints[0, 0] == 5.0
+
+
+def test_extrapolation_projects_skeleton_to_now() -> None:
+    """A person moving +400 px/s whose newest result is 100 ms old must render
+    ~+40 px AHEAD of that result — on the body, not behind it."""
+    import numpy as np
+
+    from monitor_web.pose_overlay import Pose, _extrapolate
+
+    def pose_at(x):
+        return Pose(box_xyxy=np.array([x, 0.0, x + 50, 100.0]), score=0.9,
+                    keypoints=np.array([[x, 10.0, 0.8]] * 3), foot_uv=(x, 100.0))
+
+    prev, latest = [pose_at(100.0)], [pose_at(140.0)]   # +40 px over the pair
+    out = _extrapolate(latest, prev, dt_pair_s=0.1, age_s=0.1,
+                       max_age_s=0.35, snap_px=120.0)
+    assert abs(out[0].keypoints[0, 0] - 180.0) < 1e-6    # 140 + 40*(0.1/0.1)
+    assert abs(out[0].foot_uv[0] - 180.0) < 1e-6
+    assert abs(out[0].box_xyxy[0] - 180.0) < 1e-6
+
+
+def test_extrapolation_age_is_clamped() -> None:
+    import numpy as np
+
+    from monitor_web.pose_overlay import Pose, _extrapolate
+
+    def pose_at(x):
+        return Pose(box_xyxy=np.array([x, 0.0, x + 50, 100.0]), score=0.9,
+                    keypoints=np.array([[x, 10.0, 0.8]] * 3), foot_uv=(x, 100.0))
+
+    # 2 s old result: extrapolate at most max_age_s (0.35 s) of motion —
+    # velocity is 400 px/s → cap at +140 px past the newest, never +800.
+    out = _extrapolate([pose_at(140.0)], [pose_at(100.0)], dt_pair_s=0.1,
+                       age_s=2.0, max_age_s=0.35, snap_px=120.0)
+    assert abs(out[0].keypoints[0, 0] - (140.0 + 400.0 * 0.35)) < 1e-6
+
+
+def test_extrapolation_falls_back_without_trustworthy_velocity() -> None:
+    import numpy as np
+
+    from monitor_web.pose_overlay import Pose, _extrapolate
+
+    def pose_at(x):
+        return Pose(box_xyxy=np.array([x, 0.0, x + 50, 100.0]), score=0.9,
+                    keypoints=np.array([[x, 10.0, 0.8]] * 3), foot_uv=(x, 100.0))
+
+    latest = [pose_at(140.0)]
+    # No previous result → pass through unchanged.
+    assert _extrapolate(latest, [], 0.1, 0.1, max_age_s=0.35,
+                        snap_px=120.0)[0].keypoints[0, 0] == 140.0
+    # Degenerate pair interval (dt too small) → pass through.
+    assert _extrapolate(latest, [pose_at(100.0)], 0.001, 0.1, max_age_s=0.35,
+                        snap_px=120.0)[0].keypoints[0, 0] == 140.0
+    # Match beyond snap_px (teleport / different person) → pass through.
+    assert _extrapolate(latest, [pose_at(600.0)], 0.1, 0.1, max_age_s=0.35,
+                        snap_px=120.0)[0].keypoints[0, 0] == 140.0

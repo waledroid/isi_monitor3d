@@ -41,7 +41,7 @@ detection:
   inference_imgsz: 640
   pose_every_n: 2
   pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.onnx
-  pose_imgsz: 640
+  pose_imgsz: 480
 homography:
   cross_cam_fusion:
     match_distance_m:

@@ -60,6 +60,49 @@ def _lerp_pose(prev: Pose, target: Pose, alpha: float) -> Pose:
     return Pose(box_xyxy=box, score=target.score, keypoints=kp, foot_uv=fu)
 
 
+def _extrapolate(latest: list[Pose], prev: list[Pose], dt_pair_s: float,
+                 age_s: float, *, max_age_s: float, snap_px: float) -> list[Pose]:
+    """Motion-compensate the newest pose result for its AGE.
+
+    The rendered frame is *now*; the newest result describes where each person
+    was ``age_s`` ago. Estimate per-person velocity from the last two results
+    (nearest-centroid matching) and project the keypoints/box forward by the
+    (clamped) age — so the skeleton lands on the person, not behind them.
+    Persons without a trustworthy match (new, teleported, or a degenerate pair
+    interval) pass through unextrapolated.
+    """
+    if not latest:
+        return []
+    age = max(0.0, min(age_s, max_age_s))
+    if not prev or age <= 0.0 or not (0.02 <= dt_pair_s <= 1.0):
+        return list(latest)
+    prev_c = [_centroid(p) for p in prev]
+    used: set[int] = set()
+    out: list[Pose] = []
+    for t in latest:
+        tc = _centroid(t)
+        best, best_d = None, float("inf")
+        for i, pc in enumerate(prev_c):
+            if i in used:
+                continue
+            d = float(np.hypot(*(tc - pc)))
+            if d < best_d:
+                best, best_d = i, d
+        if best is None or best_d > snap_px:
+            out.append(t)                        # new person / fast mover: as-is
+            continue
+        used.add(best)
+        p = prev[best]
+        scale = age / dt_pair_s
+        kp = t.keypoints.copy()
+        kp[:, :2] += (t.keypoints[:, :2] - p.keypoints[:, :2]) * scale
+        box = t.box_xyxy + (t.box_xyxy - p.box_xyxy) * scale
+        fu = (t.foot_uv[0] + (t.foot_uv[0] - p.foot_uv[0]) * scale,
+              t.foot_uv[1] + (t.foot_uv[1] - p.foot_uv[1]) * scale)
+        out.append(Pose(box_xyxy=box, score=t.score, keypoints=kp, foot_uv=fu))
+    return out
+
+
 def _advance_smoothing(prev: list[Pose], target: list[Pose], dt_s: float,
                        *, tau_s: float, snap_px: float) -> list[Pose]:
     """One smoothing step: match previous smoothed poses to the newest result
@@ -204,15 +247,26 @@ class AsyncPoseRunner:
     # toward the newest result with a time-based exponential (tau below); a
     # person whose match moved further than _SNAP_PX snapped instead (fast
     # motion / new person must not rubber-band across the frame).
-    _SMOOTH_TAU_S = 0.12
+    _SMOOTH_TAU_S = 0.08
     _SNAP_PX = 120.0
+    # Motion compensation: the newest result describes where a person WAS
+    # (inference latency + queue wait ≈ 80-150 ms under GPU contention) — a
+    # walking body moves 20-40 px in that window, so the raw skeleton draws
+    # visibly BESIDE the person. Velocity from the last two results projects
+    # it forward by the result's age, capped so a stalled worker never
+    # slingshots a skeleton across the frame.
+    _EXTRAP_MAX_S = 0.35
 
     def __init__(self, engine: PoseEngine) -> None:
         self.engine = engine
         self._cond = threading.Condition()
         self._pending: np.ndarray | None = None
+        self._pending_ts = 0.0
         self._poses: list[Pose] = []
         self._result_ts = 0.0
+        self._result_frame_ts = 0.0     # submit time of the frame behind _poses
+        self._prev_poses: list[Pose] = []
+        self._prev_frame_ts = 0.0
         self._smoothed: list[Pose] = []
         self._smooth_ts = 0.0
         self._stopped = False
@@ -227,6 +281,8 @@ class AsyncPoseRunner:
             self._stopped = True
             self._pending = None
             self._poses = []
+            self._prev_poses = []
+            self._smoothed = []
             self._cond.notify_all()
         t = self._thread
         if t is not None and t.is_alive():
@@ -249,6 +305,7 @@ class AsyncPoseRunner:
             if self._stopped:
                 return []
             self._pending = frame_bgr
+            self._pending_ts = now
             if self._thread is None or not self._thread.is_alive():
                 self._thread = threading.Thread(
                     target=self._run, daemon=True, name="pose-async")
@@ -257,8 +314,16 @@ class AsyncPoseRunner:
             if now - self._result_ts > self._STALE_S:
                 self._smoothed = []
                 return []
+            # Motion-compensate the (aged) result to *now*, then smooth toward
+            # that moving target — smoothing kills inter-result jitter without
+            # trailing, because the target itself tracks the person.
+            target = _extrapolate(
+                self._poses, self._prev_poses,
+                self._result_frame_ts - self._prev_frame_ts,
+                now - self._result_frame_ts,
+                max_age_s=self._EXTRAP_MAX_S, snap_px=self._SNAP_PX)
             self._smoothed = _advance_smoothing(
-                self._smoothed, self._poses, now - self._smooth_ts,
+                self._smoothed, target, now - self._smooth_ts,
                 tau_s=self._SMOOTH_TAU_S, snap_px=self._SNAP_PX)
             self._smooth_ts = now
             return list(self._smoothed)
@@ -281,6 +346,7 @@ class AsyncPoseRunner:
                 if self._stopped:
                     return
                 frame = self._pending
+                frame_ts = self._pending_ts
                 self._pending = None
                 engine = self.engine
             idle_since = time.time()
@@ -294,5 +360,10 @@ class AsyncPoseRunner:
             with self._cond:
                 if self._stopped:
                     return
+                # Keep the previous result + its frame time: the pair is the
+                # velocity estimate that motion-compensates the render.
+                self._prev_poses = self._poses
+                self._prev_frame_ts = self._result_frame_ts
                 self._poses = poses
+                self._result_frame_ts = frame_ts
                 self._result_ts = time.time()
