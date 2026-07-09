@@ -63,3 +63,6 @@ config/*.yaml.bak
 # local Claude Code state (never shared)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# Claude worktrees are transient local checkouts
+.claude/worktrees/
