@@ -1,114 +1,131 @@
-"""In-process host for the perception producer (Direction 1, dev-box topology).
+"""Perception producer supervisor (Direction 1).
 
-When ``backbone.yaml`` says ``ingestion.mode: points``, the Backbone is a
-pure metric engine and SOMEONE must produce detections. On the dev box that
-someone is the dashboard: this manager builds a ``perception.PerceptionCore``
-backed by the shared camera hub (ONE RTSP decode per camera, shared with the
-display panels) and runs it while the Backbone runs — started after a
-successful START, stopped on STOP.
+When ``backbone.yaml`` says ``ingestion.mode: points``, the Backbone is a pure
+metric engine and SOMEONE must produce detections. That someone is the
+standalone producer — ``python -m perception --config backbone.yaml`` —
+spawned and reaped here alongside the Backbone by the control routes.
 
-Headless deployments run ``python -m perception`` as its own service instead;
-this module is glue, not logic — the loop lives in the FastAPI-free
-``perception`` package.
+Why a subprocess and not an in-process thread: measured on the live rig, the
+same tick (zone-scoped seg + pose on 2 cameras) costs ~100 ms standalone but
+~2,200 ms inside the dashboard process — uvicorn + ORT thread pools + the GIL
+inflate it 20x. The producer therefore owns its own interpreter and CUDA
+context, at the price of a second RTSP decode per camera (the same price the
+frames-mode Backbone paid, so Direction 1 is never worse than the baseline).
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import signal
+import subprocess
+import sys
 import threading
 
 import yaml
 
-from .camera_hub import get_hub
-
 logger = logging.getLogger(__name__)
+
+_TERM_GRACE_S = 3.0
 
 
 class PerceptionHost:
-    """Lifecycle wrapper: reads backbone.yaml, holds hub acquisitions, and
-    starts/stops the core with the Backbone."""
+    """Spawn/stop the standalone producer with the Backbone's lifecycle."""
 
     def __init__(self, backbone_config_path) -> None:
         self._config_path = backbone_config_path
-        self._core = None
-        self._streams: list = []
+        self._proc: subprocess.Popen | None = None
+        self._reader: threading.Thread | None = None
         self._lock = threading.Lock()
-
-    @staticmethod
-    def _load_cfg(path) -> dict:
-        with open(path) as fh:
-            return yaml.safe_load(fh) or {}
 
     def points_mode(self) -> bool:
         try:
-            cfg = self._load_cfg(self._config_path)
+            with open(self._config_path) as fh:
+                cfg = yaml.safe_load(fh) or {}
             return str(cfg.get("ingestion", {}).get("mode", "frames")) == "points"
         except Exception:
             return False
 
     def start(self) -> bool:
-        """Start the producer if (and only if) the config says points mode.
-        Returns True when a producer is running after the call."""
+        """Spawn the producer if the config says points mode. True iff a
+        producer process is alive after the call."""
         with self._lock:
-            if self._core is not None and self._core.running:
+            if self._proc is not None and self._proc.poll() is None:
                 return True
-            try:
-                cfg = self._load_cfg(self._config_path)
-                if str(cfg.get("ingestion", {}).get("mode", "frames")) != "points":
-                    return False
-
-                # Hold a hub reader per camera for the producer's lifetime —
-                # the SAME decoded stream the display panels use.
-                hub = get_hub()
-                streams = {}
-                for cam_id, cam_cfg in cfg.get("cameras", {}).items():
-                    src = dict(cam_cfg.get("source", {}))
-                    plugin = src.pop("name", "rtsp")
-                    streams[cam_id] = hub.acquire(cam_id, plugin, src)
-                self._streams = list(streams.values())
-
-                def frame_provider(camera_id: str):
-                    stream = streams.get(camera_id)
-                    return stream.latest_real_frame_with_ts() if stream else None
-
-                from perception import build_perception_core
-                self._core = build_perception_core(
-                    cfg, frame_provider, producer_id="monitor_web")
-                self._core.start()
-                logger.info("perception host: producer RUNNING (in-process, hub-backed)")
-                return True
-            except Exception:
-                logger.warning("perception host: start failed", exc_info=True)
-                self._release_streams()
-                self._core = None
+            if not self.points_mode():
                 return False
+            self._reap_strays()
+            env = dict(os.environ)
+            # Same CPU caging as the Backbone spawn: ORT/BLAS pools sized for
+            # a co-tenant process, not the whole machine.
+            env.setdefault("OMP_NUM_THREADS", "2")
+            env.setdefault("OPENBLAS_NUM_THREADS", "2")
+            try:
+                self._proc = subprocess.Popen(
+                    [sys.executable, "-m", "perception",
+                     "--config", str(self._config_path)],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, env=env)
+            except Exception:
+                logger.warning("perception host: spawn failed", exc_info=True)
+                self._proc = None
+                return False
+            self._reader = threading.Thread(
+                target=self._pump_logs, args=(self._proc,), daemon=True,
+                name="perception-logs")
+            self._reader.start()
+            logger.info("perception host: producer spawned (pid=%d)", self._proc.pid)
+            return True
 
     def stop(self) -> None:
         with self._lock:
-            core, self._core = self._core, None
-            if core is not None:
-                try:
-                    core.stop()
-                except Exception:
-                    logger.warning("perception host: stop failed", exc_info=True)
-            self._release_streams()
-
-    def _release_streams(self) -> None:
-        hub = get_hub()
-        for stream in self._streams:
+            proc, self._proc = self._proc, None
+        if proc is None or proc.poll() is not None:
+            return
+        logger.info("perception host: STOP → SIGTERM pid=%d", proc.pid)
+        try:
+            proc.terminate()
             try:
-                hub.release(stream)
-            except Exception:
-                logger.debug("perception host: stream release failed", exc_info=True)
-        self._streams = []
+                proc.wait(timeout=_TERM_GRACE_S)
+            except subprocess.TimeoutExpired:
+                logger.warning("perception host: STOP → SIGKILL pid=%d", proc.pid)
+                proc.kill()
+                proc.wait(timeout=2.0)
+        except ProcessLookupError:
+            pass
+        logger.info("perception host: producer stopped (exit=%s)", proc.returncode)
 
     def status(self) -> dict:
-        core = self._core
-        if core is None:
-            return {"running": False}
-        return {
-            "running": core.running,
-            "sets_sent": dict(core.sets_sent),
-            "last_tick_ms": round(core.last_tick_ms, 1),
-            "last_error": core.last_error,
-        }
+        proc = self._proc
+        running = proc is not None and proc.poll() is None
+        return {"running": running,
+                "pid": proc.pid if running else None,
+                "topology": "standalone"}
+
+    # ---- internals ----
+
+    def _pump_logs(self, proc: subprocess.Popen) -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            if line:
+                logger.info("[perception] %s", line)
+
+    def _reap_strays(self) -> None:
+        """SIGKILL producer orphans from a previous dashboard life — exactly
+        the Backbone supervisor's stray policy, for the same reason."""
+        try:
+            out = subprocess.run(
+                ["pgrep", "-f", r"python(3)? -m perception"],
+                capture_output=True, text=True, timeout=5.0).stdout
+        except Exception:
+            return
+        for pid_s in out.split():
+            pid = int(pid_s)
+            if pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+                logger.warning("perception host: reaped stray producer pid %d", pid)
+            except OSError:
+                pass

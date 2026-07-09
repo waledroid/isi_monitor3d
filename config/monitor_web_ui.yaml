@@ -25,7 +25,7 @@ zone_patches:
     color: '#ffc800'
     confidence: 0.1
     sahi: false
-    enhance: true
+    enhance: false
     sahi_rows: 2
     sahi_cols: 2
     sahi_overlap: 0.2
@@ -53,7 +53,7 @@ zone_patches:
     model: null
     infer_size: 320
     color: null
-    confidence: null
+    confidence: 0.1
     sahi: false
     enhance: false
     sahi_rows: 2
@@ -82,8 +82,8 @@ zone_patches:
     - 720
     model: null
     infer_size: 320
-    color: null
-    confidence: null
+    color: '#06fe44'
+    confidence: 0.1
     sahi: false
     enhance: false
     sahi_rows: 2
@@ -130,7 +130,7 @@ zone_patches:
     color: '#ffc800'
     confidence: 0.1
     sahi: false
-    enhance: true
+    enhance: false
     sahi_rows: 2
     sahi_cols: 2
     sahi_overlap: 0.2
@@ -209,7 +209,7 @@ zone_patches:
     model: null
     infer_size: 320
     color: null
-    confidence: null
+    confidence: 0.1
     sahi: false
     enhance: false
     sahi_rows: 2
@@ -251,8 +251,8 @@ zone_patches:
     - 1080
     model: null
     infer_size: 320
-    color: null
-    confidence: null
+    color: '#06fe44'
+    confidence: 0.1
     sahi: false
     enhance: false
     sahi_rows: 2

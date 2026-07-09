@@ -758,7 +758,8 @@ class Orchestrator:
                         d.mask_offset_xy = (round(d.mask_offset_xy[0] * sx),
                                             round(d.mask_offset_xy[1] * sy))
 
-    def _publish_observations(self, detections_by_camera: dict, pair: Any) -> None:
+    def _publish_observations(self, detections_by_camera: dict, pair: Any,
+                              persons_by_camera: dict | None = None) -> None:
         """Per-camera raw detections for display consumers (UDP sink only).
 
         ONE perception: the dashboard renders these instead of running its own
@@ -800,6 +801,20 @@ class Orchestrator:
                                     for x, y in poly)
                               if poly else None,
                 ))
+            # Persons ride along AFTER the occupancy pass (a person's bbox
+            # must never count as pallet content) — with keypoints, so
+            # display consumers need no pose model of their own.
+            for d in (persons_by_camera or {}).get(cam_id, []):
+                obs.append(ObservationDet(
+                    cls=str(d.cls), confidence=round(float(d.confidence), 3),
+                    bbox_xyxy=tuple(round(float(v), 1) for v in d.bbox_xyxy),
+                    foot_uv=(round(float(d.foot_uv[0]), 1),
+                             round(float(d.foot_uv[1]), 1)),
+                    keypoints_uv=tuple(
+                        (round(float(u), 1), round(float(v), 1), round(float(c), 3))
+                        for u, v, c in np.asarray(d.keypoints_uv).reshape(-1, 3))
+                    if d.keypoints_uv is not None else None,
+                ))
             w, h = self._rig[cam_id].image_size_wh
             self._publisher.publish_observations(ObservationsMessage(
                 ts=pair.capture_ts, camera_id=cam_id,
@@ -826,13 +841,14 @@ class Orchestrator:
                     (person_detections if d.cls == "person" else objects).append(d)
                 detections_by_camera[cam_id] = objects
             self._scale_detections_to_calibration(detections_by_camera, pair)
-            if person_detections:
-                by_cam = {cid: [d for d in person_detections if d.camera_id == cid]
-                          for cid in pair.frames}
-                self._scale_detections_to_calibration(by_cam, pair)
+            persons_by_camera = {cid: [d for d in person_detections
+                                       if d.camera_id == cid]
+                                 for cid in pair.frames}
+            self._scale_detections_to_calibration(persons_by_camera, pair)
             if self._observations_enabled:
                 try:
-                    self._publish_observations(detections_by_camera, pair)
+                    self._publish_observations(detections_by_camera, pair,
+                                               persons_by_camera)
                 except Exception:
                     logger.warning("orchestrator: observations publish failed",
                                    exc_info=True)

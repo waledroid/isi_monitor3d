@@ -1,6 +1,8 @@
-"""PerceptionHost — Direction-1 glue: mode detection + safe lifecycle."""
+"""PerceptionHost — Direction-1 producer supervisor: mode detection + lifecycle."""
 
 from __future__ import annotations
+
+import time
 
 import yaml
 
@@ -25,14 +27,17 @@ def test_points_mode_detection(tmp_path):
 def test_start_is_a_noop_in_frames_mode(tmp_path):
     host = PerceptionHost(_write_cfg(tmp_path, "frames"))
     assert host.start() is False
-    assert host.status() == {"running": False}
+    assert host.status()["running"] is False
     host.stop()          # idempotent, never raises
 
 
-def test_failed_start_releases_and_reports(tmp_path):
-    # points mode but the config lacks calibration_path → build fails → False,
-    # streams released, status stays not-running.
+def test_points_mode_spawns_and_stop_kills(tmp_path):
+    # The spawned producer exits quickly (bad config: no calibration_path),
+    # but the host must spawn it, report it, and stop() must be clean.
     host = PerceptionHost(_write_cfg(tmp_path, "points"))
-    assert host.start() is False
-    assert host.status() == {"running": False}
+    assert host.start() is True
     host.stop()
+    deadline = time.time() + 5.0
+    while host.status()["running"] and time.time() < deadline:
+        time.sleep(0.1)
+    assert host.status()["running"] is False

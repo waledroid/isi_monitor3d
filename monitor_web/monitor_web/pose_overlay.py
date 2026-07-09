@@ -367,3 +367,81 @@ class AsyncPoseRunner:
                 self._poses = poses
                 self._result_frame_ts = frame_ts
                 self._result_ts = time.time()
+
+
+class WirePoseSource:
+    """Skeletons from the bus observations — ZERO dashboard inference.
+
+    Direction 1: the perception producer's pose rides the observations echo
+    (person dets with ``keypoints_uv``, calibration-frame px). This source
+    duck-types ``AsyncPoseRunner.predict`` for ``annotate_frame``: scale the
+    wire keypoints to the display frame and return them as :class:`Pose`
+    objects. The producer amortizes pose across ticks, so the last person-
+    carrying result is held for a short bridge window instead of flickering.
+    """
+
+    _MAX_AGE_S = 2.0      # observations older than this ⇒ no skeletons
+    _BRIDGE_S = 1.0       # hold last people across person-less ticks
+
+    def __init__(self, bus_getter, camera_id: str) -> None:
+        self._bus_getter = bus_getter
+        self._camera_id = camera_id
+        self._held: tuple[float, float, list[Pose]] = (0.0, 0.0, [])  # (msg_ts, seen_at, poses)
+
+    def stop(self) -> None:      # lifecycle parity with AsyncPoseRunner
+        self._held = (0.0, 0.0, [])
+
+    def draw(self, image: np.ndarray, poses: list[Pose],
+             kpt_conf: float = 0.35) -> None:
+        """Same skeleton rendering as ``PoseEngine.draw`` — wire keypoints
+        carry the producer's per-joint confidences, so low-conf joints hide
+        exactly as they do for locally-inferred poses."""
+        for p in poses:
+            for a, b in _COCO_SKELETON:
+                if p.keypoints[a, 2] >= kpt_conf and p.keypoints[b, 2] >= kpt_conf:
+                    cv2.line(image, tuple(p.keypoints[a, :2].astype(int)),
+                             tuple(p.keypoints[b, :2].astype(int)), (255, 180, 0), 2)
+            for j in range(p.keypoints.shape[0]):
+                if p.keypoints[j, 2] >= kpt_conf:
+                    cv2.circle(image, tuple(p.keypoints[j, :2].astype(int)), 3, (0, 0, 255), -1)
+            cv2.circle(image, (int(p.foot_uv[0]), int(p.foot_uv[1])), 6, (0, 255, 255), -1)
+
+    def predict(self, frame_bgr: np.ndarray) -> list[Pose]:
+        bus = self._bus_getter() if self._bus_getter is not None else None
+        if bus is None:
+            return []
+        try:
+            msg = bus.snapshot().observations_by_camera.get(self._camera_id)
+        except Exception:
+            return []
+        now = time.time()
+        if msg is None or now - float(msg.ts) > self._MAX_AGE_S:
+            return []
+        fh, fw = frame_bgr.shape[:2]
+        mw, mh = msg.frame_wh
+        sx, sy = fw / float(mw), fh / float(mh)
+        poses: list[Pose] = []
+        for od in msg.dets:
+            kps = getattr(od, "keypoints_uv", None)
+            if kps is None or str(od.cls).lower() != "person":
+                continue
+            k = np.asarray(kps, dtype=np.float32).reshape(-1, 3)
+            k[:, 0] *= sx
+            k[:, 1] *= sy
+            x0, y0, x1, y1 = od.bbox_xyxy
+            poses.append(Pose(
+                box_xyxy=np.array([x0 * sx, y0 * sy, x1 * sx, y1 * sy],
+                                  dtype=np.float32),
+                score=float(od.confidence),
+                keypoints=k,
+                foot_uv=(float(od.foot_uv[0]) * sx, float(od.foot_uv[1]) * sy)))
+        held_ts, held_seen, held_poses = self._held
+        if poses:
+            self._held = (float(msg.ts), now, poses)
+            return poses
+        if float(msg.ts) > held_ts and now - held_seen <= self._BRIDGE_S:
+            # A fresh person-less tick (pose amortized off this tick) — bridge.
+            return held_poses
+        if now - held_seen <= self._BRIDGE_S:
+            return held_poses
+        return []

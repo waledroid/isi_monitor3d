@@ -317,6 +317,10 @@ class ObservationDet(BaseModel):
     # present only when the Backbone decodes masks. Consumers fall back to
     # the bbox when absent.
     mask_poly: tuple[tuple[float, float], ...] | None = None
+    # Pose keypoints ((u, v, conf) x K, frame coords) — persons only. Lets
+    # display consumers render people without running their own pose model
+    # (ONE perception applies to persons too).
+    keypoints_uv: tuple[tuple[float, float, float], ...] | None = None
 
 
 class ObservationsMessage(BaseModel):

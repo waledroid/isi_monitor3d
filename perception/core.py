@@ -161,6 +161,7 @@ class PerceptionCore:
         # Operator-visible stats (read by the host's status endpoint).
         self.sets_sent: dict[str, int] = dict.fromkeys(self._camera_ids, 0)
         self.last_tick_ms: float = 0.0
+        self.stage_ms: dict[str, float] = {}   # per-stage timing of the last tick
         self.last_error: str | None = None
 
     # ---- lifecycle ----
@@ -202,6 +203,13 @@ class PerceptionCore:
                 self.last_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("perception: tick failed", exc_info=True)
             self.last_tick_ms = (now() - t0) * 1000.0
+            # Operator heartbeat: one stats line every ~30 s at the target
+            # rate, so tick health is visible in the producer's own log.
+            if self._tick_count % max(1, int(30.0 / self._interval)) == 0:
+                logger.info("perception: tick %.0f ms (stages %s), sets %s",
+                            self.last_tick_ms,
+                            {k: round(v) for k, v in self.stage_ms.items()},
+                            dict(self.sets_sent))
             # Fixed pacing minus work time — detection latency doesn't
             # compound into the tick rate until it exceeds the interval.
             self._stop_event.wait(max(0.0, self._interval - (now() - t0)))
@@ -209,6 +217,7 @@ class PerceptionCore:
     def tick(self) -> None:
         """One perception pass over every camera with a FRESH frame."""
         self._tick_count += 1
+        t = now()
         fresh: dict[str, Frame] = {}
         for cam_id in self._camera_ids:
             got = self._frames(cam_id)
@@ -220,22 +229,28 @@ class PerceptionCore:
             self._last_ts[cam_id] = ts
             fresh[cam_id] = Frame(camera_id=cam_id, capture_ts=ts,
                                   frame_idx=self._seq[cam_id], image=image)
+        self.stage_ms["frames"] = (now() - t) * 1000.0
         if not fresh:
             return
 
         dets_by_cam: dict[str, list[Detection]] = {cid: [] for cid in fresh}
         pair = FramePair(capture_ts=max(f.capture_ts for f in fresh.values()),
                          frame_idx=self._tick_count, frames=fresh)
+        t = now()
         if self._detector is not None:
             for cid, dets in self._detector.detect(pair).items():
                 dets_by_cam.setdefault(cid, []).extend(dets)
+        self.stage_ms["detect"] = (now() - t) * 1000.0
+        t = now()
         if self._pose is not None and self._tick_count % self._pose_every_n == 0:
             try:
                 for cid, dets in self._pose.detect(pair).items():
                     dets_by_cam.setdefault(cid, []).extend(dets)
             except Exception:
                 logger.debug("perception: pose failed this tick", exc_info=True)
+        self.stage_ms["pose"] = (now() - t) * 1000.0
 
+        t = now()
         for cam_id, frame in fresh.items():
             h, w = frame.image.shape[:2]
             msg = DetectionSetMessage(
@@ -254,6 +269,7 @@ class PerceptionCore:
                 self.sets_sent[cam_id] += 1
             except OSError:
                 logger.warning("perception: emit failed", exc_info=True)
+        self.stage_ms["emit"] = (now() - t) * 1000.0
 
 
 def build_perception_core(

@@ -142,7 +142,7 @@ def grab_real_frame(camera_id: str, source_cfg: dict, timeout: float = 4.0):
 
 
 def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
-                 get_zone_dets=None) -> Iterator:
+                 get_zone_dets=None, wire_pose=None) -> Iterator:
     """Annotate each cam frame before MJPEG-encoding.
 
     Gated by ``is_running`` (the Backbone-running check): until START, yields the RAW
@@ -177,10 +177,11 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
             continue
         dist_view = _warp_camera(cfg, camera_id) if distances_enabled(cfg) else None
         dist_style = distance_line_style(cfg)
-        # Async pose: the runner infers in a background worker on the newest
-        # frame; the video loop just overlays the latest skeletons — the view
-        # stays at camera rate even when the GPU is busy with the Backbone.
-        pose = get_async_pose(cfg, camera_id)
+        # Skeleton source: in points mode (Direction 1) the producer's pose
+        # rides the observations echo — render it with ZERO dashboard
+        # inference (wire_pose). Frames mode keeps the async runner (the
+        # dashboard is then the only pose in the system for display).
+        pose = wire_pose if wire_pose is not None else get_async_pose(cfg, camera_id)
         dets = get_zone_dets() if get_zone_dets is not None else []
         # show_occupancy stays False on the CAM views: the raw machine labels
         # ('palette_vide' / 'palette_carton_…') read as noise here — the human
@@ -520,10 +521,17 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         # by the camera-hub. _detect_iter runs POSE on every frame, so pose inherits
         # the Camera-FPS cam-view rate (Zones FPS / display_fps is zones-only now).
         manager = getattr(state, "zone_manager", None)
+        perception = getattr(state, "perception", None)
+        wire_pose = None
+        if perception is not None and perception.points_mode():
+            from ..pose_overlay import WirePoseSource
+            bus = getattr(state, "bus", None)
+            wire_pose = WirePoseSource(lambda: bus, camera_id)
         frames = _detect_iter(
             frames, cfg, camera_id,
             is_running=is_running,
             get_zone_dets=(lambda: manager.camera_dets(camera_id)) if manager is not None else None,
+            wire_pose=wire_pose,
         )
     return frames
 

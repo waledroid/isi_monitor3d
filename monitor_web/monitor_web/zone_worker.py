@@ -101,6 +101,9 @@ ZONE_SOURCE_DEFAULT = "backbone"
 # An observation older than this is stale (backbone stopped/hiccuped) — the
 # worker publishes empty rather than ghost boxes.
 OBSERVATIONS_MAX_AGE_S = 2.0
+# How long last-seen wire people persist on the snapshot when the producer's
+# pose is amortized (pose_every_n ticks carry persons, the rest don't).
+_PEOPLE_BRIDGE_S = 1.0
 
 
 def _zone_source(cfg) -> str:
@@ -359,6 +362,8 @@ class ZoneDetectionWorker:
         self._detector_factory = detector_factory
         self._hub_factory = hub_factory
         self._bus_getter = bus_getter
+        self._people_cache: tuple[float, list] = (0.0, [])
+        self._points_mode_cache: tuple[float, bool] = (0.0, False)
         self._patches: list[dict] = []
         self._snapshot: dict = {"frame_ts": 0.0, "zones": {}}
         self._stop = threading.Event()
@@ -678,6 +683,19 @@ class ZoneDetectionWorker:
                           "zones": resolved, "status": statuses, "people": people,
                           "valid_s": valid_s}
 
+    def _points_mode(self) -> bool:
+        """ingestion.mode == points in backbone.yaml, cached ~5 s."""
+        now_s = time.time()
+        ts, val = self._points_mode_cache
+        if now_s - ts > 5.0:
+            try:
+                val = str((read_backbone(self._cfg).get("ingestion") or {})
+                          .get("mode", "frames")) == "points"
+            except Exception:
+                val = False
+            self._points_mode_cache = (now_s, val)
+        return val
+
     def _snapshot_from_bus(self, frame, patches: list[dict]) -> None:
         """Backbone-sourced pass: render the wire's per-camera observations.
 
@@ -705,12 +723,19 @@ class ZoneDetectionWorker:
                 msg = bus.snapshot().observations_by_camera.get(self.camera_id)
             except Exception:
                 msg = None
+        wire_people: list = []
         if msg is not None and time.time() - float(msg.ts) <= OBSERVATIONS_MAX_AGE_S:
             fw, fh = msg.frame_wh
             sx, sy = iw / float(fw), ih / float(fh)
             for od in msg.dets:
                 if str(od.cls).lower() in _PERSON_CLASSES:
-                    continue                     # humans render via pose only
+                    # Persons now ride the wire (with keypoints) — the map's
+                    # people come from the SAME perception as everything else,
+                    # and this worker runs no pose model of its own.
+                    wire_people.append(
+                        {"foot_uv": (od.foot_uv[0] * sx, od.foot_uv[1] * sy),
+                         "confidence": float(od.confidence)})
+                    continue                     # never grouped into zone cards
                 x0, y0, x1, y1 = od.bbox_xyxy
                 det = SimpleNamespace(
                     camera_id=self.camera_id, capture_ts=float(msg.ts),
@@ -739,17 +764,33 @@ class ZoneDetectionWorker:
                 # dets outside every patch simply aren't shown — same as today.
         resolved = self._resolve_overlaps(per_zone, polys)
 
-        people: list = []
-        try:
-            pose = get_async_pose(self._cfg, self.camera_id)
-            if pose is not None:
-                for pp in pose.predict(frame):
-                    foot = getattr(pp, "foot_uv", None)
-                    if foot is not None:
-                        people.append({"foot_uv": (float(foot[0]), float(foot[1])),
-                                       "confidence": float(getattr(pp, "confidence", 0.0))})
-        except Exception:
-            logger.warning("zone worker[%s]: pose failed", self.camera_id, exc_info=True)
+        # People: in points mode (Direction 1) the producer's pose rides the
+        # observations echo — the wire is the ONLY people source and this
+        # worker never builds a pose session (an empty scene means no people,
+        # not "go infer locally": that fallback was measured to re-create the
+        # very GPU/GIL load Direction 1 removed). The producer amortizes pose
+        # across ticks, so bridge person-less ticks with the last-seen people
+        # for a short window. A frames-mode Backbone (rollback path) keeps the
+        # local pose pass for the map.
+        people: list = wire_people
+        now_s = time.time()
+        if wire_people:
+            self._people_cache = (now_s, wire_people)
+        elif self._points_mode():
+            cached_ts, cached = self._people_cache
+            if now_s - cached_ts <= _PEOPLE_BRIDGE_S:
+                people = cached
+        else:
+            try:
+                pose = get_async_pose(self._cfg, self.camera_id)
+                if pose is not None:
+                    for pp in pose.predict(frame):
+                        foot = getattr(pp, "foot_uv", None)
+                        if foot is not None:
+                            people.append({"foot_uv": (float(foot[0]), float(foot[1])),
+                                           "confidence": float(getattr(pp, "confidence", 0.0))})
+            except Exception:
+                logger.warning("zone worker[%s]: pose failed", self.camera_id, exc_info=True)
 
         self._snapshot = {"frame_ts": time.time(), "frame_wh": (iw, ih),
                           "zones": resolved, "status": statuses, "people": people,

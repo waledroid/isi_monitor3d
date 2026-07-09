@@ -28,6 +28,12 @@ ingestion:
     degraded_emit_after_ms: 100.0
   frame_bus:
     default_maxsize: 2
+  mode: points
+  points:
+    listen_host: 127.0.0.1
+    listen_port: 9010
+    max_skew_ms: 60.0
+    degraded_emit_after_ms: 200.0
 detection:
   plugin: yolo_onnx_seg
   onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
@@ -42,6 +48,7 @@ detection:
   pose_every_n: 2
   pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.onnx
   pose_imgsz: 640
+  decode_masks: true
 homography:
   cross_cam_fusion:
     match_distance_m:
@@ -85,3 +92,5 @@ metadata:
     on_event: enter
 zones_path: /home/aatanda/isi_monitor3d/config/zones.yaml
 subscriptions_path: /home/aatanda/isi_monitor3d/config/mode2/subscriptions.yaml
+perception:
+  fps: 12.0

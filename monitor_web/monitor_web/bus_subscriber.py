@@ -247,7 +247,13 @@ class BusSubscriber:
         with self._lock:
             self._state.received += 1
             self._state.last_envelope_ts = now
-            if ts is not None:
+            # Latency window counts FRESH-per-pair messages only. Retained/
+            # refresh types (zone_state refreshes) legitimately carry an OLD
+            # ts (last change time) and would poison the percentile — a
+            # static warehouse read as "1.4 s latency" while tracks were
+            # arriving 74 ms after capture.
+            if ts is not None and isinstance(
+                    msg, (Track2DMessage, Track3DMessage, ObservationsMessage)):
                 self._latencies.append(max(0.0, (now - float(ts)) * 1000.0))
             if isinstance(msg, Track2DMessage):
                 self._state.last_track2d_by_id[msg.track_id] = msg
