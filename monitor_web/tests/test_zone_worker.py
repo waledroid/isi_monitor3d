@@ -1114,3 +1114,25 @@ def test_to_crop_handles_wire_observation_dets():
     c2 = _to_crop(core, 100, 100, 200, 200)
     assert c2.bbox_xyxy == (20.0, 30.0, 120.0, 130.0)
     assert c2.mask_poly is None
+
+
+def test_backbone_source_respects_per_zone_confidence():
+    """The Backbone publishes at its own low threshold; the per-zone confidence
+    acts as a DISPLAY floor so cards/panels don't flicker on weak evidence."""
+    from backbone.comms.schemas import ObservationDet
+
+    patch = _patch("z1", 0, 0, 160, 120, conf=0.6)
+    weak = ObservationDet(cls="palette", confidence=0.4,
+                          bbox_xyxy=(40.0, 40.0, 120.0, 120.0), foot_uv=(80.0, 120.0))
+    strong = ObservationDet(cls="palette", confidence=0.9,
+                            bbox_xyxy=(45.0, 45.0, 125.0, 125.0), foot_uv=(85.0, 125.0))
+    bus = _FakeBus(_obs_msg(dets=[weak, strong], frame_wh=(320, 240)))
+    w = ZoneDetectionWorker(
+        "cam_a", {"name": "rtsp", "url": "rtsp://x"}, _CfgStub(),
+        lambda: True, detector_factory=lambda *a, **k: None,
+        hub_factory=lambda: FakeHub(np.zeros((240, 320, 3), np.uint8)),
+        bus_getter=lambda: bus)
+    w.set_patches([patch])
+    w._snapshot_from_bus(np.zeros((240, 320, 3), np.uint8), [patch])
+    dets = w.zone_dets("z1")
+    assert len(dets) == 1 and dets[0].confidence == 0.9

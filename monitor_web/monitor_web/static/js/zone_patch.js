@@ -277,7 +277,8 @@ function renderSettingsList() {
     // mode (one perception — detections come from the Backbone's wire) they
     // are inert, so grey them out with an explanatory tooltip.
     if (zoneSource === "backbone") {
-      for (const sel of [".zm-model", ".zm-conf", ".zm-size", ".zm-sahi", ".zm-enh"]) {
+      // .zm-conf stays live: it filters the WIRE detections for display.
+      for (const sel of [".zm-model", ".zm-size", ".zm-sahi", ".zm-enh"]) {
         const ctl = row.querySelector(sel);
         if (ctl) {
           ctl.disabled = true;

@@ -691,6 +691,12 @@ class ZoneDetectionWorker:
         per_zone: dict[str, list] = {str(p.get("id")): [] for p in patches}
         statuses = {zid: "ok" for zid in per_zone}
         polys = {str(p.get("id")): _scaled_polygon(p, (iw, ih)) for p in patches}
+        # Per-zone confidence keeps meaning in backbone mode as a DISPLAY
+        # filter: the Backbone publishes at its own (low) threshold so the
+        # tracker sees weak evidence, but a zone card/panel shouldn't flicker
+        # on it. Unset ⇒ a sane display floor.
+        conf_floor = {str(p.get("id")): float(p.get("confidence") or 0.3)
+                      for p in patches}
 
         bus = self._bus_getter() if self._bus_getter is not None else None
         msg = None
@@ -723,6 +729,8 @@ class ZoneDetectionWorker:
                 cy = (det.bbox_xyxy[1] + det.bbox_xyxy[3]) / 2.0
                 for zid, poly in polys.items():
                     if poly is None or len(poly) < 3:
+                        continue
+                    if det.confidence < conf_floor.get(zid, 0.3):
                         continue
                     if cv2.pointPolygonTest(
                             poly.astype(np.float32), (float(cx), float(cy)),
