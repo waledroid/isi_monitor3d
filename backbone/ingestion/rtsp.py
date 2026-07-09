@@ -98,6 +98,13 @@ _NVDEC_ELEMENTS = {
 _DEFAULT_CODEC = "h264"
 _DECODERS = ("software", "nvdec")
 
+# Codec probe cache, keyed by URL. ffprobe costs up to 8 s per call and a
+# stream's codec never changes mid-process — but the dashboard's camera hub
+# re-acquires sources every time the last viewer detaches (page reloads!), so
+# an uncached probe made every reconnect pay seconds of dead time (the
+# "cam 2 loads slowly" symptom; H.265 probes are the slowest).
+_CODEC_CACHE: dict[str, str] = {}
+
 
 def _probe_rtsp_codec(url: str, *, timeout_s: float = 8.0) -> str | None:
     """Return the RTSP stream's video codec (``"h264"``/``"hevc"``) via ffprobe.
@@ -194,7 +201,11 @@ class RtspFrameSource(GstAppsinkFrameSource):
         plugin isn't present — a shared config stays runnable on machines
         without an NVIDIA GPU."""
         if self._codec is None:
-            self._codec = _probe_rtsp_codec(self._url) or _DEFAULT_CODEC
+            cached = _CODEC_CACHE.get(self._url)
+            if cached is None:
+                cached = _probe_rtsp_codec(self._url) or _DEFAULT_CODEC
+                _CODEC_CACHE[self._url] = cached
+            self._codec = cached
         table = _CODEC_ELEMENTS
         if self._decoder == "nvdec":
             if self._nvdec_available():

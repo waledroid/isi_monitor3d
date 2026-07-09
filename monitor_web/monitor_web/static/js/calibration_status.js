@@ -24,6 +24,9 @@ async function fetchStatus() {
 function applyState(status) {
   const btn = document.getElementById(BUTTON_ID);
   if (!btn) return;
+  // A failed poll (status === null) keeps the button's last state — a
+  // transient timeout must not flash "No calibration" over a calibrated rig.
+  if (status === null && btn.dataset.state) return;
   const fullyCalibrated = !!(status && status.is_fully_calibrated);
   btn.dataset.state = fullyCalibrated ? "green" : "white";
   // Tooltip lets the operator hover for a quick read of the current state.

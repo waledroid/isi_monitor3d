@@ -99,7 +99,10 @@
           this.calibratedCams = Array.isArray(data.calibrated_cameras)
             ? data.calibrated_cameras : [];
         } catch {
-          this.calibratedCams = [];
+          // Transient fetch failure (loop congestion / reload race): KEEP the
+          // last-known list — downgrading to [] made the "Flatten floor"
+          // verify toggle vanish and read as "no calibration" when the
+          // calibration was perfectly fine.
         }
         if (window.__videoWS) window.__videoWS.resubscribeAll();
       },
