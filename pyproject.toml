@@ -45,7 +45,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["backbone*", "calibration*"]
+include = ["backbone*", "calibration*", "perception*"]
 
 [tool.ruff]
 line-length = 100

@@ -57,6 +57,15 @@ async def start(request: Request) -> JSONResponse:
             if any(_READY_MARKER in line.lower() for line in supervisor.log_lines(30)):
                 break   # built OK and now running
     state = supervisor.state
+    # Direction 1: with ingestion.mode: points the Backbone is a pure metric
+    # engine — start the in-process perception producer to feed it. Off the
+    # event loop: it builds CUDA sessions (seconds).
+    if state == "running":
+        perception = getattr(request.app.state, "perception", None)
+        if perception is not None and perception.points_mode():
+            started = await asyncio.to_thread(perception.start)
+            logger.info("control: perception producer %s",
+                        "running" if started else "FAILED to start")
     log_tail = supervisor.log_lines(12) if state != "running" else []
     return JSONResponse(
         {
@@ -86,6 +95,11 @@ async def stop(request: Request) -> JSONResponse:
     logger.info("control: STOP requested (state=%s, pid=%s)",
                 supervisor.state, supervisor.pid)
     t0 = time.monotonic()
+    # Producer first: it feeds the engine, and stopping it releases its hub
+    # readers + CUDA sessions before the memory trim below.
+    perception = getattr(request.app.state, "perception", None)
+    if perception is not None:
+        await asyncio.to_thread(perception.stop)
     stopped = await asyncio.to_thread(supervisor.stop)
     # The system is DOWN — empty every live cache so the UI clears at once:
     # tracks/zone_state/observations vanish from the map, cards and panels

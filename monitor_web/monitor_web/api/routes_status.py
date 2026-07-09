@@ -222,6 +222,10 @@ async def status(request: Request) -> JSONResponse:
                 "pid": supervisor.pid,
                 "last_exit_code": supervisor.last_exit_code,
             },
+            # Direction 1: the in-process perception producer (points mode).
+            # {"running": False} in frames mode — harmless for old readers.
+            "perception": getattr(request.app.state, "perception", None).status()
+            if getattr(request.app.state, "perception", None) is not None else {"running": False},
             "udp": {
                 "received": snap.received,
                 "dropped_malformed": snap.dropped_malformed,

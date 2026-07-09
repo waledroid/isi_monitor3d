@@ -93,6 +93,7 @@ class CameraStream:
 
         self._cond = threading.Condition()
         self._latest: np.ndarray | None = None
+        self._latest_ts: float = 0.0         # capture_ts of the latest REAL frame
         self._latest_is_placeholder = True   # the first published frame is always a placeholder
         self._version = 0
         self._finished = False          # replay reached EOF → readers should stop
@@ -130,10 +131,16 @@ class CameraStream:
 
     # ---- pump (single producer) ----
 
-    def _publish(self, frame: np.ndarray, *, placeholder: bool = False) -> None:
+    def _publish(self, frame: np.ndarray, *, placeholder: bool = False,
+                 capture_ts: float = 0.0) -> None:
         with self._cond:
             self._latest = frame
             self._latest_is_placeholder = placeholder
+            if not placeholder:
+                # The KPI clock: capture_ts travels with the frame so the
+                # perception producer can stamp DetectionSetMessage.ts with
+                # the true capture time, not the read time.
+                self._latest_ts = capture_ts
             self._version += 1
             self._cond.notify_all()
 
@@ -157,7 +164,7 @@ class CameraStream:
                 for frame in src.frames():
                     if self._stop.is_set():
                         break
-                    self._publish(frame.image)
+                    self._publish(frame.image, capture_ts=frame.capture_ts)
             except Exception as exc:  # a mid-stream source error → reconnect
                 logger.warning("camhub %s: source error (%s)", self.camera_id, exc)
             finally:
@@ -198,6 +205,14 @@ class CameraStream:
                 frame = self._latest
             if frame is not None:
                 yield frame
+
+    def latest_real_frame_with_ts(self) -> tuple[np.ndarray, float] | None:
+        """Latest REAL frame + its capture_ts (0.0 when the source predates
+        the ts plumbing). None while only placeholders have been published."""
+        with self._cond:
+            if self._latest is not None and not self._latest_is_placeholder:
+                return self._latest, self._latest_ts
+            return None
 
     def latest_real_frame(self) -> np.ndarray | None:
         """Non-blocking snapshot of the most recent genuine frame (not the
