@@ -240,8 +240,6 @@ function collectPayload() {
   // distance-line styles auto-save on change (see wireUiPrefSync), so the Save
   // button no longer carries a `detection` block.
   payload.pose = collectPose();
-  // Backbone mask decode — observations carry mask polygons when on.
-  payload.decode_masks = !!el("zm-model-decode-masks")?.checked;
   // S16: distance lines — always send the field (empty list clears the file).
   payload.link_lines = collectLinkLines();
   // Communication — MQTT broker + node identity.
@@ -415,8 +413,6 @@ function fillModelSection(det) {
   if (cbMasks) cbMasks.checked = det.show_masks !== false;
   const cbBoxes = el("zm-model-show-boxes");
   if (cbBoxes) cbBoxes.checked = det.show_boxes !== false;
-  const cbDecode = el("zm-model-decode-masks");
-  if (cbDecode) cbDecode.checked = det.decode_masks === true;   // default off
   const opEl = el("zm-model-dist-opacity");
   if (opEl) opEl.value = det.distance_line_opacity ?? 0.25;
   const colEl = el("zm-model-dist-color");

@@ -247,3 +247,58 @@ def test_orchestrator_zone_scope_detects_inside_zone(tmp_path) -> None:
         orch.publisher.close()
     finally:
         sock.close()
+
+
+def test_decode_masks_defaults_by_scope(tmp_path, monkeypatch) -> None:
+    """Zone scope decodes masks by default (crop-relative, feeds the wire's
+    polygons — the dashboard renders them, no operator toggle needed);
+    full_frame keeps masks off (frame-sized canvases the pipeline never needs).
+    Explicit config always wins."""
+    from backbone.core.interfaces import detector_registry
+    from backbone.runtime import Orchestrator
+    from tests.test_orchestrator import (
+        CLASS_NAMES,
+        _bind_receiver,
+        _write_calibration,
+    )
+
+    captured: dict = {}
+    real_create = detector_registry.create
+
+    def spy(name, **kwargs):
+        if name == "yolo_onnx_seg":
+            captured[kwargs.get("scope_tag")] = kwargs.get("decode_masks")
+
+            class _Stub:
+                def detect(self, pair):
+                    return {}
+            return _Stub()
+        return real_create(name, **kwargs)
+
+    monkeypatch.setattr(detector_registry, "create", spy)
+    cal = _write_calibration(tmp_path)
+    zones_path = tmp_path / "zones.yaml"
+    zones_path.write_text(yaml.safe_dump({"zones": [{
+        "name": "Z", "type": "palette",
+        "polygon": [[-1, -1], [1, -1], [1, 1], [-1, 1]]}]}))
+    sock, port = _bind_receiver()
+    try:
+        for scope, tag in (("zones", "z"), ("full_frame", "f")):
+            cfg = tmp_path / f"bb_{scope}.yaml"
+            cfg.write_text(yaml.safe_dump({
+                "calibration_path": str(cal),
+                "zones_path": str(zones_path),
+                "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
+                "detection": {"plugin": "yolo_onnx_seg", "scope": scope,
+                              "scope_tag": tag,   # spy correlation only
+                              "onnx_path": "/nonexistent-ok-stubbed.onnx",
+                              "class_names": CLASS_NAMES},
+                "homography": {"tracker": {"plugin": "bytetrack"}},
+                "metadata": {"sinks": [{"plugin": "udp", "host": "127.0.0.1",
+                                        "port": port}]},
+            }))
+            orch = Orchestrator(cfg)
+            orch.publisher.close()
+        assert captured == {"z": True, "f": False}
+    finally:
+        sock.close()

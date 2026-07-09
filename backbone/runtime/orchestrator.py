@@ -179,13 +179,15 @@ class Orchestrator:
         imgsz = det_cfg.pop("inference_imgsz", None)
         if imgsz:
             det_cfg["input_size"] = (int(imgsz), int(imgsz))
-        # The pipeline never reads Detection.mask except as an optional area
-        # refinement in pallet_occupancy (bbox fallback) — per-detection
-        # full-frame mask assembly is pure CPU cost here. Default it OFF for
-        # the YOLO seg plugins; a config `decode_masks: true` re-enables.
-        # (Dashboard overlays build their own detectors and keep masks.)
+        # Mask decoding default depends on the scope: under zone scope the
+        # masks are CROP-relative (small) and feed the wire's mask polygons —
+        # the dashboard renders them, so they're ON by default (one
+        # perception implies the visuals come from here too). Full-frame
+        # masks are per-detection frame-sized canvases (pure CPU cost the
+        # pipeline never needs) — OFF by default. Explicit config wins.
+        scope_peek = str(det_cfg.get("scope", "zones"))
         if det_plugin in ("yolo_onnx_seg", "yolo_openvino_seg"):
-            det_cfg.setdefault("decode_masks", False)
+            det_cfg.setdefault("decode_masks", scope_peek == "zones")
         # The system is ZONE-BASED: with `detection.scope: zones` (the default)
         # the object detector sees only the configured floor zones' crops —
         # and with NO zones configured it is not built at all (pose stays
