@@ -185,7 +185,13 @@ async def ws_video(ws: WebSocket) -> None:
                 if sub.credit_mode:
                     sub.credit = max(0, sub.credit - 1)
                 sub.last_send = now
-                await ws.send_bytes(_frame_message(sub.stream_id, buf))
+                try:
+                    await ws.send_bytes(_frame_message(sub.stream_id, buf))
+                except RuntimeError:
+                    # Socket closed between the check and the send (page
+                    # navigated away mid-frame). Normal shutdown race — end the
+                    # sender quietly; the endpoint's finally cancels/cleans up.
+                    return
 
     send_task = asyncio.create_task(sender())
     try:
