@@ -1083,3 +1083,34 @@ def test_zone_source_defaults_to_backbone_and_reads_local(tmp_path):
     assert _zone_source(_C()) == "local"
     _C.ui_settings_path.write_text(_yaml.safe_dump({"zone_detection_source": "bogus"}))
     assert _zone_source(_C()) == "backbone"
+
+
+def test_to_crop_handles_wire_observation_dets():
+    """The panel renderer's crop translation must accept the wire's namespace
+    dets (no camera_id/capture_ts, mask as POLYGON) and translate the polygon
+    into crop coords — this exact AttributeError killed every zone panel pump
+    on the first one-perception run."""
+    from types import SimpleNamespace
+
+    from monitor_web.api.routes_video import _to_crop
+
+    wire_det = SimpleNamespace(
+        cls="palette", confidence=0.9, bbox_xyxy=(120.0, 130.0, 220.0, 230.0),
+        foot_uv=(170.0, 230.0), mask=None,
+        mask_poly=[[120.0, 130.0], [220.0, 130.0], [220.0, 230.0]],
+        occupancy_state="full", occupancy_content="carton",
+        occupancy_confidence=0.7)
+    c = _to_crop(wire_det, 100, 100, 200, 200)
+    assert c.bbox_xyxy == (20.0, 30.0, 120.0, 130.0)
+    assert c.foot_uv == (70.0, 130.0)
+    assert c.mask_poly[0] == [20.0, 30.0]
+    assert c.occupancy_state == "full"
+
+    # Core Detection objects (local mode) still translate identically.
+    from backbone.core.types import Detection
+    core = Detection(camera_id="cam_a", capture_ts=1.0, cls="carton",
+                     confidence=0.8, bbox_xyxy=(120.0, 130.0, 220.0, 230.0),
+                     foot_uv=(170.0, 230.0))
+    c2 = _to_crop(core, 100, 100, 200, 200)
+    assert c2.bbox_xyxy == (20.0, 30.0, 120.0, 130.0)
+    assert c2.mask_poly is None

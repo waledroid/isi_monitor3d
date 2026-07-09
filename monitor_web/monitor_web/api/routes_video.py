@@ -292,19 +292,28 @@ def _warp_detect_iter(frames: Iterator, cfg, camera_id: str, cam, M, out_wh, do_
 
 
 def _to_crop(d, x0: int, y0: int, ch: int, cw: int):
-    """Translate one full-frame Detection into crop coordinates (shift bbox/foot by
-    the crop origin; slice the mask). The inverse of the worker's `_remap_det`, used
-    by the panel renderer to draw the worker's snapshot on the cropped view."""
-    from backbone.core.types import Detection
+    """Translate one detection into crop coordinates (shift bbox/foot/polygon
+    by the crop origin; slice the mask). The inverse of the worker's
+    `_remap_det`, used by the panel renderer to draw the worker's snapshot on
+    the cropped view. Duck-typed on purpose: snapshot dets are core
+    ``Detection`` objects in local mode but plain namespaces from the wire's
+    observations in backbone mode (which carry ``mask_poly``, no bitmaps and
+    no camera/ts fields) — the drawer only reads attributes."""
+    from types import SimpleNamespace
     bx = d.bbox_xyxy
     bbox = (bx[0] - x0, bx[1] - y0, bx[2] - x0, bx[3] - y0)
     foot = None if d.foot_uv is None else (d.foot_uv[0] - x0, d.foot_uv[1] - y0)
     mask = None
-    if d.mask is not None:
+    if getattr(d, "mask", None) is not None:
         mask = d.mask[y0:y0 + ch, x0:x0 + cw]
-    return Detection(camera_id=d.camera_id, capture_ts=d.capture_ts, cls=d.cls,
-                     confidence=d.confidence, bbox_xyxy=bbox, foot_uv=foot,
-                     keypoints_uv=d.keypoints_uv, mask=mask)
+    poly = getattr(d, "mask_poly", None)
+    return SimpleNamespace(
+        cls=d.cls, confidence=d.confidence, bbox_xyxy=bbox, foot_uv=foot,
+        keypoints_uv=getattr(d, "keypoints_uv", None), mask=mask,
+        mask_poly=[[px - x0, py - y0] for px, py in poly] if poly else None,
+        occupancy_state=getattr(d, "occupancy_state", None),
+        occupancy_content=getattr(d, "occupancy_content", None),
+        occupancy_confidence=getattr(d, "occupancy_confidence", 0.0))
 
 
 _ZONE_STATUS_LABELS = {

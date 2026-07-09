@@ -707,6 +707,8 @@ class ZoneDetectionWorker:
                     continue                     # humans render via pose only
                 x0, y0, x1, y1 = od.bbox_xyxy
                 det = SimpleNamespace(
+                    camera_id=self.camera_id, capture_ts=float(msg.ts),
+                    keypoints_uv=None, mask_offset_xy=None,
                     cls=od.cls, confidence=float(od.confidence),
                     bbox_xyxy=(x0 * sx, y0 * sy, x1 * sx, y1 * sy),
                     foot_uv=(od.foot_uv[0] * sx, od.foot_uv[1] * sy),
