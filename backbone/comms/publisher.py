@@ -101,6 +101,18 @@ class Publisher:
                     "sink %s failed on publish_proximity", type(sink).__name__, exc_info=True
                 )
 
+    def publish_observations(self, msg: object) -> None:
+        """Fan-out an ``ObservationsMessage`` (UDP-only by sink design)."""
+        if self._closed:
+            return
+        for sink in self._sinks:
+            try:
+                sink.publish_observations(msg)
+            except Exception:
+                logger.warning(
+                    "sink %s failed on publish_observations", type(sink).__name__,
+                    exc_info=True)
+
     def publish_diagnostics(self, msg: object) -> None:
         """Fan-out a ``DiagnosticsMessage`` to all sinks."""
         if self._closed:

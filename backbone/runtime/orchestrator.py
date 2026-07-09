@@ -63,6 +63,8 @@ from backbone.comms.diagnostics_publisher import DiagnosticsPublisher
 from backbone.comms.schemas import (
     CalibrationFactCheck,
     ConfigMessage,
+    ObservationDet,
+    ObservationsMessage,
     ProximityMessage,
     ProximityPair,
     ZoneSpec,
@@ -87,6 +89,7 @@ from backbone.homography import (
 )
 from backbone.ingestion import FrameBus, FrameSynchronizer
 from backbone.shared.camera_rig import CameraRig
+from backbone.shared.mask_poly import mask_to_polygon
 from backbone.shared.snapshot_writer import SnapshotWriter
 from backbone.shared.timestamps import LatencyMeter, elapsed_ms, now
 from backbone.shared.zone_state import ZoneStateTracker
@@ -322,6 +325,12 @@ class Orchestrator:
         self._proximity_interval_s = float(prox_cfg.get("refresh_interval_s", 0.5))
         self._proximity_last_ts = 0.0
         self._proximity_had_pairs = False
+
+        # Per-camera raw observations for display consumers (the dashboard
+        # renders these instead of running its own detector — ONE perception).
+        # Enabled by default; opt-out via ``metadata.observations.enabled``.
+        self._observations_enabled: bool = bool(
+            meta_cfg.get("observations", {}).get("enabled", True))
 
         # Zone state (retained per-zone object list — the WMS/FMS signal).
         # Enabled by default; opt-out via ``metadata.zone_state.enabled: false``.
@@ -637,11 +646,62 @@ class Orchestrator:
                     d.keypoints_uv = kp
                 if d.mask is not None:
                     # Keep the mask in the SAME space as the bbox — occupancy
-                    # compares mask/bbox areas across detections.
+                    # compares mask/bbox areas across detections. Masks may be
+                    # CROP-relative (zone scope): scale the array by the same
+                    # factors and shift the crop origin; a full-frame mask
+                    # (offset None) scales to the calibration frame exactly
+                    # as before.
                     import cv2
+                    mh, mw = d.mask.shape[:2]
                     d.mask = cv2.resize(
-                        d.mask.astype(np.uint8), (int(cw), int(ch)),
+                        d.mask.astype(np.uint8),
+                        (max(1, round(mw * sx)), max(1, round(mh * sy))),
                         interpolation=cv2.INTER_NEAREST).astype(bool)
+                    if d.mask_offset_xy is not None:
+                        d.mask_offset_xy = (round(d.mask_offset_xy[0] * sx),
+                                            round(d.mask_offset_xy[1] * sy))
+
+    def _publish_observations(self, detections_by_camera: dict, pair: Any) -> None:
+        """Per-camera raw detections for display consumers (UDP sink only).
+
+        ONE perception: the dashboard renders these instead of running its own
+        detector. Coordinates are CALIBRATION-frame pixels (``frame_wh`` says
+        so on the wire); pallet detections carry the same occupancy verdict the
+        tracker enrichment uses; masks (when decoded) travel as simplified
+        polygons, never bitmaps.
+        """
+        from backbone.homography.pallet_occupancy import PALLET_CLASSES
+
+        for cam_id, dets in detections_by_camera.items():
+            if cam_id not in self._rig:
+                continue
+            pallets = [d for d in dets if str(d.cls).lower() in PALLET_CLASSES]
+            occ_by_det: dict[int, tuple] = {}
+            if pallets:
+                try:
+                    states = self._occupancy.frame_states(dets)
+                    for pal, (_pm, st, content, conf) in zip(pallets, states, strict=False):
+                        occ_by_det[id(pal)] = (st, content, conf)
+                except Exception:
+                    logger.debug("observations: occupancy hint failed", exc_info=True)
+            obs = []
+            for d in dets:
+                st, content, conf = occ_by_det.get(id(d), (None, None, 0.0))
+                poly = (mask_to_polygon(d.mask, d.mask_offset_xy)
+                        if d.mask is not None else None)
+                obs.append(ObservationDet(
+                    cls=str(d.cls), confidence=float(d.confidence),
+                    bbox_xyxy=tuple(float(v) for v in d.bbox_xyxy),
+                    foot_uv=(float(d.foot_uv[0]), float(d.foot_uv[1])),
+                    occupancy_state=st, occupancy_content=content,
+                    occupancy_confidence=float(conf or 0.0),
+                    mask_poly=tuple((float(x), float(y)) for x, y in poly)
+                              if poly else None,
+                ))
+            w, h = self._rig[cam_id].image_size_wh
+            self._publisher.publish_observations(ObservationsMessage(
+                ts=pair.capture_ts, camera_id=cam_id,
+                frame_wh=(int(w), int(h)), dets=tuple(obs)))
 
     def step(self, pair: Any) -> tuple[list[Track2D], list[Any]]:
         """Process one ``FramePair`` end-to-end. Returns the published 2D + 3D tracks.
@@ -653,6 +713,12 @@ class Orchestrator:
         if self._detector is not None:
             detections_by_camera = self._detector.detect(pair)
             self._scale_detections_to_calibration(detections_by_camera, pair)
+            if self._observations_enabled:
+                try:
+                    self._publish_observations(detections_by_camera, pair)
+                except Exception:
+                    logger.warning("orchestrator: observations publish failed",
+                                   exc_info=True)
         else:
             # Zone-based system, no zones configured: no object detection at
             # all — the pose path below still produces person tracks.

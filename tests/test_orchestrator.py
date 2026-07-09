@@ -236,10 +236,13 @@ def test_orchestrator_step_emits_track_2d_over_udp(tmp_path: Path) -> None:
             t2, _ = orch.step(pair)
             tracks_2d_emitted.extend(t2)
 
-        # At least one Track2D should have made it to the UDP sink.
-        payload, _ = sock.recvfrom(8192)
-        msg = json.loads(payload.decode("utf-8"))
-        assert msg["type"] == "track_2d"
+        # At least one Track2D should have made it to the UDP sink. The
+        # socket also carries `observations` (the display feed) — skim.
+        while True:
+            payload, _ = sock.recvfrom(8192)
+            msg = json.loads(payload.decode("utf-8"))
+            if msg["type"] == "track_2d":
+                break
         assert msg["cls"] == "person"
         # The 2-camera fusion produced an averaged position; verify it's plausible.
         assert -5.0 <= msg["xy_m"][0] <= 5.0
@@ -429,10 +432,13 @@ def test_mode1_emits_track2d_only_no_track3d(tmp_path: Path) -> None:
             pair = FramePair(capture_ts=ts, frame_idx=i, frames={"cam_a": frame})
             _t2, t3 = orch.step(pair)
             assert t3 == []   # never any Track3D in Mode 1
-        # At least one Track2D should have made it to UDP.
-        payload, _ = sock.recvfrom(8192)
-        msg = json.loads(payload.decode("utf-8"))
-        assert msg["type"] == "track_2d"
+        # At least one Track2D should have made it to UDP (skim past the
+        # per-camera `observations` display feed).
+        while True:
+            payload, _ = sock.recvfrom(8192)
+            msg = json.loads(payload.decode("utf-8"))
+            if msg["type"] == "track_2d":
+                break
         assert msg["cameras_seeing"] == ["cam_a"]
         orch.publisher.close()
     finally:
@@ -1018,5 +1024,61 @@ def test_proximity_message_published_for_person_near_pallet(tmp_path: Path) -> N
         expect = math.hypot(p.person_xy_m[0] - p.object_xy_m[0],
                             p.person_xy_m[1] - p.object_xy_m[1])
         assert abs(p.distance_m - expect) < 1e-3
+    finally:
+        sock.close()
+
+
+def test_observations_published_per_camera(tmp_path: Path) -> None:
+    """Every pair publishes an ObservationsMessage per camera on the UDP sink
+    (the dashboard's single-perception feed), in calibration-frame coords with
+    occupancy hints on pallet detections."""
+    from backbone.comms.schemas import ObservationsMessage, parse_envelope
+
+    cal_path = _write_single_cam_calibration(tmp_path)
+    obj_onnx = _write_stub_object_onnx_single(tmp_path, cls_idx=2)   # pallet
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = tmp_path / "obs.yaml"
+        cfg_path.write_text(yaml.safe_dump({
+            "calibration_path": str(cal_path),
+            "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
+            "detection": {
+                "plugin": "yolo_onnx", "scope": "full_frame",
+                "onnx_path": str(obj_onnx),
+                "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
+            },
+            "homography": {
+                "tracker": {"plugin": "bytetrack"},
+                "track_config": {"min_hits_to_confirm": 1, "max_lost_frames": 30},
+            },
+            "metadata": {"sinks": [{"plugin": "udp", "host": "127.0.0.1", "port": port}]},
+        }))
+        orch = Orchestrator(cfg_path)
+        img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        for i in range(2):
+            frame = Frame(camera_id="cam_a", capture_ts=(i + 1) * 0.1,
+                          frame_idx=i, image=img)
+            orch.step(FramePair(capture_ts=(i + 1) * 0.1, frame_idx=i,
+                                frames={"cam_a": frame}))
+        orch.publisher.close()
+
+        obs = []
+        try:
+            while True:
+                data, _ = sock.recvfrom(65535)
+                msg = parse_envelope(json.loads(data.decode("utf-8")))
+                if isinstance(msg, ObservationsMessage):
+                    obs.append(msg)
+        except TimeoutError:
+            pass
+        assert obs, "no ObservationsMessage on the wire"
+        m = obs[-1]
+        assert m.camera_id == "cam_a" and m.frame_wh == (1000, 1000)
+        assert len(m.dets) >= 1
+        d = m.dets[0]
+        assert d.cls == "pallet" and 0.0 <= d.confidence <= 1.0
+        # Lone pallet, no cartons in frame → classified empty by the hint.
+        assert d.occupancy_state == "empty"
+        assert d.mask_poly is None                 # decode_masks defaults off
     finally:
         sock.close()

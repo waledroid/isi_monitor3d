@@ -189,6 +189,13 @@ class PalletOccupancy:
                 states.append((pallets_m[i], "full", str(dom.cls).lower(), float(dom.confidence)))
         return states
 
+    def frame_states(self, dets: list[Detection]) -> list:
+        """Public per-camera classification: ``[(pallet_xy_m|None, state,
+        content|None, confidence)]`` aligned with the pallet-class detections
+        in ``dets`` (same order). Used by the observations publisher to attach
+        occupancy hints to the wire without re-deriving the association."""
+        return self._frame_states(dets)
+
     # ---- public: enrich pallet tracks with a voted occupancy state ----
 
     def enrich(self, tracks_2d: list[Track2D], detections_by_camera: dict) -> list[Track2D]:

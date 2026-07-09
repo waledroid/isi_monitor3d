@@ -53,7 +53,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backbone.core.types import Track2D, Track3D
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 """Bumped on any breaking change to the UDP/JSON contract.
 
 v2: added optional pallet ``occupancy_*`` fields to ``Track2DMessage`` (additive,
@@ -61,9 +61,11 @@ non-breaking — v1 consumers can ignore them).
 v4: added ``PassingEventMessage`` (zone entry/leave events, Phase B). All prior
 message shapes are unchanged; ``parse_envelope`` accepts both v3 and v4.
 v5: added ``ProximityMessage`` (person↔object floor distances — the safety
-signal). Additive; all prior shapes unchanged."""
+signal). Additive; all prior shapes unchanged.
+v6: added ``ObservationsMessage`` (per-camera raw detections for display
+consumers — one perception, rendered everywhere). Additive; UDP-only."""
 
-_ACCEPTED_VERSIONS = frozenset({3, 4, 5})
+_ACCEPTED_VERSIONS = frozenset({3, 4, 5, 6})
 
 TOPIC_VERSION = "v1"
 """Current MQTT topic-contract version, shared so node + gateway agree.
@@ -81,6 +83,7 @@ class MessageType(str, Enum):
     IMAGE_REF = "image_ref"
     ZONE_STATE = "zone_state"
     PROXIMITY = "proximity"
+    OBSERVATIONS = "observations"
     DIAGNOSTICS = "diagnostics"
     CONFIG = "config"
 
@@ -294,6 +297,48 @@ class CalibrationFactCheck(BaseModel):
     mode: int = Field(..., ge=1, le=2)
 
 
+class ObservationDet(BaseModel):
+    """One raw per-camera detection (element of ``ObservationsMessage``)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cls: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    bbox_xyxy: tuple[float, float, float, float]
+    foot_uv: tuple[float, float]
+    # Pallet occupancy hints (same semantics as ZoneObject); None = not a
+    # pallet / undecided.
+    occupancy_state: str | None = None
+    occupancy_content: str | None = None
+    occupancy_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Simplified instance-mask outline in frame coords ([[x, y], ...]) —
+    # present only when the Backbone decodes masks. Consumers fall back to
+    # the bbox when absent.
+    mask_poly: tuple[tuple[float, float], ...] | None = None
+
+
+class ObservationsMessage(BaseModel):
+    """Per-camera raw detections — the display consumers' feed.
+
+    ONE perception: the Backbone's zone-scoped detector is the single object
+    detector in the system; the dashboard renders these observations instead
+    of running its own models. Published per camera per pair (~pipeline rate)
+    on the **UDP sink only** — it is a display concern, deliberately kept off
+    MQTT/broker. ``frame_wh`` is the coordinate space (the camera's
+    CALIBRATION frame); consumers scale to their display exactly like stored
+    zone patches do.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.OBSERVATIONS] = MessageType.OBSERVATIONS
+    ts: float = Field(..., description="capture_ts of the frame pair")
+    camera_id: str
+    frame_wh: tuple[int, int]
+    dets: tuple[ObservationDet, ...]
+
+
 class ProximityPair(BaseModel):
     """One person↔object floor distance (element of ``ProximityMessage``)."""
 
@@ -400,6 +445,7 @@ def parse_envelope(
     | ImageRefMessage
     | ZoneStateMessage
     | ProximityMessage
+    | ObservationsMessage
     | DiagnosticsMessage
     | ConfigMessage
 ):
@@ -411,7 +457,7 @@ def parse_envelope(
     messages never carry the ``PASSING``, ``DIAGNOSTICS``, or ``CONFIG`` types,
     so consumers can parse mixed streams produced by older Backbone builds
     without rejecting old packets.
-    Any version outside {3, 4, 5} raises ``SchemaVersionError``.
+    Any version outside {3, 4, 5, 6} raises ``SchemaVersionError``.
     """
     version = int(data.get("schema_version", 0))
     if version not in _ACCEPTED_VERSIONS:
@@ -432,6 +478,8 @@ def parse_envelope(
         return ZoneStateMessage.model_validate(data)
     if msg_type == MessageType.PROXIMITY.value:
         return ProximityMessage.model_validate(data)
+    if msg_type == MessageType.OBSERVATIONS.value:
+        return ObservationsMessage.model_validate(data)
     if msg_type == MessageType.DIAGNOSTICS.value:
         return DiagnosticsMessage.model_validate(data)
     if msg_type == MessageType.CONFIG.value:

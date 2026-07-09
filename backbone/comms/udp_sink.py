@@ -25,6 +25,7 @@ from .schemas import (
     ConfigMessage,
     DiagnosticsMessage,
     ImageRefMessage,
+    ObservationsMessage,
     PassingEventMessage,
     ProximityMessage,
     Track2DMessage,
@@ -78,6 +79,10 @@ class UdpSink(MetadataSink):
 
     def publish_proximity(self, msg: object) -> None:
         assert isinstance(msg, ProximityMessage)
+        self._send(msg.model_dump_json().encode("utf-8"))
+
+    def publish_observations(self, msg: object) -> None:
+        assert isinstance(msg, ObservationsMessage)
         self._send(msg.model_dump_json().encode("utf-8"))
 
     def publish_diagnostics(self, msg: object) -> None:

@@ -50,6 +50,11 @@ class Detection:
     foot_uv: tuple[float, float]
     keypoints_uv: np.ndarray | None = None
     mask: np.ndarray | None = None
+    # When the detector ran on a CROP (zone-scoped detection), ``mask`` is
+    # crop-sized and this is the crop's origin in frame pixels. ``None`` means
+    # the mask (if any) spans the full frame. Mask AREA consumers
+    # (pallet_occupancy._load_area) are offset-agnostic by construction.
+    mask_offset_xy: tuple[int, int] | None = None
 
 
 @dataclass(slots=True)

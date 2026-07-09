@@ -127,6 +127,15 @@ class MetadataSink(ABC):
         """
         return None
 
+    def publish_observations(self, msg: object) -> None:
+        """Publish an ``ObservationsMessage`` — per-camera raw detections.
+
+        Non-abstract default no-op (same rationale as ``publish_zone_state``).
+        Display concern: only the UDP sink implements it; MQTT sinks keep the
+        no-op so the broker never carries per-frame detections.
+        """
+        return None
+
     def publish_proximity(self, msg: object) -> None:
         """Publish a ``ProximityMessage`` — person↔object floor distances.
 

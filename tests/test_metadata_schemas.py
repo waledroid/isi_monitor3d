@@ -137,7 +137,7 @@ def test_parse_envelope_accepts_version_3() -> None:
 def test_parse_envelope_accepts_current_version() -> None:
     """Messages at the current SCHEMA_VERSION are accepted."""
     payload = json.loads(Track2DMessage.from_track(_track_2d()).model_dump_json())
-    assert payload["schema_version"] == SCHEMA_VERSION == 5
+    assert payload["schema_version"] == SCHEMA_VERSION == 6
     msg = parse_envelope(payload)
     assert isinstance(msg, Track2DMessage)
 
@@ -200,10 +200,11 @@ def test_passing_direction_rejects_invalid_value() -> None:
         )
 
 
-def test_schema_version_is_5() -> None:
+def test_schema_version_is_6() -> None:
     """Pin the current schema version so a bump is explicit and visible.
-    v5 added ProximityMessage (person↔object floor distances)."""
-    assert SCHEMA_VERSION == 5
+    v5 added ProximityMessage; v6 added ObservationsMessage (per-camera raw
+    detections for display consumers)."""
+    assert SCHEMA_VERSION == 6
 
 
 def test_topic_version_is_v1() -> None:
@@ -505,3 +506,30 @@ def test_proximity_empty_pairs_is_explicit() -> None:
     msg = ProximityMessage(ts=1.0, max_distance_m=6.0, pairs=())
     parsed = parse_envelope(json.loads(msg.model_dump_json()))
     assert parsed.pairs == ()
+
+
+def test_observations_message_round_trip() -> None:
+    """v6 ObservationsMessage — per-camera raw detections for display consumers."""
+    import json
+
+    from backbone.comms.schemas import ObservationDet, ObservationsMessage
+
+    msg = ObservationsMessage(
+        ts=12.5, camera_id="cam_a", frame_wh=(1920, 1080),
+        dets=(ObservationDet(
+            cls="palette", confidence=0.91, bbox_xyxy=(10.0, 20.0, 110.0, 90.0),
+            foot_uv=(60.0, 90.0), occupancy_state="full",
+            occupancy_content="carton", occupancy_confidence=0.8,
+            mask_poly=((10.0, 20.0), (110.0, 20.0), (110.0, 90.0))),),
+    )
+    parsed = parse_envelope(json.loads(msg.model_dump_json()))
+    assert isinstance(parsed, ObservationsMessage)
+    assert parsed.dets[0].mask_poly is not None and len(parsed.dets[0].mask_poly) == 3
+    assert parsed.dets[0].occupancy_state == "full"
+    # Boxes-only det (masks not decoded) is equally valid.
+    lean = ObservationsMessage(ts=1.0, camera_id="cam_b", frame_wh=(1920, 1080),
+                               dets=(ObservationDet(
+                                   cls="carton", confidence=0.5,
+                                   bbox_xyxy=(0, 0, 1, 1), foot_uv=(0.5, 1.0)),))
+    parsed = parse_envelope(json.loads(lean.model_dump_json()))
+    assert parsed.dets[0].mask_poly is None

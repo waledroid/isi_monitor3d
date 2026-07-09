@@ -22,9 +22,10 @@ to zones. The orchestrator composes it around whichever detector plugin the
 config names (``detection.scope: zones`` — the default; ``full_frame``
 restores the pre-zone-scope behaviour).
 
-Masks are dropped during remap (a crop-sized mask is not a frame-sized mask);
-``PalletOccupancy`` falls back to bbox overlap, which is what the Backbone
-runs anyway (``decode_masks`` defaults off).
+Masks (when ``decode_masks`` is on) stay CROP-RELATIVE through the remap,
+carrying their crop origin in ``Detection.mask_offset_xy`` — mask area
+consumers are offset-agnostic and the observations publisher polygonizes
+them into frame coordinates for the wire.
 
 Overlapping zones: a detection inside two overlapping crops is reported twice
 (one per zone crop). Zones are physically disjoint in every deployment so no
@@ -204,6 +205,11 @@ class ZoneScopedDetector:
                     kp[:, 0] += ox
                     kp[:, 1] += oy
                     d.keypoints_uv = kp
-                d.mask = None                     # crop-sized — see module docstring
+                if d.mask is not None:
+                    # Keep the mask CROP-RELATIVE + record the crop origin —
+                    # tiny memory, and downstream (occupancy area, the wire's
+                    # mask→polygon) handles the offset. Never allocate a
+                    # full-frame canvas per detection.
+                    d.mask_offset_xy = (ox, oy)
                 out[cam_id].append(d)
         return out

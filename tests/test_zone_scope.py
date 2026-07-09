@@ -117,7 +117,10 @@ def test_detections_remap_to_frame_pixels() -> None:
     assert d.bbox_xyxy == (100.0, 200.0, 400.0, 500.0)   # crop-filling box → zone box
     assert d.foot_uv == (250.0, 500.0)                    # crop bottom-centre + offset
     assert tuple(d.keypoints_uv[0][:2]) == (101.0, 202.0)
-    assert d.mask is None                                 # crop-sized masks are dropped
+    # Masks stay CROP-relative with their crop origin recorded — never blown
+    # up to a full-frame canvas per detection.
+    assert d.mask is not None and d.mask.shape == (300, 300)
+    assert d.mask_offset_xy == (100, 200)
 
 
 def test_remap_scales_with_ingest_downscale() -> None:
