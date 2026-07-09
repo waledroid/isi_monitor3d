@@ -3,19 +3,6 @@ zones:
   type: palette
   kind: palette
   polygon:
-  - - -0.053
-    - 0.399
-  - - -0.779
-    - 1.16
-  - - -0.111
-    - 1.727
-  - - 0.562
-    - 0.982
-  derived_from: zone_patch
-- name: Zone 2
-  type: palette
-  kind: palette
-  polygon:
   - - -4.704
     - -0.429
   - - -1.49
@@ -24,4 +11,30 @@ zones:
     - -0.199
   - - -4.643
     - -2.773
+  derived_from: zone_patch
+- name: Zone 2
+  type: palette
+  kind: palette
+  polygon:
+  - - -0.807
+    - 1.289
+  - - -0.118
+    - 2.005
+  - - 0.936
+    - 0.765
+  - - 0.198
+    - 0.036
+  derived_from: zone_patch
+- name: Zone 3
+  type: palette
+  kind: palette
+  polygon:
+  - - 0.68
+    - 1.475
+  - - 1.464
+    - 2.445
+  - - 2.083
+    - 1.642
+  - - 1.207
+    - 0.845
   derived_from: zone_patch

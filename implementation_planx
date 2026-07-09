@@ -1,0 +1,97 @@
+# Performance Optimization Plan: Ingestion, Detection & Pose Pipelines
+
+The industrial vision system currently suffers from a high latency bottleneck (**p95: ~1356 ms**, against a target of **< 200 ms**). This is primarily driven by:
+1. **Redundant video decodes** across separate processes (Backbone & Web Dashboard).
+2. **Heavy CPU mask scaling and remapping** (bilinear interpolation on float32 arrays, followed by full-frame boolean mask allocations for every single detection).
+3. **Synchronous pose model blocking** in the Backbone's main processing loop, running sequential 640x640 inference for two views.
+
+This plan addresses these bottlenecks with architectural advice and concrete codebase optimizations.
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> The most significant architectural bottleneck is that **both processes (`backbone.runtime` and `monitor_web`) run duplicate GStreamer pipelines (`RtspFrameSource`) and decode the RTSP streams twice**. 
+> We propose two solutions below, with **Option A** being a quick-win configuration update and **Option B** being a long-term architectural shift.
+
+---
+
+## Technical Recommendations & Action Plan
+
+### 1. Video Ingestion Pipeline
+
+#### Immediate Code Quick-Win: Early Frame Drop
+Currently, GStreamer's appsink thread maps buffers, copies arrays, and reshapes them to NumPy BGR frames *before* checking if the queue is full. When the downstream processing is slow (e.g., at 0.8 fps), we are copying 24.2 frames per second only to drop them immediately.
+We will add an early-drop check: if the consumer queue is full, GStreamer drops the buffer immediately without allocating or copying memory.
+
+#### Duplicate Decode Recommendations
+* **Option A: Stop Dashboard Detection (Recommended)**
+  If the operator dashboard does not strictly need to run independent detections, it should stop its own `ZoneWorker` loop and simply listen to the Backbone's UDP/MQTT metadata channel. The dashboard can overlay the bounding boxes and classifications sent by the Backbone, running zero ONNX Runtime models.
+* **Option B: IPC / Shared Memory**
+  If separate processes must ingest frames, a single ingestion daemon should write decoded frames into a **POSIX Shared Memory** ring buffer (`multiprocessing.shared_memory`). The Backbone and Web Dashboard can then map the shared memory segment and read frames with zero-copy.
+
+---
+
+### 2. Detection Pipeline
+
+#### Immediate Code Quick-Win: Fast Mask Resizing
+In `zone_worker.py`, the system resizes and remaps masks by converting them to `float32`, applying bilinear interpolation (`cv2.INTER_LINEAR`), and thresholding back to boolean.
+Since masks are binary (bool), we can use `cv2.INTER_NEAREST` on `uint8` arrays. This avoids float conversions, linear interpolation arithmetic, and threshold checks, running **up to 10x faster** on CPU.
+
+#### Full-Frame Mask Allocations
+Currently, `_remap_det` allocates a full 1280x720 boolean mask for *every single detection*:
+```python
+full = np.zeros((ih, iw), dtype=bool)
+```
+We recommend keeping masks as **crop-relative** arrays accompanied by their bounding box offsets, and rendering/compositing them only when drawing the final display frames (rather than allocating full-frame canvases for each object in the core data models).
+
+---
+
+### 3. Realtime Fluid Pose Detection & Overlay
+
+#### Decouple Pose Inference from Backbone Loop
+Currently, the Backbone's main loop runs the pose detector synchronously:
+```python
+pose_by_camera = self._person_detector.detect(pair)
+```
+This blocks the main pipeline. We should adopt the dashboard's `AsyncPoseRunner` pattern in the Backbone: run pose inference in a background thread, enabling the main thread to track and project objects at camera rate while pose coordinates update asynchronously.
+
+#### Optimize ONNX Model Export
+The current pose model `yolo11n-pose.onnx` has a static batch size of 1 and static spatial size of 640x640. This forces the system to run two sequential inferences on a dual-camera setup.
+* **Action:** Re-export the pose model with **dynamic batching** (to run both views in one batch) and a smaller spatial size (e.g., **320x320** or **480x480**).
+* **Command:**
+  ```bash
+  yolo export model=yolo11n-pose.pt format=onnx imgsz=320 dynamic=True simplify=True opset=17
+  ```
+  Running a 320x320 pose model in a batch of 2 on CUDA will reduce GPU inference cost by **over 4x** compared to two sequential 640x640 runs.
+
+* **display interpolation:** Keep the time-based exponential smoothing (`_SMOOTH_TAU_S`) to render fluid skeleton overlays at 25 fps even if the underlying pose model runs at 10-15 Hz.
+
+---
+
+## Proposed Changes
+
+### [Ingestion & Detection Optimization]
+
+#### [MODIFY] [_gst_source.py](file:///home/aatanda/isi_monitor3d/backbone/ingestion/_gst_source.py)
+* Add early queue-full check in `_on_sample` to prevent CPU copy overhead on dropped frames.
+
+#### [MODIFY] [zone_worker.py](file:///home/aatanda/isi_monitor3d/monitor_web/monitor_web/zone_worker.py)
+* Optimize `_tile_det_to_crop` and `_remap_det` to use fast `INTER_NEAREST` on `uint8` masks.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+* Run the unit tests to ensure that early frame drops and optimized mask rescaling do not affect detector correctness or pipeline state.
+  ```bash
+  pytest tests/
+  ```
+
+### Manual Verification
+* Run the Backbone end-to-end and monitor the Diagnostics panel / latency probe to verify that p95 latency drops toward the target `< 200 ms`.
+  ```bash
+  python -m backbone.runtime --config config/backbone.yaml
+  ```

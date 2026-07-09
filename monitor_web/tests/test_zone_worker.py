@@ -220,8 +220,12 @@ def test_worker_idles_when_backbone_stopped():
         w.stop()
 
 
-def test_worker_detects_when_running():
-    """is_running=True → acquires the camera, detects, publishes zone dets."""
+def test_worker_detects_when_running(monkeypatch):
+    """is_running=True → acquires the camera, detects, publishes zone dets.
+    (Pinned to zone_detection_source=local — the loop's local-inference path;
+    the default `backbone` path is covered by the _snapshot_from_bus tests.)"""
+    import monitor_web.zone_worker as zw
+    monkeypatch.setattr(zw, "_zone_source", lambda cfg: "local")
     patches = [_patch("z1", 0, 0, 100, 100)]
     w, hub, det = _worker(patches, [_det(bbox=(40.0, 40.0, 60.0, 60.0))])
     w.start()
@@ -977,3 +981,105 @@ def test_motion_state_cleared_on_set_patches():
     assert w._motion
     w.set_patches(patches)                             # geometry may have changed
     assert not w._motion
+
+
+# ---- backbone-sourced snapshots (zone_detection_source: backbone) -----------
+
+
+def _obs_msg(cam="cam_a", dets=None, ts=None, frame_wh=(640, 480)):
+    from backbone.comms.schemas import ObservationsMessage
+    return ObservationsMessage(
+        ts=ts if ts is not None else time.time(), camera_id=cam,
+        frame_wh=frame_wh, dets=tuple(dets or []))
+
+
+class _FakeBus:
+    def __init__(self, msg):
+        self._msg = msg
+
+    def snapshot(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(observations_by_camera=(
+            {self._msg.camera_id: self._msg} if self._msg else {}))
+
+
+def test_backbone_source_renders_wire_observations():
+    """With zone_detection_source=backbone the worker publishes the Backbone's
+    observations — rescaled to the hub frame, grouped into the containing
+    patch, occupancy hints intact — WITHOUT calling any detector."""
+    from backbone.comms.schemas import ObservationDet
+
+    patches = [_patch("z1", 0, 0, 160, 120)]
+    # Observation in a 640x480 calibration frame; hub frames here are 320x240
+    # (half) → the det should land at half coords, inside z1.
+    det = ObservationDet(cls="palette", confidence=0.9,
+                         bbox_xyxy=(40.0, 40.0, 120.0, 120.0),
+                         foot_uv=(80.0, 120.0), occupancy_state="full",
+                         occupancy_content="carton", occupancy_confidence=0.7,
+                         mask_poly=((40.0, 40.0), (120.0, 40.0), (120.0, 120.0)))
+    bus = _FakeBus(_obs_msg(dets=[det]))
+
+    class _Boom:
+        def detect(self, pair):
+            raise AssertionError("backbone mode must not run local inference")
+
+    w = ZoneDetectionWorker(
+        "cam_a", {"name": "rtsp", "url": "rtsp://x"}, _CfgStub(),
+        lambda: True, detector_factory=lambda *a, **k: _Boom(),
+        hub_factory=lambda: FakeHub(np.zeros((240, 320, 3), np.uint8)),
+        bus_getter=lambda: bus)
+    w.set_patches(patches)
+    w._snapshot_from_bus(np.zeros((240, 320, 3), np.uint8), patches)
+    dets = w.zone_dets("z1")
+    assert len(dets) == 1
+    d = dets[0]
+    assert d.cls == "palette" and d.occupancy_state == "full"
+    assert abs(d.bbox_xyxy[0] - 20.0) < 1e-6      # 40 * (320/640)
+    assert abs(d.bbox_xyxy[3] - 60.0) < 1e-6      # 120 * (240/480)
+    assert d.mask_poly and abs(d.mask_poly[0][0] - 20.0) < 1e-6
+    assert w.zone_status("z1") == "ok"
+
+
+def test_backbone_source_stale_observations_publish_empty():
+    patches = [_patch("z1", 0, 0, 160, 120)]
+    bus = _FakeBus(_obs_msg(dets=[], ts=time.time() - 10.0))   # stale
+    w = ZoneDetectionWorker(
+        "cam_a", {"name": "rtsp", "url": "rtsp://x"}, _CfgStub(),
+        lambda: True, detector_factory=lambda *a, **k: None,
+        hub_factory=lambda: FakeHub(np.zeros((240, 320, 3), np.uint8)),
+        bus_getter=lambda: bus)
+    w.set_patches(patches)
+    w._snapshot_from_bus(np.zeros((240, 320, 3), np.uint8), patches)
+    assert w.zone_dets("z1") == []
+
+
+def test_backbone_source_persons_never_boxed():
+    from backbone.comms.schemas import ObservationDet
+
+    patches = [_patch("z1", 0, 0, 160, 120)]
+    det = ObservationDet(cls="person", confidence=0.9,
+                         bbox_xyxy=(40.0, 40.0, 120.0, 120.0), foot_uv=(80.0, 120.0))
+    bus = _FakeBus(_obs_msg(dets=[det]))
+    w = ZoneDetectionWorker(
+        "cam_a", {"name": "rtsp", "url": "rtsp://x"}, _CfgStub(),
+        lambda: True, detector_factory=lambda *a, **k: None,
+        hub_factory=lambda: FakeHub(np.zeros((240, 320, 3), np.uint8)),
+        bus_getter=lambda: bus)
+    w.set_patches(patches)
+    w._snapshot_from_bus(np.zeros((240, 320, 3), np.uint8), patches)
+    assert w.zone_dets("z1") == []
+
+
+def test_zone_source_defaults_to_backbone_and_reads_local(tmp_path):
+    import yaml as _yaml
+
+    from monitor_web.zone_worker import _zone_source
+
+    class _C:
+        ui_settings_path = tmp_path / "ui.yaml"
+
+    assert _zone_source(_C()) == "backbone"          # missing file → default
+    _C.ui_settings_path.write_text(_yaml.safe_dump({"zone_detection_source": "local"}))
+    assert _zone_source(_C()) == "local"
+    _C.ui_settings_path.write_text(_yaml.safe_dump({"zone_detection_source": "bogus"}))
+    assert _zone_source(_C()) == "backbone"

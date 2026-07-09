@@ -122,5 +122,9 @@
   "zone_an_object": "un objet",
   "zone_and": "et",
   "zone_no_data": "aucune donnée en direct",
-  "pipeline_fps_label": "FPS pipeline"
+  "pipeline_fps_label": "FPS pipeline",
+  "decode_masks": "Masques de segmentation (décodés par le Backbone)",
+  "zone_source": "Source des détections de zone",
+  "zone_source_backbone": "Backbone (perception unique)",
+  "zone_source_local": "Modèles locaux (dev/secours)"
 }

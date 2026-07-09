@@ -104,7 +104,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     # Background zone detection: one worker thread per camera with zones, publishing
     # one coherent snapshot per frame. Panels + cam views are pure renderers of it.
-    zone_manager = ZoneWorkerManager(cfg, is_running=lambda: supervisor.state == "running")
+    zone_manager = ZoneWorkerManager(
+        cfg, is_running=lambda: supervisor.state == "running",
+        # Late-binding: app.state.bus is attached below; the workers read the
+        # Backbone's per-camera observations from it (zone_detection_source
+        # "backbone" — ONE perception, zero dashboard inference).
+        bus_getter=lambda: getattr(app.state, "bus", None))
     templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 
     @asynccontextmanager

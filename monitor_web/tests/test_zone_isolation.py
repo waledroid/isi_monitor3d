@@ -144,10 +144,13 @@ def test_slow_pass_extends_snapshot_validity():
     assert w.zone_dets("z1") == []
 
 
-def test_stalled_camera_keeps_snapshot_alive():
+def test_stalled_camera_keeps_snapshot_alive(monkeypatch):
     """Camera delivering no NEW frame (RTSP jitter / low fps) must not expire the
     snapshot — the panels still show that same held frame, so its detections stay
-    correct. This was the blinking-overlay bug."""
+    correct. This was the blinking-overlay bug. (Pinned to the local-inference
+    source; the backbone-sourced path re-publishes per tick regardless.)"""
+    import monitor_web.zone_worker as zw
+    monkeypatch.setattr(zw, "_zone_source", lambda cfg: "local")
     frame = FRAME.copy()
 
     class StalledStream:

@@ -351,6 +351,18 @@ def zone_patches_state(request: Request) -> dict:
                 "cls": "palette" if cls_l in _PALLET_CLASSES else cls_l,
                 "confidence": float(getattr(d, "confidence", 0.0)),
             }
+            # Backbone-sourced observations already CARRY the occupancy verdict
+            # (the same one the tracker/MQTT uses) — prefer it, so the cards
+            # and the wire literally cannot disagree. Locally-detected dets
+            # fall through to the image-side classification as before.
+            carried = getattr(d, "occupancy_state", None)
+            if carried in ("empty", "full"):
+                entry["occupancy_state"] = carried
+                content = getattr(d, "occupancy_content", None)
+                if carried == "full" and content:
+                    entry["occupancy_content"] = [str(content)]
+                objects.append(entry)
+                continue
             label = occ_by_det.get(id(d))
             if label is not None:
                 entry["occupancy_state"] = "empty" if label == "palette_vide" else "full"

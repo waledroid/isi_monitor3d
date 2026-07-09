@@ -122,5 +122,9 @@
   "zone_an_object": "an object",
   "zone_and": "and",
   "zone_no_data": "no live data",
-  "pipeline_fps_label": "FPS pipeline"
+  "pipeline_fps_label": "FPS pipeline",
+  "decode_masks": "Segmentation masks (backbone decode)",
+  "zone_source": "Zone detections source",
+  "zone_source_backbone": "Backbone (one perception)",
+  "zone_source_local": "Local models (dev/fallback)"
 }

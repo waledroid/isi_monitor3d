@@ -29,9 +29,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import yaml
 
 from .api.routes_zone_patches import load_patches, patch_pixel_box, patch_rect
 from .camera_hub import get_hub
@@ -88,6 +91,27 @@ MOTION_FRAC = 0.02
 # objects are static between passes — no tracker in v1), and the published
 # `valid_s` is widened to cover the skip window so the carried boxes don't expire.
 SAHI_PERIOD = 3
+
+# Where zone detections come from. "backbone" (default): the worker renders
+# the Backbone's per-camera ObservationsMessage from the UDP bus — ONE
+# perception, zero dashboard inference. "local": today's in-dashboard
+# detection path (per-zone models/SAHI/ENH), kept as the fallback/dev mode.
+ZONE_SOURCE_KEY = "zone_detection_source"
+ZONE_SOURCE_DEFAULT = "backbone"
+# An observation older than this is stale (backbone stopped/hiccuped) — the
+# worker publishes empty rather than ghost boxes.
+OBSERVATIONS_MAX_AGE_S = 2.0
+
+
+def _zone_source(cfg) -> str:
+    """Read the zone-detection source preference from the UI-settings YAML."""
+    try:
+        data = yaml.safe_load(Path(cfg.ui_settings_path).read_text()) or {}
+        val = str(data.get(ZONE_SOURCE_KEY, ZONE_SOURCE_DEFAULT)).lower()
+        return val if val in ("backbone", "local") else ZONE_SOURCE_DEFAULT
+    except Exception:
+        return ZONE_SOURCE_DEFAULT
+
 
 # Humans are rendered by POSE only on the cam views — any person-class box the
 # zone object-model emits is dropped so a person isn't boxed AND skeletoned.
@@ -326,13 +350,15 @@ class ZoneDetectionWorker:
     publishes one coherent snapshot. Single writer; readers get atomic dicts."""
 
     def __init__(self, camera_id: str, src_cfg: dict, cfg, is_running,
-                 detector_factory=get_zone_detector, hub_factory=get_hub):
+                 detector_factory=get_zone_detector, hub_factory=get_hub,
+                 bus_getter=None):
         self.camera_id = camera_id
         self._src_cfg = dict(src_cfg)
         self._cfg = cfg
         self._is_running = is_running
         self._detector_factory = detector_factory
         self._hub_factory = hub_factory
+        self._bus_getter = bus_getter
         self._patches: list[dict] = []
         self._snapshot: dict = {"frame_ts": 0.0, "zones": {}}
         self._stop = threading.Event()
@@ -474,7 +500,10 @@ class ZoneDetectionWorker:
                     self._stop.wait(1.0 / max(1.0, float(display_fps(self._cfg))))
                     continue
                 try:
-                    self._detect_all_zones(frame, patches)
+                    if _zone_source(self._cfg) == "backbone":
+                        self._snapshot_from_bus(frame, patches)
+                    else:
+                        self._detect_all_zones(frame, patches)
                 except Exception:
                     logger.warning("zone worker[%s]: detect pass failed", self.camera_id,
                                    exc_info=True)
@@ -648,6 +677,73 @@ class ZoneDetectionWorker:
         self._snapshot = {"frame_ts": time.time(), "frame_wh": (iw, ih),
                           "zones": resolved, "status": statuses, "people": people,
                           "valid_s": valid_s}
+
+    def _snapshot_from_bus(self, frame, patches: list[dict]) -> None:
+        """Backbone-sourced pass: render the wire's per-camera observations.
+
+        ONE perception — no dashboard inference. The Backbone's
+        ``ObservationsMessage`` (calibration-frame coords) is rescaled to THIS
+        hub frame, grouped into zone patches by polygon containment, and
+        published as the exact snapshot shape the panels / cards / cam views
+        already consume. Pose people still ride along (the MAP needs them).
+        """
+        ih, iw = frame.shape[:2]
+        per_zone: dict[str, list] = {str(p.get("id")): [] for p in patches}
+        statuses = {zid: "ok" for zid in per_zone}
+        polys = {str(p.get("id")): _scaled_polygon(p, (iw, ih)) for p in patches}
+
+        bus = self._bus_getter() if self._bus_getter is not None else None
+        msg = None
+        if bus is not None:
+            try:
+                msg = bus.snapshot().observations_by_camera.get(self.camera_id)
+            except Exception:
+                msg = None
+        if msg is not None and time.time() - float(msg.ts) <= OBSERVATIONS_MAX_AGE_S:
+            fw, fh = msg.frame_wh
+            sx, sy = iw / float(fw), ih / float(fh)
+            for od in msg.dets:
+                if str(od.cls).lower() in _PERSON_CLASSES:
+                    continue                     # humans render via pose only
+                x0, y0, x1, y1 = od.bbox_xyxy
+                det = SimpleNamespace(
+                    cls=od.cls, confidence=float(od.confidence),
+                    bbox_xyxy=(x0 * sx, y0 * sy, x1 * sx, y1 * sy),
+                    foot_uv=(od.foot_uv[0] * sx, od.foot_uv[1] * sy),
+                    mask=None,
+                    mask_poly=[[px * sx, py * sy] for px, py in od.mask_poly]
+                              if od.mask_poly else None,
+                    occupancy_state=od.occupancy_state,
+                    occupancy_content=od.occupancy_content,
+                    occupancy_confidence=float(od.occupancy_confidence),
+                )
+                cx = (det.bbox_xyxy[0] + det.bbox_xyxy[2]) / 2.0
+                cy = (det.bbox_xyxy[1] + det.bbox_xyxy[3]) / 2.0
+                for zid, poly in polys.items():
+                    if poly is None or len(poly) < 3:
+                        continue
+                    if cv2.pointPolygonTest(
+                            poly.astype(np.float32), (float(cx), float(cy)),
+                            False) >= 0:
+                        per_zone[zid].append(det)
+                # dets outside every patch simply aren't shown — same as today.
+        resolved = self._resolve_overlaps(per_zone, polys)
+
+        people: list = []
+        try:
+            pose = get_async_pose(self._cfg, self.camera_id)
+            if pose is not None:
+                for pp in pose.predict(frame):
+                    foot = getattr(pp, "foot_uv", None)
+                    if foot is not None:
+                        people.append({"foot_uv": (float(foot[0]), float(foot[1])),
+                                       "confidence": float(getattr(pp, "confidence", 0.0))})
+        except Exception:
+            logger.warning("zone worker[%s]: pose failed", self.camera_id, exc_info=True)
+
+        self._snapshot = {"frame_ts": time.time(), "frame_wh": (iw, ih),
+                          "zones": resolved, "status": statuses, "people": people,
+                          "valid_s": SNAPSHOT_MAX_AGE_S}
 
     def _motion_signature(self, frame, patch: dict, iw: int, ih: int):
         """Tiny gray thumbnail of the zone's crop region (``MOTION_SIG_PX``²,
@@ -980,11 +1076,13 @@ class ZoneWorkerManager:
     thread topology (new camera ⇒ new worker, last zone gone ⇒ worker stopped)."""
 
     def __init__(self, cfg, is_running, *,
-                 detector_factory=get_zone_detector, hub_factory=get_hub):
+                 detector_factory=get_zone_detector, hub_factory=get_hub,
+                 bus_getter=None):
         self._cfg = cfg
         self._is_running = is_running
         self._detector_factory = detector_factory
         self._hub_factory = hub_factory
+        self._bus_getter = bus_getter
         self._workers: dict[str, ZoneDetectionWorker] = {}
         self._lock = threading.Lock()
 
@@ -1025,6 +1123,7 @@ class ZoneWorkerManager:
                         cam, src_cfg, self._cfg, self._is_running,
                         detector_factory=self._detector_factory,
                         hub_factory=self._hub_factory,
+                        bus_getter=self._bus_getter,
                     )
                     worker.set_patches(cam_patches)
                     worker.start()

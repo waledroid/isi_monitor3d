@@ -159,6 +159,10 @@ class DetectionConfig(BaseModel):
     class_names: list[str] = Field(..., min_length=1)
     confidence_threshold: float = 0.25
     iou_threshold: float = 0.45
+    # Backbone-side: decode instance masks so the wire observations carry
+    # mask POLYGONS (boxes are always published). Costs CPU per detection in
+    # the Backbone; applies at its next START.
+    decode_masks: bool = False
     # Model input size (the Settings slider). Only effective on a DYNAMIC-exported
     # ONNX; a fixed export ignores it (the detector adopts the model's own size).
     # Smaller = faster, less accurate on far/small objects.
@@ -243,6 +247,9 @@ class ConfigPayload(BaseModel):
     # Pose-only update (the current Settings modal). Splices ONLY the pose keys
     # into backbone.yaml's detection block, never the object-model keys.
     pose: PosePayload | None = None
+    # Backbone mask decode (the "Segmentation masks" switch): observations carry
+    # mask polygons when on. None = leave untouched; applies at backbone START.
+    decode_masks: bool | None = None
     # Distance-line rules (S16). Omitted == "no change"; an empty list explicitly
     # clears all rules on disk (the dashboard sends this when the operator
     # deletes every rule).
@@ -418,6 +425,7 @@ def get_config(request: Request) -> JSONResponse:
                       or latest_trained_openvino() or ""),
         # Person-pose model (separate ONNX). Pre-fill from the saved config /
         # UI memory / newest pose export so the dropdown shows a real choice.
+        "decode_masks": bool(det_raw.get("decode_masks", False)),
         "pose_onnx_path": (det_raw.get("pose_onnx_path") or ui.get("pose_onnx_path")
                            or latest_pose_onnx() or ""),
         "pose_confidence_threshold": det_raw.get("pose_confidence_threshold", 0.3),
@@ -694,6 +702,7 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
         else:
             block.pop("pose_onnx_path", None)
         block["pose_confidence_threshold"] = det.pose_confidence_threshold
+        block["decode_masks"] = bool(det.decode_masks)
         backbone_data["detection"] = block
         # Remember whichever paths were provided so the modal can repopulate the
         # inactive one (only overwrite a path when non-empty).
@@ -728,6 +737,12 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             block.pop("pose_onnx_path", None)   # empty = clear
         block["pose_confidence_threshold"] = payload.pose.pose_confidence_threshold
         backbone_data["detection"] = block
+
+    if payload.decode_masks is not None:
+        block = backbone_data.get("detection", {})
+        if isinstance(block, dict):
+            block["decode_masks"] = bool(payload.decode_masks)
+            backbone_data["detection"] = block
 
     # ---- communications: node_id + mqtt_sink ----
     # Both fields are optional: None = leave untouched. Handled BEFORE

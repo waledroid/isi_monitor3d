@@ -240,6 +240,8 @@ function collectPayload() {
   // distance-line styles auto-save on change (see wireUiPrefSync), so the Save
   // button no longer carries a `detection` block.
   payload.pose = collectPose();
+  // Backbone mask decode — observations carry mask polygons when on.
+  payload.decode_masks = !!el("zm-model-decode-masks")?.checked;
   // S16: distance lines — always send the field (empty list clears the file).
   payload.link_lines = collectLinkLines();
   // Communication — MQTT broker + node identity.
@@ -367,6 +369,7 @@ function wireUiPrefSync() {
   const hooks = [
     ["zm-zones-fps",
       (e) => ({ display_fps: Math.max(1, Math.min(30, parseInt(e.value, 10) || 10)) })],
+    ["zm-zone-source", (e) => ({ zone_detection_source: e.value === "local" ? "local" : "backbone" })],
     ["zm-model-show-nodes", (e) => ({ show_nodes: !!e.checked })],
     ["zm-model-show-masks", (e) => ({ show_masks: !!e.checked })],
     ["zm-model-show-boxes", (e) => ({ show_boxes: !!e.checked })],
@@ -412,6 +415,8 @@ function fillModelSection(det) {
   if (cbMasks) cbMasks.checked = det.show_masks !== false;
   const cbBoxes = el("zm-model-show-boxes");
   if (cbBoxes) cbBoxes.checked = det.show_boxes !== false;
+  const cbDecode = el("zm-model-decode-masks");
+  if (cbDecode) cbDecode.checked = det.decode_masks === true;   // default off
   const opEl = el("zm-model-dist-opacity");
   if (opEl) opEl.value = det.distance_line_opacity ?? 0.25;
   const colEl = el("zm-model-dist-color");
@@ -481,6 +486,8 @@ async function open() {
   // Zones FPS field (Zones tab, UI-settings display_fps). Default 10.
   const zonesFpsEl = el("zm-zones-fps");
   if (zonesFpsEl) zonesFpsEl.value = (uiSettings && uiSettings.display_fps) ?? 10;
+  const srcEl = el("zm-zone-source");
+  if (srcEl) srcEl.value = (uiSettings && uiSettings.zone_detection_source) || "backbone";
   loadFloorZones(configData);   // metric floor zones (Zones tab, drawn on a cam)
   loadAlignment();              // cross-camera alignment fine-tune status
   if (configData) {

@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 from backbone.comms.schemas import (
     DiagnosticsMessage,
+    ObservationsMessage,
     SchemaVersionError,
     Track2DMessage,
     Track3DMessage,
@@ -64,6 +65,9 @@ class BusState:
     # Latest per-zone contents (ZoneStateMessage) — the COMMUNICATION panel's
     # zone cards read this when no gateway is configured (local UDP path).
     zone_state_by_zone: dict[str, ZoneStateMessage] = field(default_factory=dict)
+    # Latest per-camera raw detections (ObservationsMessage) — the single-
+    # perception feed the zone panels / cards / cam-view boxes render from.
+    observations_by_camera: dict[str, ObservationsMessage] = field(default_factory=dict)
     received: int = 0
     dropped_malformed: int = 0
     dropped_version: int = 0
@@ -150,6 +154,7 @@ class BusSubscriber:
                 last_track2d_by_id=dict(self._state.last_track2d_by_id),
                 last_track3d_by_id=dict(self._state.last_track3d_by_id),
                 zone_state_by_zone=dict(self._state.zone_state_by_zone),
+                observations_by_camera=dict(self._state.observations_by_camera),
                 received=self._state.received,
                 dropped_malformed=self._state.dropped_malformed,
                 dropped_version=self._state.dropped_version,
@@ -217,6 +222,8 @@ class BusSubscriber:
                 self._state.last_track3d_by_id[msg.track_id] = msg
             elif isinstance(msg, ZoneStateMessage):
                 self._state.zone_state_by_zone[msg.zone] = msg
+            elif isinstance(msg, ObservationsMessage):
+                self._state.observations_by_camera[msg.camera_id] = msg
             elif isinstance(msg, DiagnosticsMessage):
                 self._state.fps_by_camera = dict(msg.fps_by_camera)
                 self._state.pipeline_fps = float(msg.fps)

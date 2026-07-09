@@ -385,6 +385,9 @@
               <label for="zm-model-show-boxes" data-i18n="show_boxes">{{ t.show_boxes or 'Show bounding boxes' }}</label>
               <input id="zm-model-show-boxes" type="checkbox" class="zm-checkbox" />
 
+              <label for="zm-model-decode-masks" data-i18n="decode_masks">{{ t.decode_masks or 'Segmentation masks (backbone decode)' }}</label>
+              <input id="zm-model-decode-masks" type="checkbox" class="zm-checkbox" />
+
               <label for="zm-model-dist-opacity" data-i18n="dist_opacity">{{ t.dist_opacity or 'Distance line — opacity' }}</label>
               <input id="zm-model-dist-opacity" type="number" min="0.05" max="1" step="0.05" class="zm-input" />
 
@@ -408,6 +411,12 @@
             <div class="config-general-fps">
               <label for="zm-zones-fps" data-i18n="zones_fps">{{ t.zones_fps or 'Zones FPS' }}</label>
               <input id="zm-zones-fps" type="number" min="1" max="30" step="1" class="zm-input" placeholder="10" />
+
+              <label for="zm-zone-source" data-i18n="zone_source">{{ t.zone_source or 'Zone detections source' }}</label>
+              <select id="zm-zone-source" class="zm-input">
+                <option value="backbone" data-i18n="zone_source_backbone">{{ t.zone_source_backbone or 'Backbone (one perception)' }}</option>
+                <option value="local" data-i18n="zone_source_local">{{ t.zone_source_local or 'Local models (dev/fallback)' }}</option>
+              </select>
             </div>
           </section>
           <!-- Camera zones (the red polygons drawn on a cam → ZONE panels). Synced

@@ -61,6 +61,14 @@ def draw(image, det, show_nodes: bool = True, show_masks: bool = True,
             overlay = image.copy()
             overlay[m] = color
             cv2.addWeighted(overlay, 0.35, image, 0.65, 0, dst=image)
+    elif show_masks and getattr(det, "mask_poly", None):
+        # Wire observations carry the instance mask as a simplified POLYGON
+        # (never a bitmap) — fill it with the same translucent class colour.
+        pts = np.asarray(det.mask_poly, dtype=np.int32).reshape(-1, 1, 2)
+        if len(pts) >= 3:
+            overlay = image.copy()
+            cv2.fillPoly(overlay, [pts], color)
+            cv2.addWeighted(overlay, 0.35, image, 0.65, 0, dst=image)
     x1, y1, x2, y2 = (int(v) for v in det.bbox_xyxy)
     # The bounding box is optional (Settings toggle) — with a seg model the mask +
     # label alone often reads cleaner. The class-name label is always drawn,

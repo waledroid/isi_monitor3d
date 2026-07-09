@@ -9,6 +9,7 @@ import { startDraw } from "/static/js/draw_mode.js";
 
 const MAX_PATCHES = 6;   // max zones the operator can create (drawn on CAM)
 
+let zoneSource = "backbone";   // per-zone inference knobs only apply in "local"
 let patches = [];   // [{id, name, camera, polygon:[[u,v]..], rect:[x0,y0,x1,y1], frame_wh:[W,H], model, infer_size, confidence, color}]
 let models = [];    // [{path, label}] trained detection models for the per-zone picker
 let panelStreamIds = [];   // /ws/video streams currently attached to the ZONE panels
@@ -49,6 +50,12 @@ async function load() {
     const r = await fetch("/api/zone-patches");
     if (r.ok) patches = (await r.json()).patches || [];
   } catch { /* keep what we have on a network blip */ }
+  try {
+    // Source of zone detections (backbone|local) — decides whether the
+    // per-zone inference knobs are live or greyed out.
+    const u = await fetch("/api/ui-settings");
+    if (u.ok) zoneSource = (await u.json()).zone_detection_source || "backbone";
+  } catch { /* keep last known */ }
   renderPanels();
   renderSettingsList();
   updateDrawButton();
@@ -266,6 +273,18 @@ function renderSettingsList() {
       `</div>`;
 
     row.querySelector(".zm-name").addEventListener("change", (e) => { p.name = e.target.value.trim(); save(); });
+    // Per-zone model/conf/SAHI/ENH drive LOCAL inference only; in backbone
+    // mode (one perception — detections come from the Backbone's wire) they
+    // are inert, so grey them out with an explanatory tooltip.
+    if (zoneSource === "backbone") {
+      for (const sel of [".zm-model", ".zm-conf", ".zm-size", ".zm-sahi", ".zm-enh"]) {
+        const ctl = row.querySelector(sel);
+        if (ctl) {
+          ctl.disabled = true;
+          ctl.title = "Zone detections come from the Backbone (Settings \u25b8 Zones \u25b8 source)";
+        }
+      }
+    }
     row.querySelector(".zm-model").addEventListener("change", (e) => { p.model = e.target.value || null; save(); });
     row.querySelector(".zm-size").addEventListener("change", (e) => {
       const v = parseInt(e.target.value, 10);
