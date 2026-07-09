@@ -39,3 +39,15 @@ def test_largest_component_wins() -> None:
     poly = mask_to_polygon(m)
     xs = [p[0] for p in poly]
     assert min(xs) >= 40          # outline belongs to the big blob
+
+
+def test_max_points_caps_vertex_count() -> None:
+    # A jagged blob whose 2px-epsilon outline has many vertices.
+    mask = np.zeros((400, 400), dtype=bool)
+    yy, xx = np.mgrid[0:400, 0:400]
+    r = 150 + 12 * np.sin(np.arctan2(yy - 200.0, xx - 200.0) * 24)
+    mask[(xx - 200.0) ** 2 + (yy - 200.0) ** 2 < r**2] = True
+    dense = mask_to_polygon(mask, max_points=100000)
+    capped = mask_to_polygon(mask, max_points=24)
+    assert len(dense) > 24, "test mask must be complex enough to need capping"
+    assert 3 <= len(capped) <= 24

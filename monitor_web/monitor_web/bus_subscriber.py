@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 
 from backbone.comms.schemas import (
     DiagnosticsMessage,
+    FragmentBuffer,
+    FragmentMessage,
     ObservationsMessage,
     SchemaVersionError,
     Track2DMessage,
@@ -101,6 +103,7 @@ class BusSubscriber:
         self._loop: asyncio.AbstractEventLoop | None = None
 
         self._state = BusState()
+        self._frag_buf = FragmentBuffer()   # reassembles UdpSink's large-payload fragments
         self._latencies: deque[float] = deque(maxlen=300)   # capture→receive ms window
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -221,6 +224,23 @@ class BusSubscriber:
                 self._state.dropped_malformed += 1
             logger.debug("bus_subscriber: bad envelope (%s): %s", type(exc).__name__, exc)
             return
+
+        # Transport fragments (UdpSink splits payloads that would exceed the
+        # path MTU — WSL2 mirrored networking drops big loopback datagrams).
+        # Buffer until the group completes, then parse the joined text as if
+        # it had arrived whole.
+        if isinstance(msg, FragmentMessage):
+            text = self._frag_buf.add(msg, time.time())
+            if text is None:
+                return
+            try:
+                msg = parse_envelope(json.loads(text))
+            except Exception as exc:
+                with self._lock:
+                    self._state.dropped_malformed += 1
+                logger.debug("bus_subscriber: bad reassembled envelope (%s): %s",
+                             type(exc).__name__, exc)
+                return
 
         now = time.time()
         ts = getattr(msg, "ts", None)

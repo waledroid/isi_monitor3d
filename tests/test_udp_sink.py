@@ -12,8 +12,13 @@ from backbone.comms.schemas import (
     CalibrationFactCheck,
     ConfigMessage,
     DiagnosticsMessage,
+    FragmentBuffer,
+    FragmentMessage,
     LatencyStats,
     MessageType,
+    ObservationDet,
+    ObservationsMessage,
+    parse_envelope,
 )
 from backbone.comms.udp_sink import UdpSink
 from backbone.core.interfaces import metadata_sink_registry
@@ -221,3 +226,75 @@ def test_publish_config_arrives_with_correct_type() -> None:
         sock.close()
 
 
+
+
+# ---- application-layer fragmentation (WSL2 mirrored networking drops
+# loopback UDP datagrams over ~1.5 KB — large messages must be sliced) ----
+
+
+def _recv_all(sock: socket.socket, n: int) -> list[dict]:
+    out = []
+    for _ in range(n):
+        payload, _ = sock.recvfrom(65535)
+        out.append(json.loads(payload))
+    return out
+
+
+def test_small_payload_is_not_fragmented() -> None:
+    sock, port = _bind_receiver()
+    sink = UdpSink(host="127.0.0.1", port=port)
+    obs = ObservationsMessage(ts=1.0, camera_id="cam_a", frame_wh=(1920, 1080), dets=())
+    sink.publish_observations(obs)
+    (msg,) = _recv_all(sock, 1)
+    assert msg["type"] == "observations"
+    sock.close()
+    sink.close()
+
+
+def test_large_payload_fragments_and_reassembles() -> None:
+    sock, port = _bind_receiver()
+    sink = UdpSink(host="127.0.0.1", port=port)
+    # A mask polygon big enough to exceed the fragmentation threshold.
+    poly = tuple((float(i % 1920), float(i % 1080)) for i in range(400))
+    dets = tuple(
+        ObservationDet(cls="palette", confidence=0.9,
+                       bbox_xyxy=(0.0, 0.0, 100.0, 100.0), foot_uv=(50.0, 100.0),
+                       mask_poly=poly)
+        for _ in range(3)
+    )
+    obs = ObservationsMessage(ts=2.0, camera_id="cam_b", frame_wh=(1920, 1080), dets=dets)
+    original = obs.model_dump_json()
+    assert len(original) > 1300, "test payload must actually exceed the threshold"
+
+    sink.publish_observations(obs)
+    (first,) = _recv_all(sock, 1)
+    assert first["type"] == "fragment"
+    frags = [first, *_recv_all(sock, first["n"] - 1)]
+
+    # Every fragment fits a 1500-byte MTU with headroom.
+    assert all(len(json.dumps(f, separators=(",", ":"))) < 1450 for f in frags)
+    # Reassembly through the consumer-side helper restores the exact message.
+    buf = FragmentBuffer()
+    text = None
+    for f in frags:
+        text = buf.add(FragmentMessage.model_validate(f), now=0.0) or text
+    assert text == original
+    restored = parse_envelope(json.loads(text))
+    assert isinstance(restored, ObservationsMessage)
+    assert restored == obs
+    sock.close()
+    sink.close()
+
+
+def test_fragment_buffer_prunes_stale_and_rejects_inconsistent() -> None:
+    buf = FragmentBuffer(max_age_s=1.0)
+    f0 = FragmentMessage(fid="aaa", i=0, n=2, data="{}")
+    assert buf.add(f0, now=0.0) is None
+    # Stale: the second part arrives after max_age_s — group was pruned,
+    # so it re-opens and still doesn't complete.
+    f1 = FragmentMessage(fid="aaa", i=1, n=2, data="x")
+    assert buf.add(f1, now=5.0) is None
+    # Inconsistent n drops the group.
+    assert buf.add(FragmentMessage(fid="bbb", i=0, n=2, data="a"), now=5.0) is None
+    assert buf.add(FragmentMessage(fid="bbb", i=1, n=3, data="b"), now=5.0) is None
+    assert buf.add(FragmentMessage(fid="bbb", i=1, n=2, data="b"), now=5.0) is None

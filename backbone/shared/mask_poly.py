@@ -14,11 +14,15 @@ import numpy as np
 
 
 def mask_to_polygon(mask: np.ndarray, offset_xy: tuple[int, int] | None = None,
-                    *, epsilon_px: float = 2.0) -> list[list[float]] | None:
+                    *, epsilon_px: float = 2.0,
+                    max_points: int = 60) -> list[list[float]] | None:
     """Largest-contour simplified polygon of a binary mask, or ``None``.
 
     ``None`` for empty/degenerate masks (< 3 vertices or ~zero area) — the
-    consumer then falls back to the bbox.
+    consumer then falls back to the bbox. ``max_points`` bounds the vertex
+    count (epsilon escalates until it fits): this is a WIRE-SIZE budget, not
+    a quality knob — a display outline never needs hundreds of vertices, and
+    every extra point is bytes in a UDP datagram.
     """
     if mask is None or mask.size == 0:
         return None
@@ -29,7 +33,11 @@ def mask_to_polygon(mask: np.ndarray, offset_xy: tuple[int, int] | None = None,
     contour = max(contours, key=cv2.contourArea)
     if cv2.contourArea(contour) < 4.0:
         return None
-    approx = cv2.approxPolyDP(contour, float(epsilon_px), True).reshape(-1, 2)
+    eps = float(epsilon_px)
+    approx = cv2.approxPolyDP(contour, eps, True).reshape(-1, 2)
+    while len(approx) > max_points and eps < 64.0:
+        eps *= 1.7
+        approx = cv2.approxPolyDP(contour, eps, True).reshape(-1, 2)
     if len(approx) < 3:
         return None
     ox, oy = offset_xy if offset_xy is not None else (0, 0)

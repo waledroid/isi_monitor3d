@@ -692,13 +692,18 @@ class Orchestrator:
                 st, content, conf = occ_by_det.get(id(d), (None, None, 0.0))
                 poly = (mask_to_polygon(d.mask, d.mask_offset_xy)
                         if d.mask is not None else None)
+                # Sub-pixel precision is noise on a display wire — round to
+                # whole pixels so a full multi-det message costs the fewest
+                # UDP fragments possible.
                 obs.append(ObservationDet(
-                    cls=str(d.cls), confidence=float(d.confidence),
-                    bbox_xyxy=tuple(float(v) for v in d.bbox_xyxy),
-                    foot_uv=(float(d.foot_uv[0]), float(d.foot_uv[1])),
+                    cls=str(d.cls), confidence=round(float(d.confidence), 3),
+                    bbox_xyxy=tuple(round(float(v), 1) for v in d.bbox_xyxy),
+                    foot_uv=(round(float(d.foot_uv[0]), 1),
+                             round(float(d.foot_uv[1]), 1)),
                     occupancy_state=st, occupancy_content=content,
-                    occupancy_confidence=float(conf or 0.0),
-                    mask_poly=tuple((float(x), float(y)) for x, y in poly)
+                    occupancy_confidence=round(float(conf or 0.0), 3),
+                    mask_poly=tuple((float(round(x)), float(round(y)))
+                                    for x, y in poly)
                               if poly else None,
                 ))
             w, h = self._rig[cam_id].image_size_wh

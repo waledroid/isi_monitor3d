@@ -15,13 +15,16 @@ This is the *only* code path that touches a socket on the publish side.
 
 from __future__ import annotations
 
+import json
 import logging
 import socket
+import uuid
 
 from backbone.core.interfaces import MetadataSink, metadata_sink_registry
 from backbone.core.types import Track2D, Track3D
 
 from .schemas import (
+    SCHEMA_VERSION,
     ConfigMessage,
     DiagnosticsMessage,
     ImageRefMessage,
@@ -34,6 +37,17 @@ from .schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Application-layer fragmentation. Datagrams above the path MTU get
+# IP-fragmented, and some network layers silently drop the fragments — WSL2
+# ``networkingMode=mirrored`` drops EVERY loopback UDP datagram over ~1.5 KB,
+# which is exactly the size of an observations message carrying mask polygons.
+# Payloads above _FRAGMENT_ABOVE are sliced into _CHUNK_CHARS-sized pieces,
+# each wrapped in a ``FragmentMessage`` (consumers reassemble with
+# ``FragmentBuffer``). Both bounds keep every fragment datagram comfortably
+# under a 1500-byte MTU after the JSON envelope + string escaping.
+_FRAGMENT_ABOVE = 1300
+_CHUNK_CHARS = 1100
 
 
 @metadata_sink_registry.register("udp")
@@ -101,6 +115,18 @@ class UdpSink(MetadataSink):
 
     def _send(self, payload: bytes) -> None:
         try:
-            self._sock.sendto(payload, self._addr)
+            if len(payload) <= _FRAGMENT_ABOVE:
+                self._sock.sendto(payload, self._addr)
+                return
+            text = payload.decode("utf-8")
+            fid = uuid.uuid4().hex[:12]
+            chunks = [text[i:i + _CHUNK_CHARS]
+                      for i in range(0, len(text), _CHUNK_CHARS)]
+            for i, chunk in enumerate(chunks):
+                frag = json.dumps(
+                    {"schema_version": SCHEMA_VERSION, "type": "fragment",
+                     "fid": fid, "i": i, "n": len(chunks), "data": chunk},
+                    separators=(",", ":"))
+                self._sock.sendto(frag.encode("utf-8"), self._addr)
         except OSError:
             logger.warning("UdpSink.sendto failed", exc_info=True)

@@ -243,3 +243,35 @@ def test_clear_live_state_empties_caches_keeps_counters():
     assert not snap.last_track2d_by_id and not snap.zone_state_by_zone
     assert not snap.observations_by_camera and not snap.fps_by_camera
     assert snap.pipeline_fps is None
+
+
+def test_fragmented_observations_reassemble_into_state():
+    """UdpSink slices >MTU payloads into fragment datagrams (WSL2 mirrored
+    networking drops big loopback UDP) — the subscriber must reassemble them
+    and store the observations as if they had arrived whole."""
+    import json as _json
+
+    from backbone.comms.schemas import ObservationDet, ObservationsMessage
+
+    poly = tuple((float(i % 1920), float(i % 1080)) for i in range(400))
+    obs = ObservationsMessage(
+        ts=3.0, camera_id="cam_a", frame_wh=(1920, 1080),
+        dets=(ObservationDet(cls="palette", confidence=0.9,
+                             bbox_xyxy=(0.0, 0.0, 50.0, 50.0),
+                             foot_uv=(25.0, 50.0), mask_poly=poly),))
+    text = obs.model_dump_json()
+    assert len(text) > 1300
+    chunk = 1100
+    chunks = [text[i:i + chunk] for i in range(0, len(text), chunk)]
+
+    sub = BusSubscriber(host="127.0.0.1", port=0)
+    for i, c in enumerate(chunks):
+        sub._handle_payload(_json.dumps(
+            {"schema_version": 6, "type": "fragment", "fid": "f1",
+             "i": i, "n": len(chunks), "data": c}).encode())
+    snap = sub.snapshot()
+    stored = snap.observations_by_camera["cam_a"]
+    assert stored == obs
+    assert stored.dets[0].mask_poly == poly
+    # Only the COMPLETED message counts as received (fragments are transport).
+    assert snap.received == 1

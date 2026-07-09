@@ -86,6 +86,7 @@ class MessageType(str, Enum):
     OBSERVATIONS = "observations"
     DIAGNOSTICS = "diagnostics"
     CONFIG = "config"
+    FRAGMENT = "fragment"
 
 
 class Track2DMessage(BaseModel):
@@ -339,6 +340,64 @@ class ObservationsMessage(BaseModel):
     dets: tuple[ObservationDet, ...]
 
 
+class FragmentMessage(BaseModel):
+    """One UDP-transport fragment of a larger JSON message.
+
+    UDP datagrams that would exceed the path MTU get IP-fragmented, and some
+    network layers silently drop the fragments (WSL2 ``networkingMode=mirrored``
+    drops EVERY loopback UDP datagram over ~1.5 KB — observations with mask
+    polygons never arrive). ``UdpSink`` therefore splits large payloads at the
+    APPLICATION layer: the serialized JSON text is sliced into chunks, each
+    wrapped in this envelope. Consumers reassemble with ``FragmentBuffer`` and
+    re-parse the joined text. Fragments exist only on the UDP transport — MQTT
+    (TCP) never fragments.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.FRAGMENT] = MessageType.FRAGMENT
+    fid: str = Field(..., description="fragment-group id, unique per message")
+    i: int = Field(..., ge=0, description="fragment index, 0-based")
+    n: int = Field(..., ge=1, description="total fragments in the group")
+    data: str = Field(..., description="slice of the original JSON text")
+
+
+class FragmentBuffer:
+    """Consumer-side reassembly for ``FragmentMessage`` streams.
+
+    ``add()`` returns the complete original JSON text once every fragment of
+    a group has arrived, else ``None``. Incomplete groups are pruned after
+    ``max_age_s`` (UDP loss must not leak memory); at most ``max_groups``
+    are held.
+    """
+
+    def __init__(self, max_age_s: float = 5.0, max_groups: int = 64) -> None:
+        self._max_age_s = float(max_age_s)
+        self._max_groups = int(max_groups)
+        self._groups: dict[str, tuple[float, int, dict[int, str]]] = {}
+
+    def add(self, frag: FragmentMessage, now: float) -> str | None:
+        self._prune(now)
+        first_ts, n, parts = self._groups.get(frag.fid, (now, frag.n, {}))
+        if frag.n != n or frag.i >= n:
+            self._groups.pop(frag.fid, None)   # inconsistent group — drop it
+            return None
+        parts[frag.i] = frag.data
+        if len(parts) == n:
+            self._groups.pop(frag.fid, None)
+            return "".join(parts[k] for k in range(n))
+        self._groups[frag.fid] = (first_ts, n, parts)
+        return None
+
+    def _prune(self, now: float) -> None:
+        if self._groups:
+            cutoff = now - self._max_age_s
+            self._groups = {k: v for k, v in self._groups.items() if v[0] >= cutoff}
+        while len(self._groups) >= self._max_groups:
+            self._groups.pop(next(iter(self._groups)))
+
+
 class ProximityPair(BaseModel):
     """One person↔object floor distance (element of ``ProximityMessage``)."""
 
@@ -448,6 +507,7 @@ def parse_envelope(
     | ObservationsMessage
     | DiagnosticsMessage
     | ConfigMessage
+    | FragmentMessage
 ):
     """Discriminate by ``type`` field and parse with the right model.
 
@@ -484,4 +544,6 @@ def parse_envelope(
         return DiagnosticsMessage.model_validate(data)
     if msg_type == MessageType.CONFIG.value:
         return ConfigMessage.model_validate(data)
+    if msg_type == MessageType.FRAGMENT.value:
+        return FragmentMessage.model_validate(data)
     raise ValueError(f"unknown message type: {msg_type!r}")

@@ -34,6 +34,8 @@ def test_people_merge_by_proximity():
 
 def test_draw_unified_tracks_overlay():
     """Fused tracks overlay onto the rectified floor at their world (X,Y)."""
+    import typing
+
     import numpy as np
 
     from monitor_web.api.routes_video import _draw_unified_tracks
@@ -41,12 +43,20 @@ def test_draw_unified_tracks_overlay():
     bounds = {"px_per_m": 100.0, "x_min": 0.0, "y_min": 0.0, "out_wh": (400, 400)}
 
     class _T2:
-        def __init__(self, tid, xy): self.track_id = tid; self.xy_m = xy; self.cls = "x"
+        def __init__(self, tid, xy):
+            self.track_id = tid
+            self.xy_m = xy
+            self.cls = "x"
+
     class _T3:
-        def __init__(self, tid, xyz): self.track_id = tid; self.xyz_m = xyz; self.cls = "x"
+        def __init__(self, tid, xyz):
+            self.track_id = tid
+            self.xyz_m = xyz
+            self.cls = "x"
+
     class _Snap:
-        last_track2d_by_id = {1: _T2(1, (1.0, 1.0))}      # 2D-only @ (100,100)px
-        last_track3d_by_id = {2: _T3(2, (2.0, 2.0, 0.0))}  # 3D @ (200,200)px
+        last_track2d_by_id: typing.ClassVar = {1: _T2(1, (1.0, 1.0))}      # 2D-only @ (100,100)px
+        last_track3d_by_id: typing.ClassVar = {2: _T3(2, (2.0, 2.0, 0.0))}  # 3D @ (200,200)px
     class _Bus:
         def is_fresh(self, t): return True
         def snapshot(self): return _Snap()
