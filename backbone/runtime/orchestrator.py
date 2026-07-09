@@ -325,6 +325,7 @@ class Orchestrator:
         self._proximity_interval_s = float(prox_cfg.get("refresh_interval_s", 0.5))
         self._proximity_last_ts = 0.0
         self._proximity_had_pairs = False
+        self._pose_fail_log_ts = 0.0     # throttle for pose-failure tracebacks
 
         # Per-camera raw observations for display consumers (the dashboard
         # renders these instead of running its own detector — ONE perception).
@@ -738,7 +739,16 @@ class Orchestrator:
                 for dets in pose_by_camera.values():
                     all_detections.extend(dets)
             except Exception:
-                logger.warning("orchestrator: person detection failed", exc_info=True)
+                # Throttle: a persistently-broken pose session (e.g. a cudnn
+                # shape bug) would otherwise dump a traceback ~12x/second into
+                # the console. Full trace at most every 30 s; the rest debug.
+                if now() - self._pose_fail_log_ts > 30.0:
+                    self._pose_fail_log_ts = now()
+                    logger.warning("orchestrator: person detection failed "
+                                   "(throttled — next full trace in 30s)",
+                                   exc_info=True)
+                else:
+                    logger.debug("orchestrator: person detection failed", exc_info=True)
 
         # --- homography ---
         floor_pairs = self._projector.project_batch(all_detections)
