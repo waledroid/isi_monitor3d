@@ -29,6 +29,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -52,7 +53,7 @@ class BackboneSupervisor:
         self,
         config_path: Path,
         *,
-        terminate_timeout_s: float = 5.0,
+        terminate_timeout_s: float = 2.0,
         log_buffer_size: int = 500,
         python_exe: str | None = None,
         cwd: Path | None = None,
@@ -278,13 +279,17 @@ class BackboneSupervisor:
             return False
         self._stop_requested = True   # mark BEFORE terminate so state() reads cleanly
         proc = self._proc
-        logger.info("supervisor: SIGTERM pid=%d", proc.pid)
+        t0 = time.monotonic()
+        method = "sigterm"
+        logger.info("supervisor: STOP → SIGTERM pid=%d (grace %.1fs, then SIGKILL)",
+                    proc.pid, self._terminate_timeout)
         try:
             proc.terminate()
             try:
                 proc.wait(timeout=self._terminate_timeout)
             except subprocess.TimeoutExpired:
-                logger.warning("supervisor: SIGKILL pid=%d (terminate timed out)", proc.pid)
+                method = "sigkill"
+                logger.warning("supervisor: STOP → SIGKILL pid=%d (grace expired)", proc.pid)
                 proc.kill()
                 proc.wait(timeout=2.0)
         except ProcessLookupError:
@@ -293,6 +298,8 @@ class BackboneSupervisor:
             rc = proc.returncode
             self._last_exit_code = rc if rc is not None else -signal.SIGTERM
             self._proc = None
+            logger.info("supervisor: STOP done — pid gone in %.2fs via %s (exit=%s)",
+                        time.monotonic() - t0, method, rc)
         if self._reader_thread is not None:
             self._reader_thread.join(timeout=2.0)
             self._reader_thread = None

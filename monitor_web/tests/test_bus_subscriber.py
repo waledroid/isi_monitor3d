@@ -221,3 +221,25 @@ def test_broadcast_offer_drops_oldest_when_full() -> None:
         assert q.get_nowait() == 4       # …newest kept
 
     asyncio.run(run())
+
+
+def test_clear_live_state_empties_caches_keeps_counters():
+    """STOP calls this so the map/cards/panels blank immediately — live caches
+    empty, received/latency counters intact."""
+    from backbone.comms.schemas import ObservationsMessage
+
+    sub = BusSubscriber(host="127.0.0.1", port=0)
+    with sub._lock:
+        sub._state.received = 42
+        sub._state.last_track2d_by_id[1] = object()
+        sub._state.zone_state_by_zone["Z"] = object()
+        sub._state.observations_by_camera["cam_a"] = ObservationsMessage(
+            ts=1.0, camera_id="cam_a", frame_wh=(10, 10), dets=())
+        sub._state.fps_by_camera = {"cam_a": 18.0}
+        sub._state.pipeline_fps = 25.0
+    sub.clear_live_state()
+    snap = sub.snapshot()
+    assert snap.received == 42
+    assert not snap.last_track2d_by_id and not snap.zone_state_by_zone
+    assert not snap.observations_by_camera and not snap.fps_by_camera
+    assert snap.pipeline_fps is None

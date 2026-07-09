@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/control")
 
@@ -36,6 +40,11 @@ def _crash_reason(log_tail: list[str]) -> str:
 @router.post("/start")
 async def start(request: Request) -> JSONResponse:
     supervisor = request.app.state.supervisor
+    # Loud on purpose: every START click is visible in the console the moment
+    # it lands — a "the backbone came back by itself" report is almost always
+    # a queued/duplicated click replaying after a UI stall, and this line is
+    # how the operator sees it happen.
+    logger.info("control: START requested (state=%s)", supervisor.state)
     spawned = supervisor.start()
     # Poll until the orchestrator declares itself built (up) or the process exits
     # (crash), whichever comes first — don't trust an early "running" that's just
@@ -74,7 +83,21 @@ async def stop(request: Request) -> JSONResponse:
     # attributed to this pattern was actually the Settings model-list walking
     # 34k dataset files ON the loop — fixed in routes_config/detection_overlay;
     # with that gone, off-loop stop is strictly better.)
+    logger.info("control: STOP requested (state=%s, pid=%s)",
+                supervisor.state, supervisor.pid)
+    t0 = time.monotonic()
     stopped = await asyncio.to_thread(supervisor.stop)
+    # The system is DOWN — empty every live cache so the UI clears at once:
+    # tracks/zone_state/observations vanish from the map, cards and panels
+    # instead of aging out over their staleness windows.
+    bus = getattr(request.app.state, "bus", None)
+    if bus is not None:
+        try:
+            bus.clear_live_state()
+        except Exception:
+            logger.debug("control: bus clear failed", exc_info=True)
+    logger.info("control: STOP done in %.2fs (state=%s)",
+                time.monotonic() - t0, supervisor.state)
     return JSONResponse(
         {"action": "stop", "stopped": stopped, "state": supervisor.state}
     )

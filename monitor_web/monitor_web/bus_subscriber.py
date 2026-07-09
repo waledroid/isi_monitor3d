@@ -146,6 +146,19 @@ class BusSubscriber:
         k = min(len(sorted_vals) - 1, round((p / 100.0) * (len(sorted_vals) - 1)))
         return round(sorted_vals[k], 1)
 
+    def clear_live_state(self) -> None:
+        """Empty every LIVE cache (tracks, zone states, observations, fps) —
+        called on backbone STOP so the map/cards/panels blank immediately
+        instead of aging out. Counters and latency stats are kept."""
+        with self._lock:
+            self._state.last_track2d_by_id.clear()
+            self._state.last_track3d_by_id.clear()
+            self._state.zone_state_by_zone.clear()
+            self._state.observations_by_camera.clear()
+            self._state.fps_by_camera = {}
+            self._state.pipeline_fps = None
+            self._state.diagnostics_ts = 0.0
+
     def snapshot(self) -> BusState:
         with self._lock:
             lats = sorted(self._latencies)
