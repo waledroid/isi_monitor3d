@@ -21,12 +21,20 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 import yaml
 
 logger = logging.getLogger(__name__)
 
 _TERM_GRACE_S = 3.0
+# Auto-respawn after an UNEXPECTED producer death (segfault, OOM, camera-
+# library crash): the metric engine coasts, but only a running producer
+# brings detections back. Deliberate STOPs never respawn. The window guard
+# stops a crash-looping producer from thrashing the GPU.
+_RESPAWN_DELAY_S = 3.0
+_RESPAWN_MAX_PER_WINDOW = 5
+_RESPAWN_WINDOW_S = 300.0
 
 
 class PerceptionHost:
@@ -37,6 +45,8 @@ class PerceptionHost:
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._deliberate_stop = False
+        self._respawns: list[float] = []
 
     def points_mode(self) -> bool:
         try:
@@ -54,6 +64,7 @@ class PerceptionHost:
                 return True
             if not self.points_mode():
                 return False
+            self._deliberate_stop = False
             self._reap_strays()
             env = dict(os.environ)
             # Same CPU caging as the Backbone spawn: ORT/BLAS pools sized for
@@ -79,6 +90,7 @@ class PerceptionHost:
 
     def stop(self) -> None:
         with self._lock:
+            self._deliberate_stop = True
             proc, self._proc = self._proc, None
         if proc is None or proc.poll() is not None:
             return
@@ -110,6 +122,36 @@ class PerceptionHost:
             line = line.rstrip("\n")
             if line:
                 logger.info("[perception] %s", line)
+        # EOF — the producer is gone. Deliberate STOP handles its own logging;
+        # anything else is a crash (a segfault logs NOTHING python-side) and
+        # gets respawned so a camera-library crash never silently halts
+        # detection until someone notices the frozen panels.
+        rc = proc.wait()
+        if self._deliberate_stop or rc == 0:
+            return
+        now = time.time()
+        self._respawns = [t for t in self._respawns if now - t < _RESPAWN_WINDOW_S]
+        if len(self._respawns) >= _RESPAWN_MAX_PER_WINDOW:
+            logger.error(
+                "perception host: producer died (exit=%s) %d times in %.0fs — "
+                "GIVING UP; press START to retry", rc,
+                len(self._respawns), _RESPAWN_WINDOW_S)
+            return
+        self._respawns.append(now)
+        logger.warning(
+            "perception host: producer died unexpectedly (exit=%s) — "
+            "respawning in %.0fs", rc, _RESPAWN_DELAY_S)
+        timer = threading.Timer(_RESPAWN_DELAY_S, self._respawn)
+        timer.daemon = True
+        timer.start()
+
+    def _respawn(self) -> None:
+        if self._deliberate_stop:
+            return
+        with self._lock:
+            if self._proc is not None and self._proc.poll() is None:
+                return       # someone already restarted it
+        self.start()
 
     def _reap_strays(self) -> None:
         """SIGKILL producer orphans from a previous dashboard life — exactly
