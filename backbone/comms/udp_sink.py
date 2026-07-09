@@ -50,6 +50,31 @@ _FRAGMENT_ABOVE = 1300
 _CHUNK_CHARS = 1100
 
 
+def send_json_datagram(sock: socket.socket, addr: tuple[str, int],
+                       payload: bytes) -> None:
+    """Send one JSON payload as UDP, fragmenting above ``_FRAGMENT_ABOVE``.
+
+    The single shared implementation of the application-layer fragmentation
+    contract — used by ``UdpSink`` (Backbone → bus) and by perception
+    producers (dashboard → Backbone ingest, Direction 1) so both directions
+    stay wire-compatible with ``FragmentBuffer``. Raises ``OSError`` on send
+    failure (callers decide how loudly to log).
+    """
+    if len(payload) <= _FRAGMENT_ABOVE:
+        sock.sendto(payload, addr)
+        return
+    text = payload.decode("utf-8")
+    fid = uuid.uuid4().hex[:12]
+    chunks = [text[i:i + _CHUNK_CHARS]
+              for i in range(0, len(text), _CHUNK_CHARS)]
+    for i, chunk in enumerate(chunks):
+        frag = json.dumps(
+            {"schema_version": SCHEMA_VERSION, "type": "fragment",
+             "fid": fid, "i": i, "n": len(chunks), "data": chunk},
+            separators=(",", ":"))
+        sock.sendto(frag.encode("utf-8"), addr)
+
+
 @metadata_sink_registry.register("udp")
 class UdpSink(MetadataSink):
     """UDP/JSON publisher. One process, one sink instance, one socket."""
@@ -115,18 +140,6 @@ class UdpSink(MetadataSink):
 
     def _send(self, payload: bytes) -> None:
         try:
-            if len(payload) <= _FRAGMENT_ABOVE:
-                self._sock.sendto(payload, self._addr)
-                return
-            text = payload.decode("utf-8")
-            fid = uuid.uuid4().hex[:12]
-            chunks = [text[i:i + _CHUNK_CHARS]
-                      for i in range(0, len(text), _CHUNK_CHARS)]
-            for i, chunk in enumerate(chunks):
-                frag = json.dumps(
-                    {"schema_version": SCHEMA_VERSION, "type": "fragment",
-                     "fid": fid, "i": i, "n": len(chunks), "data": chunk},
-                    separators=(",", ":"))
-                self._sock.sendto(frag.encode("utf-8"), self._addr)
+            send_json_datagram(self._sock, self._addr, payload)
         except OSError:
             logger.warning("UdpSink.sendto failed", exc_info=True)

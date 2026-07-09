@@ -533,3 +533,75 @@ def test_observations_message_round_trip() -> None:
                                    bbox_xyxy=(0, 0, 1, 1), foot_uv=(0.5, 1.0)),))
     parsed = parse_envelope(json.loads(lean.model_dump_json()))
     assert parsed.dets[0].mask_poly is None
+
+
+# ---- DetectionSetMessage (Direction 1: perception → metric engine) ----
+
+
+def test_detection_set_round_trip_through_parse_envelope() -> None:
+    from backbone.comms.schemas import DetectionSetMessage, WireDetection
+
+    msg = DetectionSetMessage(
+        ts=123.456, camera_id="cam_a", frame_wh=(1280, 720), seq=42,
+        config_fingerprint="abc123",
+        dets=(
+            WireDetection(cls="palette", confidence=0.15,
+                          bbox_xyxy=(10.0, 20.0, 110.0, 90.0),
+                          foot_uv=(60.0, 90.0),
+                          mask_poly=((10.0, 20.0), (110.0, 20.0), (60.0, 90.0))),
+            WireDetection(cls="person", confidence=0.8,
+                          bbox_xyxy=(0.0, 0.0, 50.0, 150.0), foot_uv=(25.0, 150.0),
+                          keypoints_uv=((10.0, 10.0, 0.9),) * 17),
+        ))
+    parsed = parse_envelope(json.loads(msg.model_dump_json()))
+    assert isinstance(parsed, DetectionSetMessage)
+    assert parsed == msg
+
+
+def test_detection_set_explicit_empty_is_valid() -> None:
+    from backbone.comms.schemas import DetectionSetMessage
+
+    msg = DetectionSetMessage(ts=1.0, camera_id="cam_b", frame_wh=(1920, 1080),
+                              seq=0, dets=())
+    parsed = parse_envelope(json.loads(msg.model_dump_json()))
+    assert parsed.dets == ()
+
+
+def test_send_json_datagram_shared_fragmentation() -> None:
+    import socket as _socket
+
+    from backbone.comms.schemas import (
+        DetectionSetMessage,
+        FragmentBuffer,
+        FragmentMessage,
+        WireDetection,
+    )
+    from backbone.comms.udp_sink import send_json_datagram
+
+    recv = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    recv.bind(("127.0.0.1", 0))
+    recv.settimeout(2.0)
+    send = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+
+    poly = tuple((float(i), float(i)) for i in range(300))
+    msg = DetectionSetMessage(
+        ts=2.0, camera_id="cam_a", frame_wh=(1280, 720), seq=7,
+        dets=tuple(WireDetection(cls="palette", confidence=0.5,
+                                 bbox_xyxy=(0.0, 0.0, 9.0, 9.0),
+                                 foot_uv=(4.0, 9.0), mask_poly=poly)
+                   for _ in range(3)))
+    payload = msg.model_dump_json().encode()
+    assert len(payload) > 1300
+    send_json_datagram(send, recv.getsockname(), payload)
+
+    first = json.loads(recv.recvfrom(65535)[0])
+    assert first["type"] == "fragment"
+    frags = [first] + [json.loads(recv.recvfrom(65535)[0])
+                       for _ in range(first["n"] - 1)]
+    buf = FragmentBuffer()
+    text = None
+    for f in frags:
+        text = buf.add(FragmentMessage.model_validate(f), now=0.0) or text
+    assert parse_envelope(json.loads(text)) == msg
+    recv.close()
+    send.close()

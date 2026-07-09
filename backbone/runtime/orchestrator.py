@@ -123,28 +123,50 @@ class Orchestrator:
         self._node_id: str = cfg.get("node_id", "node")
         self._rig = CameraRig.from_file(cfg["calibration_path"])
 
-        # Frame sources.
+        # Ingest mode (Direction 1 vs Direction 2):
+        #   frames — the Backbone owns perception: RTSP sources, decode,
+        #            detectors, pose. Today's default.
+        #   points — the Backbone is a pure METRIC engine: an external
+        #            perception producer publishes DetectionSetMessages on a
+        #            dedicated loopback port; no sources, no detectors, no
+        #            CUDA in this process.
+        ing_cfg = cfg.get("ingestion", {})
+        self._ingest_mode: str = str(ing_cfg.get("mode", "frames"))
+        if self._ingest_mode not in ("frames", "points"):
+            raise ValueError(
+                f"ingestion.mode={self._ingest_mode!r}, expected 'frames' or 'points'")
+
+        camera_ids = list(cfg["cameras"])
+
+        # Frame sources — frames mode only. In points mode the cameras block
+        # remains the camera-identity declaration (ids, count → operational
+        # mode); its per-camera `source:` config is simply not used here.
         self._sources: dict[str, Any] = {}
-        for cam_id, cam_cfg in cfg["cameras"].items():
-            src_cfg = dict(cam_cfg["source"])
-            plugin_name = src_cfg.pop("name")
-            self._sources[cam_id] = frame_source_registry.create(
-                plugin_name, camera_id=cam_id, **src_cfg,
-            )
+        if self._ingest_mode == "frames":
+            for cam_id, cam_cfg in cfg["cameras"].items():
+                src_cfg = dict(cam_cfg["source"])
+                plugin_name = src_cfg.pop("name")
+                self._sources[cam_id] = frame_source_registry.create(
+                    plugin_name, camera_id=cam_id, **src_cfg,
+                )
 
         # Operational mode — single-cam (Mode 1) skips the triangulation stack
         # entirely. Two cameras → Mode 2 (full pipeline). Architectures are
         # constrained to N <= 2 per S7's CrossCamFusion assertion.
-        n_cams = len(self._sources)
+        n_cams = len(camera_ids)
         self._mode = "single_cam_homography" if n_cams == 1 else "dual_cam_homography_triangulation"
         logger.info(
-            "orchestrator: %s cameras configured → mode=%s",
-            n_cams, self._mode,
+            "orchestrator: %s cameras configured → mode=%s (ingest=%s)",
+            n_cams, self._mode, self._ingest_mode,
         )
 
         # Per-source liveness tracking. The ingestion thread updates this on
-        # exit; the latency probe + step() guard read it.
-        self._source_status: dict[str, str] = {cam_id: "alive" for cam_id in self._sources}
+        # exit; the latency probe + step() guard read it. In points mode the
+        # ingest listener flips cameras to "alive" as detection sets arrive.
+        self._source_status: dict[str, str] = {
+            cam_id: ("alive" if self._ingest_mode == "frames" else "waiting")
+            for cam_id in camera_ids
+        }
 
         # Zones + subscriptions (only meaningful in dual-cam mode).
         zones_path = cfg.get("zones_path")
@@ -155,14 +177,56 @@ class Orchestrator:
         else:
             self._subscriptions = SubscriptionManager([], self._zones)
 
-        # Ingestion.
-        ing_cfg = cfg.get("ingestion", {})
-        sync_cfg = dict(ing_cfg.get("frame_sync", {}))
-        self._sync = FrameSynchronizer(camera_ids=list(self._sources), **sync_cfg)
+        # Ingestion. The synchronizer + bus are shared by BOTH modes: the
+        # synchronizer is duck-typed on `.camera_id`/`.capture_ts`, so pairing,
+        # skew eviction, and degraded solo emit work identically for Frames
+        # and DetectionSets.
+        if self._ingest_mode == "points":
+            points_cfg = dict(ing_cfg.get("points", {}))
+            sync_cfg = {
+                "max_skew_ms": float(points_cfg.get("max_skew_ms", 60.0)),
+                "degraded_emit_after_ms": float(
+                    points_cfg.get("degraded_emit_after_ms", 200.0)),
+            }
+        else:
+            sync_cfg = dict(ing_cfg.get("frame_sync", {}))
+        self._sync = FrameSynchronizer(camera_ids=camera_ids, **sync_cfg)
         bus_cfg = dict(ing_cfg.get("frame_bus", {}))
         self._bus = FrameBus(**bus_cfg)
 
-        # Detection.
+        # Points-mode ingest listener (built here, started in run()).
+        self._points_ingest = None
+        if self._ingest_mode == "points":
+            from backbone.ingestion.points_in import DetectionIngest
+            from backbone.shared.config_fingerprint import config_fingerprint
+
+            points_cfg = dict(ing_cfg.get("points", {}))
+
+            def _deliver(det_set) -> None:
+                self._source_status[det_set.camera_id] = "alive"
+                self._frames_by_camera[det_set.camera_id] = (
+                    self._frames_by_camera.get(det_set.camera_id, 0) + 1)
+                pair = self._sync.submit(det_set)
+                if pair is not None:
+                    self._bus.publish(pair)
+
+            self._points_ingest = DetectionIngest(
+                camera_ids,
+                host=str(points_cfg.get("listen_host", "127.0.0.1")),
+                port=int(points_cfg.get("listen_port", 9010)),
+                on_set=_deliver,
+                expected_fingerprint=config_fingerprint(cfg),
+            )
+
+        # Detection — frames mode only. In points mode the perception
+        # producer owns every model; this process never imports onnxruntime
+        # and never creates a CUDA context (that IS the point of Direction 1).
+        if self._ingest_mode == "points":
+            self._detector = None
+            self._person_detector = None
+            self._pose_every_n = 1
+            return self._build_metric_stack()
+
         det_cfg = dict(cfg["detection"])
         det_plugin = det_cfg.pop("plugin")
         # `pose_onnx_path` configures a separate person-pose model (consumed by the
@@ -248,6 +312,15 @@ class Orchestrator:
                 logger.warning("orchestrator: person-pose detector disabled (%s)", exc)
                 self._person_detector = None
 
+        self._build_metric_stack()
+
+    def _build_metric_stack(self) -> None:
+        """Everything below the detections boundary — identical in both
+        ingest modes: homography, tracking, occupancy, triangulation, zones,
+        proximity, sinks, diagnostics. This shared tail is what makes the
+        frames/points inversion a plumbing change, not a physics change."""
+        cfg = self._config
+
         # Homography layer.
         hg_cfg = cfg.get("homography", {})
         self._projector = FootProjector(self._rig)
@@ -323,7 +396,7 @@ class Orchestrator:
         self._proximity_enabled: bool = bool(prox_cfg.get("enabled", True))
         self._proximity_max_m = float(prox_cfg.get(
             "max_distance_m",
-            cfg["detection"].get("person_pallet_max_distance_m", 6.0)))
+            cfg.get("detection", {}).get("person_pallet_max_distance_m", 6.0)))
         self._proximity_interval_s = float(prox_cfg.get("refresh_interval_s", 0.5))
         self._proximity_last_ts = 0.0
         self._proximity_had_pairs = False
@@ -350,6 +423,15 @@ class Orchestrator:
         # ``metadata.images.enabled: true`` in backbone.yaml. JPEG bytes go to
         # disk only; the published message carries the URL, never raw bytes.
         images_cfg = meta_cfg.get("images", {})
+        if images_cfg.get("enabled", False) and self._ingest_mode == "points":
+            # Honest refusal, not a silent no-op: the metric engine never sees
+            # pixels, so it cannot write JPEGs. Snapshot-on-passing belongs to
+            # the perception producer in Direction 1 (react to
+            # PassingEventMessage on the bus) — not implemented yet.
+            raise ValueError(
+                "metadata.images.enabled is not supported with ingestion.mode: "
+                "points — the metric engine receives detections, not frames. "
+                "Disable images or use ingestion.mode: frames.")
         if images_cfg.get("enabled", False):
             self._snapshot_writer: SnapshotWriter | None = SnapshotWriter(
                 out_dir=str(images_cfg["out_dir"]),
@@ -375,7 +457,8 @@ class Orchestrator:
         # fps for the operator STATUS panel.
         self._latency_total = LatencyMeter("capture_to_publish", window=2048)
         self._frame_count = 0
-        self._frames_by_camera: dict[str, int] = {cam_id: 0 for cam_id in self._sources}
+        self._frames_by_camera: dict[str, int] = {
+            cam_id: 0 for cam_id in cfg["cameras"]}
 
         # DiagnosticsPublisher — optional, enabled by default.
         diag_cfg = meta_cfg.get("diagnostics", {})
@@ -481,6 +564,8 @@ class Orchestrator:
 
     def run(self) -> None:
         """Start ingestion + pipeline threads. Blocks until stop_event is set."""
+        if self._points_ingest is not None:
+            self._points_ingest.start()
         for src in self._sources.values():
             if hasattr(src, "start"):
                 src.start()
@@ -566,6 +651,8 @@ class Orchestrator:
             t.start()
         for t in stoppers:
             t.join(timeout=2.0)
+        if getattr(self, "_points_ingest", None) is not None:
+            self._points_ingest.stop()
         if self._pipeline_thread is not None:
             self._pipeline_thread.join(timeout=2.0)
         if self._diagnostics is not None:
@@ -632,7 +719,14 @@ class Orchestrator:
             frame = pair.frames.get(cam_id)
             if frame is None or not dets or cam_id not in self._rig:
                 continue
-            fh, fw = frame.image.shape[:2]
+            # The single scale boundary works from a DECLARED pixel space:
+            # frames carry it as the image shape, DetectionSets (points mode)
+            # declare it explicitly via frame_wh — the metric engine never
+            # needs the pixels themselves.
+            if hasattr(frame, "image"):
+                fh, fw = frame.image.shape[:2]
+            else:
+                fw, fh = frame.frame_wh
             cw, ch = self._rig[cam_id].image_size_wh
             if (int(fw), int(fh)) == (int(cw), int(ch)):
                 continue
@@ -717,8 +811,32 @@ class Orchestrator:
         Exposed so tests can drive the pipeline synchronously without
         spinning up threads.
         """
-        # --- detection ---
-        if self._detector is not None:
+        # --- detections acquisition (the frames/points boundary) ---
+        person_detections: list[Any] = []
+        if self._ingest_mode == "points":
+            # The pair's payloads ARE DetectionSets — the producer already ran
+            # the models. Persons ride the same stream (cls="person" +
+            # keypoints); split them out so, exactly as in frames mode, they
+            # join the homography path but never the triangulation
+            # association (which stays object-only via detections_by_camera).
+            detections_by_camera = {}
+            for cam_id, det_set in pair.frames.items():
+                objects = []
+                for d in det_set.detections:
+                    (person_detections if d.cls == "person" else objects).append(d)
+                detections_by_camera[cam_id] = objects
+            self._scale_detections_to_calibration(detections_by_camera, pair)
+            if person_detections:
+                by_cam = {cid: [d for d in person_detections if d.camera_id == cid]
+                          for cid in pair.frames}
+                self._scale_detections_to_calibration(by_cam, pair)
+            if self._observations_enabled:
+                try:
+                    self._publish_observations(detections_by_camera, pair)
+                except Exception:
+                    logger.warning("orchestrator: observations publish failed",
+                                   exc_info=True)
+        elif self._detector is not None:
             detections_by_camera = self._detector.detect(pair)
             self._scale_detections_to_calibration(detections_by_camera, pair)
             if self._observations_enabled:
@@ -732,6 +850,7 @@ class Orchestrator:
             # all — the pose path below still produces person tracks.
             detections_by_camera = {cid: [] for cid in pair.frames}
         all_detections = [d for dets in detections_by_camera.values() for d in dets]
+        all_detections.extend(person_detections)
         # Person-pose runs as a second detector; its detections join the homography
         # path (foot → floor → Track2D) but NOT the triangulation association below
         # (that stays object-detector-only via `detections_by_camera`).

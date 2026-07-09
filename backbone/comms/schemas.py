@@ -87,6 +87,7 @@ class MessageType(str, Enum):
     DIAGNOSTICS = "diagnostics"
     CONFIG = "config"
     FRAGMENT = "fragment"
+    DETECTION_SET = "detection_set"
 
 
 class Track2DMessage(BaseModel):
@@ -340,6 +341,65 @@ class ObservationsMessage(BaseModel):
     dets: tuple[ObservationDet, ...]
 
 
+class WireDetection(BaseModel):
+    """One detection inside a ``DetectionSetMessage`` (perception → metric).
+
+    Coordinates are pixels in the producer's declared ``frame_wh`` space.
+    ``confidence`` is the producer's RAW score — the metric engine's ByteTrack
+    needs the low-confidence band (``conf_low``), so producers must NOT apply
+    a display threshold here. Persons are ordinary detections with
+    ``cls="person"`` plus ``keypoints_uv``; there is no occupancy field on
+    purpose — occupancy is a METRIC verdict, computed downstream.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cls: str
+    confidence: float
+    bbox_xyxy: tuple[float, float, float, float]
+    foot_uv: tuple[float, float]
+    keypoints_uv: tuple[tuple[float, float, float], ...] | None = None
+    mask_poly: tuple[tuple[float, float], ...] | None = None
+
+
+class DetectionSetMessage(BaseModel):
+    """Per-camera detections flowing INTO the Backbone (Direction 1).
+
+    The inverse of ``ObservationsMessage``: an external perception producer
+    (the dashboard's perception loop, later a DeepStream probe) publishes one
+    of these per camera per perception tick on the Backbone's dedicated
+    ingest port (``ingestion.points.listen_port``) — never on the outbound
+    bus or MQTT. The Backbone in ``ingestion.mode: points`` pairs them by
+    ``ts`` and runs its metric pipeline exactly as if a detector had produced
+    them.
+
+    Contract rules:
+      * ``ts`` is the ``capture_ts`` of the SOURCE FRAME the detections were
+        computed on (the single KPI clock), not the send time.
+      * One message per camera per tick EVEN WHEN ``dets`` IS EMPTY — the
+        explicit-empty heartbeat is what lets the Backbone tell "empty scene"
+        from "dead producer" (silence ⇒ runtime degradation, as if the camera
+        died).
+      * ``seq`` is a per-camera monotonic counter: gaps = UDP loss, visible
+        in diagnostics instead of silent.
+      * ``config_fingerprint`` lets the Backbone detect producer/engine
+        config drift (model, zones, calibration) and flag it — warn, never
+        drop.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.DETECTION_SET] = MessageType.DETECTION_SET
+    ts: float = Field(..., description="capture_ts of the source frame")
+    camera_id: str
+    frame_wh: tuple[int, int]
+    seq: int = Field(..., ge=0)
+    producer_id: str = "monitor_web"
+    config_fingerprint: str | None = None
+    dets: tuple[WireDetection, ...]
+
+
 class FragmentMessage(BaseModel):
     """One UDP-transport fragment of a larger JSON message.
 
@@ -446,7 +506,7 @@ class DiagnosticsMessage(BaseModel):
     ts: float = Field(..., description="wall-clock Unix seconds at emit time")
     node_id: str
     mode: str
-    sources: dict[str, str]   # camera_id → "alive" | "exited" | "crashed"
+    sources: dict[str, str]   # camera_id → "alive" | "exited" | "crashed" | "waiting" (points mode, pre-first-set)
     frame_count: int = Field(..., ge=0)
     fps: float = Field(..., ge=0.0)
     # Per-camera INGEST rate (frames arriving from each source, pre-sync) —
@@ -508,6 +568,7 @@ def parse_envelope(
     | DiagnosticsMessage
     | ConfigMessage
     | FragmentMessage
+    | DetectionSetMessage
 ):
     """Discriminate by ``type`` field and parse with the right model.
 
@@ -546,4 +607,6 @@ def parse_envelope(
         return ConfigMessage.model_validate(data)
     if msg_type == MessageType.FRAGMENT.value:
         return FragmentMessage.model_validate(data)
+    if msg_type == MessageType.DETECTION_SET.value:
+        return DetectionSetMessage.model_validate(data)
     raise ValueError(f"unknown message type: {msg_type!r}")
