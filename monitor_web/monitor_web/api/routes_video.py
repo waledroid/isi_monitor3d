@@ -29,8 +29,6 @@ from ..detection_overlay import (
     distance_line_style,
     distances_enabled,
     get_async_pose,
-    get_detector,
-    get_pose_detector,
     masks_enabled,
     nodes_enabled,
     occupancy_enabled,
@@ -248,7 +246,8 @@ def _draw_unified_tracks(frame, bounds, bus) -> None:
 def _warp_detect_iter(frames: Iterator, cfg, camera_id: str, cam, M, out_wh, do_detect: bool,
                       is_running=None, bus=None, mode2: bool = False) -> Iterator:
     """Warp each frame to the bird's-eye floor view (M = S·H) at the auto-fit
-    output size ``out_wh``, then — when ``do_detect`` — run the detector ON THE
+    output size ``out_wh`` (``do_detect`` is accepted for signature stability
+    but no longer runs inference — ONE perception; see below). It draws ON THE
     RECTIFIED frame and draw boxes, so detection continues over the warped view.
     Detector re-fetched per frame (cached) so a model swap applies live; falls
     back to the plain warp if no model is resolvable.
@@ -264,7 +263,6 @@ def _warp_detect_iter(frames: Iterator, cfg, camera_id: str, cam, M, out_wh, do_
     """
     _M, _out_wh, _bounds = M, out_wh, None
     _checked = False
-    detector = None
     for image in frames:
         if not _checked:
             _checked = True
@@ -274,17 +272,12 @@ def _warp_detect_iter(frames: Iterator, cfg, camera_id: str, cam, M, out_wh, do_
                 _M, _out_wh, _bounds = params["M"], params["out_wh"], params["bounds"]
         warped = rectify_frame(image, cam.K, cam.D, cam.H, out_wh=_out_wh, M=_M)
         running = is_running is None or is_running()
-        if do_detect and running:
-            try:
-                detector = get_detector(cfg)
-                warped = annotate_frame(
-                    warped, detector, cam_id=camera_id, show_nodes=nodes_enabled(cfg),
-                    show_masks=masks_enabled(cfg), show_boxes=boxes_enabled(cfg),
-                    pose_detector=get_pose_detector(cfg))
-            except HTTPException:
-                pass
-        else:
-            detector = None   # don't pin the session in the suspended frame after STOP
+        # ONE PERCEPTION: the warp view no longer runs its own full-frame
+        # detection/pose (it was the last hidden dashboard inference path —
+        # per-frame get_detector + annotate in this pump; an exception there
+        # killed the pump, so the verify view went blank exactly while the
+        # Backbone ran). Calibration verification needs the flattened floor +
+        # the FUSED tracks below, nothing else.
         # Mode-2 visibility: unified (fused) tracks on the rectified floor.
         if mode2 and bus is not None and _bounds is not None and running:
             _draw_unified_tracks(warped, _bounds, bus)

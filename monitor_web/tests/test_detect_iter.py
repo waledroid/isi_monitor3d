@@ -47,9 +47,13 @@ def test_no_zones_never_builds_full_frame_detector(monkeypatch) -> None:
     detector — pose only, zone detections empty."""
     calls: dict = {}
     _patch_overlay_helpers(monkeypatch, calls)
+    # routes_video no longer even IMPORTS get_detector (one perception — the
+    # warp path's inference was removed too), so the guarantee is structural;
+    # the patch stays as a tripwire in case the import ever returns.
     monkeypatch.setattr(
         routes_video, "get_detector",
         lambda cfg: (_ for _ in ()).throw(AssertionError("full-frame detector must not be built")),
+        raising=False,
     )
     cfg = Settings()
     out = list(routes_video._detect_iter(
