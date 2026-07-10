@@ -176,3 +176,28 @@ def test_pose_runs_every_frame_for_cam_b(monkeypatch) -> None:
 
     assert len(frames_out) == 5
     assert len(pose_calls) == 5
+
+
+def test_overlay_failure_yields_raw_frame_and_keeps_streaming(monkeypatch):
+    """An overlay crash (e.g. cv2 on a read-only frame) must NOT kill the pump:
+    the panel shows the raw frame and the stream continues."""
+    import numpy as np
+
+    from monitor_web.api import routes_video
+
+    calls: dict = {}
+    _patch_overlay_helpers(monkeypatch, calls)
+
+    def _boom(*a, **k):
+        raise cv2_error("dst marked as output argument … readonly")
+
+    class cv2_error(Exception):
+        pass
+
+    monkeypatch.setattr(routes_video, "annotate_frame", _boom)
+    frames = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(3)]
+    out = list(routes_video._detect_iter(iter(frames), cfg=None, camera_id="cam_a",
+                                         is_running=lambda: True,
+                                         get_zone_dets=lambda: []))
+    assert len(out) == 3, "stream must survive overlay failures"
+    assert all(o is f for o, f in zip(out, frames)), "raw frames passed through"

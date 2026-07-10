@@ -158,12 +158,20 @@ class FrameShmReader:
                 return None                  # never written / mid-write
             if now - ts > self._max_age_s:
                 return None                  # writer dead → fall back
-            data = bytes(mm[off + _SLOT_HDR.size: off + _SLOT_HDR.size + frame_bytes])
+            # Copy straight into a WRITABLE array. `np.frombuffer` over the
+            # mmap (or over immutable `bytes`) yields a READ-ONLY view, and
+            # every display consumer draws overlays IN PLACE — cv2 then dies
+            # with "dst marked as output argument, but provided NumPy array
+            # marked as readonly". One copy either way; this one is writable.
+            frame = np.empty(frame_bytes, dtype=np.uint8)
+            start = off + _SLOT_HDR.size
+            frame[:] = np.frombuffer(mm, dtype=np.uint8,
+                                     count=frame_bytes, offset=start)
             seq1, _ = _SLOT_HDR.unpack_from(mm, off)
             if seq1 == seq0:
                 shape = (h, w) if c == 1 else (h, w, c)
                 self._last_ts = ts
-                return np.frombuffer(data, dtype=np.uint8).reshape(shape), ts
+                return frame.reshape(shape), ts
         return None
 
     def fresh(self, *, now: float | None = None) -> bool:

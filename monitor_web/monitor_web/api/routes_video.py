@@ -186,17 +186,31 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
         # ('palette_vide' / 'palette_carton_…') read as noise here — the human
         # summary lives in the COMMUNICATION zone cards. Zone panels + the MP4
         # dev viewer keep the badge (still governed by the Settings toggle).
-        out = annotate_frame(image, None, cam_id=camera_id, detections=dets,
-                             show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
-                             show_boxes=boxes_enabled(cfg), pose_detector=pose,
-                             dist_view=dist_view, dist_max_m=person_pallet_max_m(cfg),
-                             show_occupancy=False, dist_style=dist_style)
+        try:
+            out = annotate_frame(image, None, cam_id=camera_id, detections=dets,
+                                 show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
+                                 show_boxes=boxes_enabled(cfg), pose_detector=pose,
+                                 dist_view=dist_view, dist_max_m=person_pallet_max_m(cfg),
+                                 show_occupancy=False, dist_style=dist_style)
+        except Exception:
+            # An overlay failure must NEVER kill the stream: the pump treats a
+            # generator exception as terminal and the panel freezes until the
+            # operator reloads. Show the raw frame instead, log throttled.
+            now_s = time.monotonic()
+            if now_s - _detect_iter._last_warn_s > 30.0:
+                _detect_iter._last_warn_s = now_s
+                logger.warning("cam %s: overlay failed — showing the raw frame "
+                               "(throttled 30s)", camera_id, exc_info=True)
+            out = image
         # No fused-track ring markers here (the '#id cls' amber/green circles
         # were retired as clutter, like the mirrored rings before them): every
         # zone has a detecting TWIN on the other camera, so boxes/masks appear
         # in both views natively, and the metric proof lives in the Settings
         # triangulation test + the warp view's unified-track overlay.
         yield out
+
+
+_detect_iter._last_warn_s = 0.0   # overlay-failure log throttle (see above)
 
 
 def _warp_camera(cfg, camera_id: str):

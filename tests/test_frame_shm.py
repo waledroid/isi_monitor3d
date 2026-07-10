@@ -86,3 +86,28 @@ def test_mid_write_seq_is_rejected(tmp_path):
     r = FrameShmReader("cam_t", directory=str(tmp_path))
     assert r.latest() is None
     w.close()
+
+
+def test_reader_returns_writable_frames(tmp_path):
+    """Display consumers draw overlays IN PLACE (cv2.addWeighted dst=image).
+    A read-only view would crash them — the reader must hand out a writable
+    copy, and mutating it must never touch the bus."""
+    import cv2
+
+    w = FrameShmWriter("cam_t", directory=str(tmp_path))
+    r = FrameShmReader("cam_t", directory=str(tmp_path))
+    src = _img(seed=7)
+    w.write(src, time.time())
+
+    frame, _ts = r.latest()
+    assert frame.flags.writeable, "frame bus handed out a read-only array"
+    # The exact call that died in production must succeed.
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (2, 2), (20, 20), (0, 0, 255), -1)
+    cv2.addWeighted(overlay, 0.35, frame, 0.65, 0, dst=frame)
+
+    # Mutating the returned frame must not corrupt the bus for the next reader.
+    again, _ = r.latest()
+    assert np.array_equal(again, src)
+    w.close()
+    r.close()
