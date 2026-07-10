@@ -47,6 +47,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _trt_available() -> bool:
+    """Does THIS env's onnxruntime ship the TensorRT EP? (Same env isistream
+    runs in, so the dashboard's answer holds for the producer too.)"""
+    try:
+        from backbone.shared.ort_session import trt_available
+        return trt_available()
+    except Exception:
+        return False
+
+
 def _detect_backend() -> str:
     """Server-decided detector backend: GPU host → ONNX (CUDA); CPU-only → OpenVINO."""
     return "yolo_onnx" if gpu_available() else "yolo_openvino"
@@ -256,6 +266,9 @@ class ConfigPayload(BaseModel):
     # untouched; a save hot-restarts a running producer so they apply live.
     motion_gate: bool | None = None
     detect_substream: bool | None = None
+    # TensorRT acceleration (default OFF — the ONNX/CUDA fp16 path). Only
+    # meaningful when the env's onnxruntime ships TensorrtExecutionProvider.
+    trt_enabled: bool | None = None
     # Distance-line rules (S16). Omitted == "no change"; an empty list explicitly
     # clears all rules on disk (the dashboard sends this when the operator
     # deletes every rule).
@@ -486,6 +499,9 @@ def get_config(request: Request) -> JSONResponse:
             "zones": zones_out,
             "detection": detection_out,
             "isistream": {
+                "trt_enabled": bool(
+                    (backbone_data.get("detection") or {}).get("trt_enabled", True)),
+                "trt_available": _trt_available(),
                 "motion_gate": bool((backbone_data.get("isistream") or {}).get("motion_gate", True)),
                 "detect_substream": bool(
                     (backbone_data.get("isistream") or {}).get("detect_substream", True)),
@@ -761,6 +777,12 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
         block = backbone_data.get("detection", {})
         if isinstance(block, dict):
             block["decode_masks"] = bool(payload.decode_masks)
+            backbone_data["detection"] = block
+
+    if payload.trt_enabled is not None:
+        block = backbone_data.get("detection", {})
+        if isinstance(block, dict):
+            block["trt_enabled"] = bool(payload.trt_enabled)
             backbone_data["detection"] = block
 
     # ---- isistream toggles (motion gate / substream detection) ----

@@ -380,6 +380,10 @@
                 <input id="zm-detect-substream" type="checkbox" checked />
                 <span data-i18n="detect_substream">{{ t.detect_substream or 'Detect on camera substream (display stays main)' }}</span>
               </label>
+              <label class="zm-checkbox-row">
+                <input id="zm-trt-enabled" type="checkbox" checked />
+                <span data-i18n="trt_enabled">{{ t.trt_enabled or 'TensorRT acceleration (else ONNX/CUDA fp16)' }}</span>
+              </label>
               <label data-i18n="model_pose">{{ t.model_pose or 'Pose model (person, .onnx)' }}</label>
               <select id="zm-model-pose-onnx">
                 <option value="" data-i18n="model_pose_placeholder">{{ t.model_pose_placeholder or '— none —' }}</option>

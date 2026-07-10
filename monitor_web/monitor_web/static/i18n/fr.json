@@ -131,5 +131,6 @@
   "ui_lag_label": "Latence UI p50",
   "pose_enabled": "Détection de pose (squelettes)",
   "motion_gate": "Filtrage par mouvement (zones statiques sans inférence)",
-  "detect_substream": "Détection sur le sous-flux caméra (affichage flux principal)"
+  "detect_substream": "Détection sur le sous-flux caméra (affichage flux principal)",
+  "trt_enabled": "Accélération TensorRT (sinon ONNX/CUDA fp16)"
 }

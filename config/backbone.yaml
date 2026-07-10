@@ -60,6 +60,7 @@ detection:
   pose_imgsz: 640
   decode_masks: true
   pose_enabled: true
+  trt_enabled: true
 homography:
   cross_cam_fusion:
     match_distance_m:
@@ -105,3 +106,5 @@ zones_path: /home/aatanda/isi_monitor3d/config/zones.yaml
 subscriptions_path: /home/aatanda/isi_monitor3d/config/mode2/subscriptions.yaml
 isistream:
   fps: 15.0
+  motion_gate: true
+  detect_substream: true

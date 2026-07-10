@@ -15,9 +15,51 @@ and the hermetic CPU test suite are unaffected by the CUDA-only option.
 """
 from __future__ import annotations
 
+import logging
+import os
+from pathlib import Path
+
 import onnxruntime as ort
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_PROVIDERS: tuple[str, ...] = ("CUDAExecutionProvider", "CPUExecutionProvider")
+
+# TensorRT acceleration (opt-in, Settings ▸ Detection ▸ "TensorRT"). Enabled
+# via the ISI3D_TRT=1 env var, which the process entry points set from
+# `detection.trt_enabled` — an env var (not a kwarg) so every call site
+# (plugins, pose overlay) inherits the decision without signature churn.
+# Requires an onnxruntime build that ships TensorrtExecutionProvider (the
+# conda-forge build does NOT; the pip onnxruntime-gpu wheel does) + TensorRT
+# 10.x libs for Blackwell. When unavailable, requests degrade to CUDA with a
+# one-time warning — the system NEVER fails to start over a missing TRT.
+_TRT_CACHE_DIR = os.environ.get(
+    "ISI3D_TRT_CACHE", str(Path(__file__).resolve().parents[2] / "models" / ".trt_cache"))
+_trt_warned = False
+
+
+def trt_available() -> bool:
+    return "TensorrtExecutionProvider" in ort.get_available_providers()
+
+
+def trt_requested() -> bool:
+    return os.environ.get("ISI3D_TRT", "").strip() in ("1", "true", "yes")
+
+
+def _trt_options() -> dict:
+    Path(_TRT_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+    return {
+        # fp16 engines (matches the deployed model precision); int8 QDQ models
+        # bring their own scales and are honored automatically by TRT.
+        "trt_fp16_enable": True,
+        # The engine + timing caches are NON-NEGOTIABLE here: a cold engine
+        # build takes minutes per model/shape, and isistream hot-restarts on
+        # every Settings save. Cached engines load in seconds.
+        "trt_engine_cache_enable": True,
+        "trt_engine_cache_path": _TRT_CACHE_DIR,
+        "trt_timing_cache_enable": True,
+        "trt_timing_cache_path": _TRT_CACHE_DIR,
+    }
 
 # Memory-safe CUDA provider options. kSameAsRequested keeps the arena tight so
 # concurrent sessions fit on a 12 GB card.
@@ -37,11 +79,34 @@ def resolve_providers(providers):
     """Return an ORT providers list with memory-safe options on the CUDA provider.
 
     Each ``CUDAExecutionProvider`` entry becomes a ``(name, options)`` tuple; every
-    other provider passes through unchanged.
+    other provider passes through unchanged. When TensorRT is requested
+    (``ISI3D_TRT=1``) and this ORT build ships the EP, it is prepended ahead of
+    the first CUDA entry (CUDA stays as the in-graph fallback for nodes TRT
+    can't take); requested-but-unavailable degrades to CUDA with one warning.
     """
+    global _trt_warned
     resolved = []
+    want_trt = trt_requested() and any(p == "CUDAExecutionProvider" for p in providers)
+    if want_trt and not trt_available():
+        if not _trt_warned:
+            _trt_warned = True
+            logger.warning(
+                "TensorRT requested (ISI3D_TRT=1) but this onnxruntime build has "
+                "no TensorrtExecutionProvider — running on CUDA. Install the pip "
+                "onnxruntime-gpu wheel + TensorRT 10 to enable it.")
+        want_trt = False
     for p in providers:
         if p == "CUDAExecutionProvider":
+            if want_trt:
+                # Preload the pip TensorRT libs into the process so ORT's EP
+                # dlopens them without LD_LIBRARY_PATH plumbing through every
+                # supervisor/systemd unit. Harmless if already loaded.
+                try:
+                    import tensorrt  # noqa: F401
+                except ImportError:
+                    pass
+                resolved.append(("TensorrtExecutionProvider", _trt_options()))
+                want_trt = False   # once, ahead of the first CUDA entry
             resolved.append((p, dict(_CUDA_OPTIONS)))
         else:
             resolved.append(p)

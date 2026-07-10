@@ -61,7 +61,8 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
         return None
     det_plugin = det_cfg.pop("plugin")
     for pose_key in ("pose_onnx_path", "pose_enabled", "pose_confidence_threshold",
-                     "pose_imgsz", "pose_every_n", "person_pallet_max_distance_m"):
+                     "pose_imgsz", "pose_every_n", "person_pallet_max_distance_m",
+                     "trt_enabled"):
         det_cfg.pop(pose_key, None)
     imgsz = det_cfg.pop("inference_imgsz", None)
     if imgsz:

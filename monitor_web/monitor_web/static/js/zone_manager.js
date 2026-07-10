@@ -243,6 +243,7 @@ function collectPayload() {
   // isistream perf toggles (default ON; a save applies them live).
   payload.motion_gate = el("zm-motion-gate")?.checked ?? true;
   payload.detect_substream = el("zm-detect-substream")?.checked ?? true;
+  payload.trt_enabled = el("zm-trt-enabled")?.checked ?? true;
   // S16: distance lines — always send the field (empty list clears the file).
   payload.link_lines = collectLinkLines();
   // Communication — MQTT broker + node identity.
@@ -419,6 +420,13 @@ function fillModelSection(det) {
     // Inert until a camera has a detect_source substream URL configured.
     ds.disabled = !isis.has_detect_source;
     ds.closest("label")?.classList.toggle("zm-disabled", !isis.has_detect_source);
+  }
+  const trt = el("zm-trt-enabled");
+  if (trt) {
+    trt.checked = isis.trt_enabled !== false;
+    // Greyed out until the env's onnxruntime ships the TensorRT EP.
+    trt.disabled = !isis.trt_available;
+    trt.closest("label")?.classList.toggle("zm-disabled", !isis.trt_available);
   }
   selectModelOption("zm-model-pose-onnx", det.pose_onnx_path || "");
   set("zm-model-pose-conf", det.pose_confidence_threshold ?? 0.3);
