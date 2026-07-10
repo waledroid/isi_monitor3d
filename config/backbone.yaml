@@ -59,7 +59,7 @@ detection:
   pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.onnx
   pose_imgsz: 640
   decode_masks: true
-  pose_enabled: true
+  pose_enabled: false
   trt_enabled: true
   zone_imgsz: 384
   sahi:
@@ -115,4 +115,4 @@ subscriptions_path: /home/aatanda/isi_monitor3d/config/mode2/subscriptions.yaml
 isistream:
   fps: 15.0
   motion_gate: true
-  detect_substream: true
+  detect_substream: false
