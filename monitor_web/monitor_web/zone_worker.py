@@ -12,9 +12,6 @@ One daemon thread per camera:
 
   - reads that camera's latest observations from the bus,
   - groups the object detections into zone polygons by containment (a per-zone
-    confidence acts as a DISPLAY floor — the Backbone publishes at its own low
-    threshold so the tracker sees weak evidence; a card/panel shouldn't flicker),
-  - resolves cross-zone overlaps at publish time (an object lands in exactly ONE
     zone — deepest polygon-centre wins via ``cv2.pointPolygonTest(measureDist)``),
   - publishes ONE atomic snapshot ``{"frame_ts": ts, "zones": {zone_id: [dets]}}``
     (fresh dict, single assignment → readers never see a half-written state),
@@ -262,11 +259,7 @@ class ZoneDetectionWorker:
         per_zone: dict[str, list] = {str(p.get("id")): [] for p in patches}
         statuses = {zid: "ok" for zid in per_zone}
         polys = {str(p.get("id")): _scaled_polygon(p, (iw, ih)) for p in patches}
-        # Per-zone confidence is a DISPLAY floor: the Backbone publishes at its
-        # own (low) threshold so the tracker sees weak evidence, but a zone
-        # card/panel shouldn't flicker on it. Unset ⇒ a sane display floor.
-        conf_floor = {str(p.get("id")): float(p.get("confidence") or 0.3)
-                      for p in patches}
+
 
         bus = self._bus_getter() if self._bus_getter is not None else None
         msg = None
@@ -305,8 +298,6 @@ class ZoneDetectionWorker:
                 cy = (det.bbox_xyxy[1] + det.bbox_xyxy[3]) / 2.0
                 for zid, poly in polys.items():
                     if poly is None or len(poly) < 3:
-                        continue
-                    if det.confidence < conf_floor.get(zid, 0.3):
                         continue
                     if cv2.pointPolygonTest(
                             poly.astype(np.float32), (float(cx), float(cy)),

@@ -82,6 +82,14 @@
             showMasks: ui.show_masks !== false,
             showNodes: ui.show_nodes !== false,
           };
+          // The SERVER owns the class palette — same colours as the zone
+          // panels and their twins (which are drawn server-side).
+          if (ui.class_colors && typeof ui.class_colors === "object") {
+            classColors = ui.class_colors;
+          }
+          if (typeof ui.class_color_default === "string") {
+            classColorDefault = ui.class_color_default;
+          }
         })
         .catch(() => { /* keep defaults */ });
     }
@@ -399,15 +407,25 @@
 
   // ---- overlay drawing -------------------------------------------------------
 
+  // MUST match monitor_web/overlay.py CLASS_COLORS_HEX — otherwise the same
+  // pallet is green on the zone panels (server-drawn) and blue on the cam
+  // views (client-drawn). The server sends the live palette on /api/ui-settings
+  // (`class_colors`); this table is the fallback and is pinned equal by a test.
+  const FALLBACK_CLASS_COLORS = {
+    palette: "#50dc50",
+    pallet: "#50dc50",
+    carton: "#ff7878",
+    polybag: "#78b4ff",
+    person: "#ffd54f",
+    forklift: "#ff7043",
+  };
+  const DEFAULT_CLASS_COLOR = "#ffffff";
+  let classColors = FALLBACK_CLASS_COLORS;
+  let classColorDefault = DEFAULT_CLASS_COLOR;
+
   function colorForClass(cls) {
-    switch (cls) {
-      case "person": return "#ffd54f";
-      case "forklift": return "#ff7043";
-      case "palette": case "pallet": return "#4fc3f7";
-      case "carton": return "#a5d6a7";
-      case "polybag": return "#ce93d8";
-      default: return "#ffffff";
-    }
+    const key = String(cls || "").toLowerCase();
+    return classColors[key] || classColorDefault;
   }
 
   function drawOverlay(s) {

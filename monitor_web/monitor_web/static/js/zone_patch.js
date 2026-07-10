@@ -9,7 +9,7 @@ import { startDraw } from "/static/js/draw_mode.js";
 
 const MAX_PATCHES = 6;   // max zones the operator can create (drawn on CAM)
 
-let patches = [];   // [{id, name, camera, polygon:[[u,v]..], rect:[x0,y0,x1,y1], frame_wh:[W,H], confidence, color}]
+let patches = [];   // [{id, name, camera, polygon:[[u,v]..], rect:[x0,y0,x1,y1], frame_wh:[W,H], color}]
 let panelStreamIds = [];   // /ws/video streams currently attached to the ZONE panels
 
 export function getPatches(camId) {
@@ -215,13 +215,8 @@ function renderSettingsList() {
             `<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>` +
         `</button>` +
       `</div>` +
-      /* ── controls line: confidence (display floor) · colour ─────────── */
+      /* ── controls line: colour ───────────────────────────────── */
       `<div class="czr-controls">` +
-        `<span class="czr-field czr-field--narrow">` +
-          `<label class="czr-label" title="Display confidence floor 0–1 (blank = default)">Conf</label>` +
-          `<input class="zm-conf" type="number" min="0" max="1" step="0.05"` +
-                ` value="${p.confidence ?? ""}" placeholder="—" />` +
-        `</span>` +
         `<span class="czr-field czr-field--color">` +
           `<label class="czr-label" title="Zone outline colour on the camera view">Color</label>` +
           `<input class="zm-color" type="color" value="${color}" />` +
@@ -240,14 +235,8 @@ function renderSettingsList() {
       `</div>`;
 
     row.querySelector(".zm-name").addEventListener("change", (e) => { p.name = e.target.value.trim(); save(); });
-    // Per-zone confidence is a DISPLAY floor on the Backbone's wire detections
-    // (one perception -- the dashboard never infers). It is the only per-zone
-    // knob left after the local-inference path was retired.
-    row.querySelector(".zm-conf").addEventListener("change", (e) => {
-      const v = parseFloat(e.target.value);
-      p.confidence = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;
-      save();
-    });
+    // No per-zone confidence: ONE global model with ONE threshold
+    // (Settings ▸ Isistream) serves every zone — the dashboard only renders.
     row.querySelector(".zm-color").addEventListener("change", (e) => { p.color = e.target.value; save(); });
     row.querySelector(".zm-delete").addEventListener("click", () => deletePatch(p.id));
     host.appendChild(row);

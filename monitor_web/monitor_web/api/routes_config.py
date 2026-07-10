@@ -41,6 +41,7 @@ from ..detection_overlay import (
     select_plugin,
 )
 from ..link_lines import LinkLineRule, parse_link_lines, rules_to_dict
+from ..overlay import CLASS_COLORS_HEX, DEFAULT_CLASS_COLOR_HEX
 
 logger = logging.getLogger(__name__)
 
@@ -990,13 +991,21 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
 def get_ui_settings(request: Request) -> JSONResponse:
     """Return the dashboard UI-preferences dict (e.g. {'mp4_selected': ...}).
 
+    Also carries ``class_colors`` — the SERVER's canonical per-class overlay
+    palette. The client-side cam-view renderer must use it so a pallet is the
+    same colour there as on the server-rendered zone panels and their twins.
+
     Notable keys (the store is a generic merge — any JS can add its own):
     - ``video_passthrough`` (default true when absent): the big CAM views use
       the compressed-video passthrough (``camh264:`` over /ws/video + WebCodecs
       decode + /ws/overlays client-side drawing). ``false`` forces the classic
       server-drawn JPEG path (passthrough_player.js never subscribes camh264).
     """
-    return JSONResponse(_read_ui_settings(request.app.state.settings))
+    data = dict(_read_ui_settings(request.app.state.settings))
+    # Server-owned, not an operator preference: the canonical overlay palette.
+    data["class_colors"] = dict(CLASS_COLORS_HEX)
+    data["class_color_default"] = DEFAULT_CLASS_COLOR_HEX
+    return JSONResponse(data)
 
 
 @router.post("/api/ui-settings")

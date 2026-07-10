@@ -89,9 +89,6 @@ class PatchRect(BaseModel):
     polygon: list[list[float]] | None = None                     # [[u,v], ...] source px
     frame_wh: list[int] | None = None                            # [W,H] drawn at (guard)
     color: str | None = None    # outline colour on the cam overlay (hex); None = red
-    # Per-zone DISPLAY confidence floor on the Backbone's wire detections (one
-    # perception — the dashboard never infers). None = a sane default floor.
-    confidence: float | None = None
     # Set on server-derived cross-camera twins (the base patch's id). Twins in
     # a POST are dropped and regenerated — never operator-authoritative.
     twin_of: str | None = None
@@ -218,7 +215,7 @@ def _load_rig(cfg):
 def _make_twin(patch: dict, rig) -> dict | None:
     """Derive the cross-camera twin of a patch: the ghost polygon (same floor
     region, other camera), clipped to that camera's frame, carrying the same
-    name/model/confidence so both workers detect the same physical zone."""
+    name so both workers render the same physical zone."""
     ghost = _patch_ghost(patch, rig)
     if ghost is None:
         return None
@@ -237,7 +234,6 @@ def _make_twin(patch: dict, rig) -> dict | None:
         "polygon": [[float(u), float(v)] for u, v in poly],
         "frame_wh": [int(gw), int(gh)],
         "color": patch.get("color"),
-        "confidence": patch.get("confidence"),
         "twin_of": patch["id"],
     }
 

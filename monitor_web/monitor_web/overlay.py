@@ -32,13 +32,30 @@ _BOX_COLOR = (80, 220, 80)  # BGR — default / unknown class
 _gpu_skip_log_ts = 0.0
 
 
-# Per-class overlay colours (BGR). The mask, box, and label all share the class
-# colour so each object class is instantly distinguishable.
-_CLASS_COLORS = {
-    "palette": (80, 220, 80),    # green
-    "carton": (120, 120, 255),   # light red
-    "polybag": (255, 180, 120),  # light blue
+# THE canonical per-class overlay palette, as #rrggbb. Every renderer — the
+# server-side zone panels (Python/OpenCV) AND the client-side cam views
+# (JS/canvas) — must use these, or the same pallet appears green in one view
+# and blue in another (it did). Served to the browser via /api/ui-settings so
+# there is exactly one source of truth; the JS keeps an identical fallback
+# table, pinned equal by a test.
+CLASS_COLORS_HEX: dict[str, str] = {
+    "palette": "#50dc50",    # green
+    "pallet": "#50dc50",     # alias
+    "carton": "#ff7878",     # light red
+    "polybag": "#78b4ff",    # light blue
+    "person": "#ffd54f",     # amber
+    "forklift": "#ff7043",   # orange
 }
+DEFAULT_CLASS_COLOR_HEX = "#ffffff"
+
+
+def _hex_to_bgr(value: str) -> tuple[int, int, int]:
+    v = value.lstrip("#")
+    r, g, b = int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)
+    return (b, g, r)
+
+
+_CLASS_COLORS = {k: _hex_to_bgr(v) for k, v in CLASS_COLORS_HEX.items()}
 
 
 def _color_for(cls) -> tuple[int, int, int]:
