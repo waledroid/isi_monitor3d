@@ -29,7 +29,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -46,6 +45,7 @@ from .detection_overlay import (
     read_backbone,
     resolve_model,
 )
+from .yaml_cache import load_yaml_cached
 
 # Default loop cadence when the UI "Zones FPS" preference is absent. The worker
 # paces its loop at the editable ``display_fps(cfg)`` value (Zones-FPS field in
@@ -109,7 +109,7 @@ _PEOPLE_BRIDGE_S = 1.0
 def _zone_source(cfg) -> str:
     """Read the zone-detection source preference from the UI-settings YAML."""
     try:
-        data = yaml.safe_load(Path(cfg.ui_settings_path).read_text()) or {}
+        data = load_yaml_cached(cfg.ui_settings_path)
         val = str(data.get(ZONE_SOURCE_KEY, ZONE_SOURCE_DEFAULT)).lower()
         return val if val in ("backbone", "local") else ZONE_SOURCE_DEFAULT
     except Exception:
@@ -1185,12 +1185,11 @@ class ZoneWorkerManager:
                     worker.set_patches(cam_patches, src_cfg=src_cfg)
 
     def _load_cameras(self) -> dict[str, dict]:
-        import yaml
         path = self._cfg.backbone_config_path
         try:
             if not path.exists():
                 return {}
-            data = yaml.safe_load(path.read_text()) or {}
+            data = load_yaml_cached(path)
         except (OSError, yaml.YAMLError):
             return {}
         cams = data.get("cameras", {})

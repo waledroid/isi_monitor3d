@@ -50,7 +50,7 @@ zone_patches:
     frame_wh:
     - 1280
     - 720
-    model: null
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
     infer_size: 320
     color: null
     confidence: 0.1
@@ -80,7 +80,7 @@ zone_patches:
     frame_wh:
     - 1280
     - 720
-    model: null
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
     infer_size: 320
     color: '#06fe44'
     confidence: 0.1
@@ -206,7 +206,7 @@ zone_patches:
     frame_wh:
     - 1920
     - 1080
-    model: null
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
     infer_size: 320
     color: null
     confidence: 0.1
@@ -249,7 +249,7 @@ zone_patches:
     frame_wh:
     - 1920
     - 1080
-    model: null
+    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
     infer_size: 320
     color: '#06fe44'
     confidence: 0.1
@@ -296,4 +296,4 @@ alignment_refinement:
   refined_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
 gateway_url: ''
 gateway_token: ''
-zone_detection_source: local
+zone_detection_source: backbone

@@ -58,6 +58,10 @@ def _placeholder_frame(text: str) -> np.ndarray:
 # While on our OWN source, peek at the frame bus this often — when the
 # perception producer comes up we hand over and close the duplicate session.
 _BUS_RECHECK_S = 5.0
+# How long the bus may stay unreadable before the hub falls back to its own
+# RTSP source. Must exceed FrameShmReader's staleness window so a transient
+# miss never triggers a teardown.
+_BUS_GIVE_UP_S = 3.0
 
 
 def _cfg_key(src_cfg: dict) -> tuple:
@@ -234,18 +238,33 @@ class CameraStream:
             return False
         logger.info("camhub %s: streaming from the shared frame bus", self.camera_id)
         last_ts = 0.0
+        last_good = time.monotonic()
         while not self._stop.is_set():
-            got = reader.latest()
+            # Cheap header peek first: copy the 2.8 MB frame ONLY when a new
+            # one exists. Polling with a full copy cost ~half a core.
+            peek = reader.peek_ts()
+            if peek is not None and peek <= last_ts:
+                self._stop.wait(0.004)
+                continue
+            got = reader.latest() if peek is not None else None
             if got is None:
-                logger.info("camhub %s: frame bus stale — falling back to own source",
-                            self.camera_id)
-                return True
+                # A single miss is NOT a dead writer (mid-write, remap, a
+                # producer restart). Only give up once the bus has been
+                # unreadable for the whole staleness window — otherwise the
+                # hub tore down the bus and re-opened RTSP on every hiccup
+                # ("frame bus stale → streaming from the shared frame bus"
+                # flapping, and a placeholder frame blinked into the panels).
+                if time.monotonic() - last_good > _BUS_GIVE_UP_S:
+                    logger.info("camhub %s: frame bus gone — falling back to own source",
+                                self.camera_id)
+                    return True
+                self._stop.wait(0.01)
+                continue
+            last_good = time.monotonic()
             image, ts = got
             if ts > last_ts:
                 last_ts = ts
                 self._publish(image, capture_ts=ts)
-            else:
-                self._stop.wait(0.005)
         return True
 
     # ---- reader (multi consumer) ----

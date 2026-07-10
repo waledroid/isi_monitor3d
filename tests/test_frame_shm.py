@@ -111,3 +111,19 @@ def test_reader_returns_writable_frames(tmp_path):
     assert np.array_equal(again, src)
     w.close()
     r.close()
+
+
+def test_peek_ts_is_cheap_and_matches_latest(tmp_path):
+    """Pollers must be able to ask 'is there a new frame?' without copying."""
+    w = FrameShmWriter("cam_t", directory=str(tmp_path))
+    r = FrameShmReader("cam_t", directory=str(tmp_path))
+    assert r.peek_ts() is None                      # nothing written yet
+    ts = time.time()
+    w.write(_img(), ts)
+    assert r.peek_ts() == ts
+    frame, got_ts = r.latest()
+    assert got_ts == ts and frame is not None
+    w.write(_img(seed=3), ts + 0.04)
+    assert r.peek_ts() == ts + 0.04
+    w.close()
+    r.close()

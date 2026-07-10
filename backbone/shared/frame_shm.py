@@ -27,6 +27,7 @@ import logging
 import mmap
 import os
 import struct
+import time
 
 import numpy as np
 
@@ -136,7 +137,6 @@ class FrameShmReader:
     def latest(self, *, now: float | None = None) -> tuple[np.ndarray, float] | None:
         """Newest ``(frame_copy, capture_ts)``, or ``None`` when the bus is
         absent, stale (writer dead), or mid-resize."""
-        import time
         now = time.time() if now is None else now
         mm = self._map()
         if mm is None:
@@ -152,10 +152,19 @@ class FrameShmReader:
             self._remap()                    # resolution changed → remap once
             return None
         off = _HEADER.size + latest * slot_span
-        for _ in range(3):                   # seqlock retry on torn reads
+        for attempt in range(4):             # seqlock retry on torn reads
             seq0, ts = _SLOT_HDR.unpack_from(mm, off)
-            if seq0 == 0 or seq0 % 2 == 1:
-                return None                  # never written / mid-write
+            if seq0 == 0:
+                return None                  # never written
+            if seq0 % 2 == 1:
+                # Writer is INSIDE this slot right now. That is a microsecond
+                # event, not a dead writer — retry instead of reporting the
+                # bus dead (a spurious None made the camera hub tear down the
+                # bus and re-open RTSP: the "frame bus stale" flapping).
+                if attempt == 3:
+                    return None
+                time.sleep(0.0005)
+                continue
             if now - ts > self._max_age_s:
                 return None                  # writer dead → fall back
             # Copy straight into a WRITABLE array. `np.frombuffer` over the
@@ -174,8 +183,32 @@ class FrameShmReader:
                 return frame.reshape(shape), ts
         return None
 
+    def peek_ts(self) -> float | None:
+        """``capture_ts`` of the newest frame WITHOUT copying it (reads 16
+        header bytes). Pollers must use this and only call :meth:`latest`
+        when the timestamp advanced — a poll loop that copies 2.8 MB at
+        200 Hz burns half a core for nothing."""
+        mm = self._map()
+        if mm is None:
+            return None
+        try:
+            magic, version, w, h, c, latest = _HEADER.unpack_from(mm, 0)
+        except struct.error:
+            return None
+        if magic != _MAGIC or version != _VERSION or latest not in (0, 1):
+            return None
+        slot_span, _frame_bytes, total = _layout(w, h, c)
+        if self._size != total:
+            return None
+        seq, ts = _SLOT_HDR.unpack_from(mm, _HEADER.size + latest * slot_span)
+        if seq == 0 or seq % 2 == 1:
+            return None                  # never written / mid-write
+        return ts
+
     def fresh(self, *, now: float | None = None) -> bool:
-        return self.latest(now=now) is not None
+        ts = self.peek_ts()
+        now = time.time() if now is None else now
+        return ts is not None and (now - ts) <= self._max_age_s
 
     def close(self) -> None:
         if self._mm is not None:

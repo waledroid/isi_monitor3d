@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import yaml
+from .yaml_cache import load_yaml_cached
 
 logger = logging.getLogger(__name__)
 
@@ -142,13 +142,8 @@ def latest_trained_openvino() -> str | None:
 
 
 def read_backbone(cfg) -> dict:
-    path = Path(cfg.backbone_config_path)
-    if not path.exists():
-        return {}
-    try:
-        return yaml.safe_load(path.read_text()) or {}
-    except (OSError, yaml.YAMLError):
-        return {}
+    """backbone.yaml as a dict — mtime-cached (read from hot paths)."""
+    return load_yaml_cached(cfg.backbone_config_path)
 
 
 def resolve_model(model_path: str, cfg) -> Path | None:

@@ -21,6 +21,7 @@ from .engines import (
 from .model_store import (
     read_backbone,
 )
+from .yaml_cache import load_yaml_cached
 
 logger = logging.getLogger(__name__)
 
@@ -348,15 +349,14 @@ def annotate_frame(image, detector, cam_id: str = "cam",
 
 
 def _ui_pref(cfg, key: str, default: bool = True) -> bool:
-    """Read one boolean preference from the UI-settings YAML; default if missing."""
-    path = Path(cfg.ui_settings_path)
-    if not path.exists():
-        return default
-    try:
-        data = yaml.safe_load(path.read_text()) or {}
-    except (OSError, yaml.YAMLError):
-        return default
-    if not isinstance(data, dict):
+    """Read one boolean preference from the UI-settings YAML; default if missing.
+
+    Cached by file mtime (``yaml_cache``): this is called several times PER
+    FRAME PER STREAM, and an uncached parse of the settings file costs ~18 ms
+    of GIL-held work — enough to starve the event loop outright.
+    """
+    data = load_yaml_cached(cfg.ui_settings_path)
+    if not data:
         return default
     return bool(data.get(key, default))
 
@@ -397,7 +397,7 @@ def display_fps(cfg) -> float:
     val = 10.0
     if path.exists():
         try:
-            data = yaml.safe_load(path.read_text()) or {}
+            data = load_yaml_cached(path)
             if isinstance(data, dict) and data.get("display_fps") is not None:
                 val = float(data["display_fps"])
         except (OSError, yaml.YAMLError, TypeError, ValueError):
@@ -433,7 +433,7 @@ def distance_line_style(cfg) -> dict:
     opacity, color, thickness = 0.25, (255, 255, 255), 2
     if path.exists():
         try:
-            data = yaml.safe_load(path.read_text()) or {}
+            data = load_yaml_cached(path)
             if isinstance(data, dict):
                 if data.get("distance_line_opacity") is not None:
                     opacity = float(data["distance_line_opacity"])
