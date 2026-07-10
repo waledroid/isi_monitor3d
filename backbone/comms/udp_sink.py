@@ -108,8 +108,11 @@ class UdpSink(MetadataSink):
         zone: str,
         ts: float,
         url: str,
+        zone_id: str = "",
     ) -> None:
-        msg = ImageRefMessage(track_id=track_id, cls=cls, zone=zone, ts=ts, url=url)
+        msg = ImageRefMessage(
+            track_id=track_id, cls=cls, zone=zone, zone_id=zone_id, ts=ts, url=url
+        )
         self._send(msg.model_dump_json().encode("utf-8"))
 
     def publish_zone_state(self, msg: object) -> None:

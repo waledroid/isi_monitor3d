@@ -378,10 +378,15 @@ class Orchestrator:
         # Metadata.
         meta_cfg = cfg.get("metadata", {})
         self._area: str = meta_cfg.get("area", "")
+        # Whether MQTT zone topics embed the STABLE zone id (default) or the
+        # renamable name. Node-wide default, per-sink overridable in sink_cfg.
+        mqtt_topic_zone = str(meta_cfg.get("mqtt_topic_zone", "id"))
         sinks = []
         for sink_cfg in meta_cfg.get("sinks", []):
             sink_cfg = dict(sink_cfg)
             plugin = sink_cfg.pop("plugin")
+            if plugin == "mqtt":
+                sink_cfg.setdefault("topic_zone", mqtt_topic_zone)
             sinks.append(metadata_sink_registry.create(plugin, **sink_cfg))
         if not sinks:
             raise ValueError(
@@ -550,6 +555,7 @@ class Orchestrator:
             zone_specs.append(
                 ZoneSpec(
                     name=z.name,
+                    zone_id=z.id,
                     kind=z.kind,
                     type=z.type,
                     severity=z.severity,
@@ -923,7 +929,7 @@ class Orchestrator:
             self._publisher.publish_track_2d(track)
             if not need_membership:
                 continue
-            membership = self._zones.which(track.xy_m)
+            membership = self._zones.which_ids(track.xy_m)
             memberships[track.track_id] = membership
             if self._passings_enabled:
                 for ev in self._transitions.update(
@@ -944,7 +950,8 @@ class Orchestrator:
                         )
                         if url is not None:
                             self._publisher.publish_image_ref(
-                                ev.track_id, ev.cls, ev.zone, ev.ts, url
+                                ev.track_id, ev.cls, ev.zone, ev.ts, url,
+                                zone_id=ev.zone_id,
                             )
         if self._passings_enabled:
             self._transitions.forget({t.track_id for t in tracks_2d})

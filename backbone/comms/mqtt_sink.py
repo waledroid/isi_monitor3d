@@ -27,6 +27,13 @@ The templates are user-configurable; ``{prefix}`` and ``{cls}`` are the only
 substitution tokens. ``track_id`` intentionally does NOT appear in the topic by
 default: per-class fan-out at the broker keeps subscriber cardinality O(classes),
 not O(objects).
+
+**Zone topic segment (``{zone}``).** ``topic_zone`` selects what fills the
+``{zone}`` slot on zone-state / passing / image topics: ``"id"`` (default) uses
+the STABLE zone id so a rename never moves the topic (nor orphans retained
+zone-state), ``"name"`` restores the legacy operator-label segment. Rollback for
+existing name-keyed subscribers: set ``metadata.mqtt_topic_zone: name`` and
+restart. Either way the id AND name are both inside the JSON payload.
 """
 
 from __future__ import annotations
@@ -86,6 +93,7 @@ class MqttSink(MetadataSink):
         proximity_topic: str = "{prefix}/proximity",
         diag_topic: str = "{prefix}/diagnostics/heartbeat",
         config_topic: str = "{prefix}/config",
+        topic_zone: str = "id",
     ) -> None:
         """Initialise and start the MQTT client background thread.
 
@@ -143,10 +151,16 @@ class MqttSink(MetadataSink):
                            supports ``{prefix}``.  Always published with
                            ``retain=True`` regardless of the instance ``retain``
                            flag.  Default: ``"{prefix}/config"``.
+            topic_zone:    ``"id"`` (default) fills the ``{zone}`` topic segment
+                           with the STABLE zone id so a rename never moves the
+                           topic; ``"name"`` restores the legacy operator-label
+                           segment (rollback for existing subscribers). The id
+                           and name are always both in the JSON payload. When an
+                           id is missing (legacy payload) it falls back to name.
 
         Raises:
-            ValueError: If ``port`` is outside (0, 65536) or ``qos`` is not
-                        one of 0, 1, 2.
+            ValueError: If ``port`` is outside (0, 65536), ``qos`` is not one of
+                        0, 1, 2, or ``topic_zone`` is not ``"id"``/``"name"``.
         """
         if not (0 < port < 65536):
             raise ValueError(f"port must be in (0, 65535], got {port}")
@@ -154,6 +168,8 @@ class MqttSink(MetadataSink):
             raise ValueError(f"qos must be 0, 1, or 2, got {qos}")
         if zone_state_qos not in (0, 1, 2):
             raise ValueError(f"zone_state_qos must be 0, 1, or 2, got {zone_state_qos}")
+        if topic_zone not in ("id", "name"):
+            raise ValueError(f"topic_zone must be 'id' or 'name', got {topic_zone!r}")
 
         self._host = host
         self._port = int(port)
@@ -169,6 +185,7 @@ class MqttSink(MetadataSink):
         self._proximity_topic = proximity_topic
         self._diag_topic = diag_topic
         self._config_topic = config_topic
+        self._topic_zone = topic_zone
         self._ca_cert = ca_cert
         self._tls_insecure = tls_insecure
         self._closed = False
@@ -209,6 +226,15 @@ class MqttSink(MetadataSink):
                 exc_info=True,
             )
 
+    def _zone_segment(self, zone_name: str, zone_id: str) -> str:
+        """Sanitised ``{zone}`` topic segment — id (stable) or name per config.
+
+        Falls back to the name when ``topic_zone="id"`` but no id is present
+        (a legacy payload), so a topic is always produced.
+        """
+        seg = zone_id if (self._topic_zone == "id" and zone_id) else zone_name
+        return _sanitize_cls(seg)
+
     # ------------------------------------------------------------------
     # MetadataSink implementation
     # ------------------------------------------------------------------
@@ -240,7 +266,7 @@ class MqttSink(MetadataSink):
         msg = PassingEventMessage.from_event(event)
         topic = self._event_topic.format(
             prefix=self._prefix,
-            zone=_sanitize_cls(msg.zone),   # reuse the same sanitiser
+            zone=self._zone_segment(msg.zone, msg.zone_id),
         )
         self._publish(topic, msg.model_dump_json().encode("utf-8"))
 
@@ -251,16 +277,20 @@ class MqttSink(MetadataSink):
         zone: str,
         ts: float,
         url: str,
+        zone_id: str = "",
     ) -> None:
         """Publish an ``ImageRefMessage`` (URL only, never raw bytes).
 
         The ``{zone}`` and ``{track_id}`` tokens in the topic template are
-        populated; zone is sanitised so MQTT wildcard chars can't appear.
+        populated; the zone segment follows ``topic_zone`` (id or name) and is
+        sanitised so MQTT wildcard chars can't appear.
         """
-        msg = ImageRefMessage(track_id=track_id, cls=cls, zone=zone, ts=ts, url=url)
+        msg = ImageRefMessage(
+            track_id=track_id, cls=cls, zone=zone, zone_id=zone_id, ts=ts, url=url
+        )
         topic = self._image_topic.format(
             prefix=self._prefix,
-            zone=_sanitize_cls(zone),
+            zone=self._zone_segment(zone, zone_id),
             track_id=track_id,
         )
         self._publish(topic, msg.model_dump_json().encode("utf-8"))
@@ -276,7 +306,7 @@ class MqttSink(MetadataSink):
         assert isinstance(msg, ZoneStateMessage)
         topic = self._zone_state_topic.format(
             prefix=self._prefix,
-            zone=_sanitize_cls(msg.zone),
+            zone=self._zone_segment(msg.zone, msg.zone_id),
         )
         payload = msg.model_dump_json().encode("utf-8")
         try:

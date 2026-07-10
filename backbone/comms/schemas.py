@@ -63,7 +63,14 @@ message shapes are unchanged; ``parse_envelope`` accepts both v3 and v4.
 v5: added ``ProximityMessage`` (person↔object floor distances — the safety
 signal). Additive; all prior shapes unchanged.
 v6: added ``ObservationsMessage`` (per-camera raw detections for display
-consumers — one perception, rendered everywhere). Additive; UDP-only."""
+consumers — one perception, rendered everywhere). Additive; UDP-only.
+
+Within v6 (no bump — additive + default-valued): ``zone_id`` (STABLE zone
+identity) added to ``ZoneStateMessage``, ``PassingEventMessage``,
+``ImageRefMessage`` and ``ZoneSpec``. Consumers MUST key zone semantics on
+``zone_id`` (immutable), not ``zone`` (the renamable operator label). It
+defaults to "" so a payload from a pre-id Backbone still parses; the current
+Backbone always populates it."""
 
 _ACCEPTED_VERSIONS = frozenset({3, 4, 5, 6})
 
@@ -181,6 +188,11 @@ class PassingEventMessage(BaseModel):
     track_id: int = Field(..., ge=0)
     cls: str
     zone: str
+    # STABLE zone identity — consumers (AGV/WMS) MUST key on this, not ``zone``
+    # (the human label, which is freely renamable). Defaulted "" so a legacy
+    # v6 payload from a pre-id Backbone still parses; the current Backbone
+    # always populates it. See module docstring / the parse_envelope note.
+    zone_id: str = ""
     direction: Literal["enter", "leave"]
 
     @classmethod
@@ -191,6 +203,7 @@ class PassingEventMessage(BaseModel):
             track_id=int(event.track_id),  # type: ignore[attr-defined]
             cls=str(event.cls),            # type: ignore[attr-defined]
             zone=str(event.zone),          # type: ignore[attr-defined]
+            zone_id=str(getattr(event, "zone_id", "")),
             direction=str(event.direction),  # type: ignore[attr-defined]
         )
 
@@ -214,6 +227,9 @@ class ImageRefMessage(BaseModel):
     track_id: int = Field(..., ge=0)
     cls: str
     zone: str
+    # STABLE zone identity — mirrors ``PassingEventMessage`` so the image
+    # topic segment tracks the zone by id, not name. Defaulted "" for legacy.
+    zone_id: str = ""
     url: str = Field(..., description="URL of the saved JPEG snapshot (no image bytes)")
 
 
@@ -252,6 +268,11 @@ class ZoneStateMessage(BaseModel):
     type: Literal[MessageType.ZONE_STATE] = MessageType.ZONE_STATE
     ts: float = Field(..., description="capture_ts of the frame producing this state")
     zone: str
+    # STABLE zone identity — see ``PassingEventMessage.zone_id``. On MQTT the
+    # topic segment is derived from this id (config ``metadata.mqtt_topic_zone``)
+    # so a rename never orphans the zone's retained state. Defaulted "" so a
+    # legacy v6 payload still parses.
+    zone_id: str = ""
     objects: tuple[ZoneObject, ...]
     count: int = Field(..., ge=0, description="len(objects) — consumer convenience")
 
@@ -273,6 +294,7 @@ class ZoneStateMessage(BaseModel):
         return cls(
             ts=float(state.ts),      # type: ignore[attr-defined]
             zone=str(state.zone),    # type: ignore[attr-defined]
+            zone_id=str(getattr(state, "zone_id", "")),
             objects=objects,
             count=len(objects),
         )
@@ -529,6 +551,11 @@ class ZoneSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str
+    # STABLE zone identity — makes the retained ConfigMessage advert
+    # self-describing by id, so a gateway can join zone_state/passing topics
+    # (keyed by id) back to a named, polygon-carrying zone. Defaulted "" so a
+    # legacy retained advert on the broker still parses.
+    zone_id: str = ""
     kind: str
     type: str
     severity: str

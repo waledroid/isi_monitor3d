@@ -62,6 +62,29 @@ def test_get_empty_then_post_then_get(app_cfg):
         assert got[0]["id"] == "z1" and got[0]["rect"] == [100, 80, 400, 300]
 
 
+def test_delete_leaves_other_patch_ids_and_names_unchanged(app_cfg):
+    """Deleting one zone (re-POSTing the survivors, mirroring the UI) must not
+    rename or reorder any other zone — every id AND label is preserved. This
+    pins the fix for the positional-identity bug (no `length + 1` renumber)."""
+    app, _ = app_cfg
+    with TestClient(app) as client:
+        rois = [
+            {"id": "zp_a", "name": "Zone 1", "camera": "cam_a",
+             "rect": [10, 10, 100, 100], "frame_wh": [1920, 1080]},
+            {"id": "zp_b", "name": "Zone 2", "camera": "cam_a",
+             "rect": [200, 10, 300, 100], "frame_wh": [1920, 1080]},
+            {"id": "zp_c", "name": "custom label", "camera": "cam_a",
+             "rect": [400, 10, 500, 100], "frame_wh": [1920, 1080]},
+        ]
+        client.post("/api/zone-patches", json={"patches": rois})
+        # Delete "Zone 1" → the client re-POSTs the remaining two verbatim.
+        client.post("/api/zone-patches", json={"patches": rois[1:]})
+        got = {p["id"]: p["name"]
+               for p in client.get("/api/zone-patches").json()["patches"]}
+        assert got == {"zp_b": "Zone 2", "zp_c": "custom label"}
+        # "Zone 2" was NOT renumbered down to "Zone 1"; the custom name survived.
+
+
 def test_stream_unknown_patch_404(app_cfg):
     app, _ = app_cfg
     with TestClient(app) as client:

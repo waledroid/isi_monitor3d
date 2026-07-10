@@ -32,7 +32,9 @@ def _track(track_id: int = 1, xy: tuple[float, float] = (1.0, 1.0), *,
 
 def _feed(tracker: ZoneStateTracker, tracks: list[Track2D], ts: float):
     zones = _zones()
-    return tracker.update([(t, zones.which(t.xy_m)) for t in tracks], ts)
+    # Membership is now keyed by STABLE zone id (which_ids), mirroring the
+    # orchestrator — the tracker keys its internal state by id.
+    return tracker.update([(t, zones.which_ids(t.xy_m)) for t in tracks], ts)
 
 
 def test_initial_states_one_empty_per_zone() -> None:
@@ -138,10 +140,51 @@ def test_zone_state_message_from_state() -> None:
     state = _feed(tracker, [_track(7, occupancy_state="full")], ts=1.0)[0]
     msg = ZoneStateMessage.from_state(state)
     assert msg.zone == "dock"
+    assert msg.zone_id == "dock"          # stable id carried onto the wire
     assert msg.count == 1
     assert msg.objects[0].track_id == 7
     assert msg.objects[0].occupancy_state == "full"
     assert msg.ts == 1.0
+
+
+def _named_zones() -> ZoneRegistry:
+    """One zone whose display NAME differs from its stable id."""
+    square = np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]])
+    return ZoneRegistry([Zone(name="Zone 1", type="palette", polygon=square, id="z1")])
+
+
+def test_state_carries_stable_id_and_display_name() -> None:
+    zones = _named_zones()
+    tracker = ZoneStateTracker(zones)
+    tracker.initial_states(ts=0.0)
+    states = tracker.update([(_track(7, (1.0, 1.0)), zones.which_ids((1.0, 1.0)))], ts=1.0)
+    assert len(states) == 1
+    assert states[0].zone == "Zone 1"     # display label
+    assert states[0].zone_id == "z1"      # stable identity
+
+
+def test_rename_does_not_republish_or_reset_state() -> None:
+    """Renaming a zone (same id) keeps its occupancy signature — no spurious publish.
+
+    The tracker keys its change detector by id, so swapping the registry to
+    one where id "z1" has a new NAME leaves the signature unchanged: an
+    unchanged occupied zone within the refresh window republishes nothing.
+    """
+    tracker = ZoneStateTracker(_named_zones(), refresh_interval_s=100.0)
+    tracker.initial_states(ts=0.0)
+    zones = _named_zones()
+    tracker.update([(_track(7, (1.0, 1.0)), zones.which_ids((1.0, 1.0)))], ts=1.0)
+
+    # Operator renames "Zone 1" → "Loading Bay"; id "z1" preserved.
+    renamed = ZoneRegistry([
+        Zone(name="Loading Bay", type="palette",
+             polygon=np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]), id="z1")
+    ])
+    tracker._zones = renamed
+    states = tracker.update(
+        [(_track(7, (1.1, 1.1)), renamed.which_ids((1.1, 1.1)))], ts=1.5
+    )
+    assert states == []   # identity stable ⇒ no reset, no spurious republish
 
 
 def test_six_zones_per_node_all_monitored() -> None:
@@ -169,7 +212,7 @@ def test_six_zones_per_node_all_monitored() -> None:
     # One object in each of the 6 zones → 6 independent states, right occupants.
     tracks = [
         (_track(track_id=i, xy=(i * 10.0 + 1.0, i * 10.0 + 1.0)),
-         zones.which((i * 10.0 + 1.0, i * 10.0 + 1.0)))
+         zones.which_ids((i * 10.0 + 1.0, i * 10.0 + 1.0)))
         for i in range(1, 7)
     ]
     states = tracker.update(tracks, ts=1.0)

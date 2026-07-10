@@ -268,7 +268,12 @@ class BusSubscriber:
             elif isinstance(msg, Track3DMessage):
                 self._state.last_track3d_by_id[msg.track_id] = msg
             elif isinstance(msg, ZoneStateMessage):
-                self._state.zone_state_by_zone[msg.zone] = msg
+                # Key by the wire's STABLE zone_id when present (immutable id —
+                # survives a rename, unique after a delete); fall back to the
+                # name for legacy payloads that predate the zone_id field.
+                self._state.zone_state_by_zone[
+                    getattr(msg, "zone_id", "") or msg.zone
+                ] = msg
             elif isinstance(msg, ObservationsMessage):
                 self._state.observations_by_camera[msg.camera_id] = msg
             elif isinstance(msg, DiagnosticsMessage):

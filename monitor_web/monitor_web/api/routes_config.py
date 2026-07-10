@@ -126,6 +126,10 @@ class CameraConfig(BaseModel):
 
 
 class ZoneConfig(BaseModel):
+    # Immutable identity, generated once on the client at creation. External
+    # systems key on it, so it must survive renames + never renumber on delete.
+    # None ⇒ legacy zone; the Backbone's loader derives an id from the name.
+    id: str | None = None
     name: str = Field(..., min_length=1)
     type: str = "palette"
     kind: Literal["palette", "etagere", "danger"] = "palette"
@@ -426,6 +430,7 @@ def get_config(request: Request) -> JSONResponse:
             continue
         zones_out.append(
             {
+                "id": z.get("id"),
                 "name": z.get("name", ""),
                 "type": z.get("type", "palette"),
                 "kind": z.get("kind", "palette"),
@@ -889,6 +894,10 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
         zones_doc = {
             "zones": [
                 {
+                    # Persist the immutable id when the client supplies one so
+                    # identity survives renames/reorders; omit for legacy zones
+                    # (the loader then slugs one from the name).
+                    **({"id": z.id} if z.id else {}),
                     "name": z.name,
                     "type": z.type,
                     "kind": z.kind,

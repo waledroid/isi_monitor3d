@@ -61,6 +61,35 @@ def test_passing_event_fields() -> None:
     assert ev.ts == pytest.approx(42.5)
 
 
+def test_event_carries_stable_zone_id() -> None:
+    """Every emitted event tags the STABLE id alongside the display name."""
+    det = ZoneTransitionDetector(
+        ZoneRegistry([Zone("Zone 1", "storage", _SQUARE_B3D, id="z-stable-1")])
+    )
+    events = det.update(track_id=1, cls="person", xy_m=(1.0, 1.0), ts=1.0)
+    assert len(events) == 1
+    assert events[0].zone == "Zone 1"
+    assert events[0].zone_id == "z-stable-1"
+
+
+def test_rename_zone_emits_no_spurious_events() -> None:
+    """Renaming a zone (id unchanged) must NOT fire a leave-old/enter-new pair.
+
+    The detector keys internal membership by id, so swapping the registry to
+    one where the same id carries a new NAME leaves membership unchanged.
+    """
+    det = ZoneTransitionDetector(
+        ZoneRegistry([Zone("Zone 1", "storage", _SQUARE_B3D, id="z1")])
+    )
+    e1 = det.update(track_id=1, cls="person", xy_m=(1.0, 1.0), ts=1.0)
+    assert [ev.direction for ev in e1] == ["enter"]
+
+    # Operator renames "Zone 1" → "Loading Bay"; id "z1" is preserved.
+    det._zones = ZoneRegistry([Zone("Loading Bay", "storage", _SQUARE_B3D, id="z1")])
+    e2 = det.update(track_id=1, cls="person", xy_m=(1.1, 1.1), ts=2.0)
+    assert e2 == []   # no spurious leave/enter — identity is stable
+
+
 # ---------------------------------------------------------------------------
 # ZoneTransitionDetector.update — core behaviour
 # ---------------------------------------------------------------------------

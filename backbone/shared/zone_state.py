@@ -47,11 +47,16 @@ class ZoneOccupant:
 
 @dataclass(frozen=True)
 class ZoneState:
-    """The current contents of one zone at time ``ts``."""
+    """The current contents of one zone at time ``ts``.
+
+    ``zone_id`` is the STABLE identity (consumers key on it); ``zone`` is the
+    current operator label, carried for display.
+    """
 
     zone: str
     ts: float
     occupants: tuple[ZoneOccupant, ...]
+    zone_id: str = ""
 
 
 def _occupant(track: Track2D) -> ZoneOccupant:
@@ -104,7 +109,8 @@ class ZoneStateTracker:
     def __init__(self, zones: ZoneRegistry, refresh_interval_s: float = 1.0) -> None:
         self._zones = zones
         self._refresh_interval_s = float(refresh_interval_s)
-        # Per zone: the signature of the last published state + its publish ts.
+        # Per zone ID (STABLE — renaming a zone must not reset its state): the
+        # signature of the last published state + its publish ts.
         self._prev_sig: dict[str, tuple] = {}
         self._last_pub_ts: dict[str, float] = {}
 
@@ -115,10 +121,11 @@ class ZoneStateTracker:
         publish zones that actually gain occupants.
         """
         states = []
-        for name in self._zones.names:
-            states.append(ZoneState(zone=name, ts=ts, occupants=()))
-            self._prev_sig[name] = ()
-            self._last_pub_ts[name] = ts
+        for zid in self._zones.ids:
+            name = self._zones.name_of(zid) or zid
+            states.append(ZoneState(zone=name, ts=ts, occupants=(), zone_id=zid))
+            self._prev_sig[zid] = ()
+            self._last_pub_ts[zid] = ts
         return states
 
     def update(
@@ -130,28 +137,29 @@ class ZoneStateTracker:
 
         Args:
             tracks: This frame's stabilized tracks, each with its precomputed
-                zone membership (``ZoneRegistry.which(track.xy_m)``) so
-                point-in-polygon runs once per track for both this tracker
-                and the transition detector.
+                zone membership (``ZoneRegistry.which_ids(track.xy_m)`` — zone
+                IDS) so point-in-polygon runs once per track for both this
+                tracker and the transition detector.
             ts:     Frame capture timestamp.
         """
-        occupants: dict[str, list[ZoneOccupant]] = {name: [] for name in self._zones.names}
+        occupants: dict[str, list[ZoneOccupant]] = {zid: [] for zid in self._zones.ids}
         for track, member_zones in tracks:
-            for zone in member_zones:
-                if zone in occupants:
-                    occupants[zone].append(_occupant(track))
+            for zid in member_zones:
+                if zid in occupants:
+                    occupants[zid].append(_occupant(track))
 
         states: list[ZoneState] = []
-        for zone, occ in occupants.items():
+        for zid, occ in occupants.items():
             occ = _resolve_pallet_conflicts(occ)
             occ.sort(key=lambda o: o.track_id)   # deterministic payload ordering
             sig = tuple((o.track_id, o.cls, o.occupancy_state) for o in occ)
-            changed = sig != self._prev_sig.get(zone)
+            changed = sig != self._prev_sig.get(zid)
             refresh_due = bool(occ) and (
-                ts - self._last_pub_ts.get(zone, float("-inf")) >= self._refresh_interval_s
+                ts - self._last_pub_ts.get(zid, float("-inf")) >= self._refresh_interval_s
             )
             if changed or refresh_due:
-                states.append(ZoneState(zone=zone, ts=ts, occupants=tuple(occ)))
-                self._prev_sig[zone] = sig
-                self._last_pub_ts[zone] = ts
+                name = self._zones.name_of(zid) or zid
+                states.append(ZoneState(zone=name, ts=ts, occupants=tuple(occ), zone_id=zid))
+                self._prev_sig[zid] = sig
+                self._last_pub_ts[zid] = ts
         return states

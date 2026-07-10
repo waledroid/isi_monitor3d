@@ -87,7 +87,7 @@ export function startPatchDraw(camId) {
       const ys = points.map((p) => p[1]);
       patches.push({
         id: "zp_" + Date.now().toString(36),
-        name: `Zone ${userPatches().length + 1}`,
+        name: nextDefaultName(),
         camera: cam,
         polygon: points,                                   // red overlay + crop region
         rect: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
@@ -98,25 +98,27 @@ export function startPatchDraw(camId) {
   });
 }
 
-// Default names ("Zone N") follow the slot they occupy. After a delete the list
-// compacts (the next zone takes the freed slot), so renumber the DEFAULT-named
-// zones to match their new position — custom names are never touched.
-function renumberDefaults() {
-  userPatches().forEach((p, i) => {
-    if (/^Zone \d+$/.test(p.name || "")) p.name = `Zone ${i + 1}`;
-  });
+// Next UNUSED default label ("Zone N"): max existing index + 1, never
+// `length + 1`. A zone's identity is its immutable `id`; the label is cosmetic.
+// Reusing a freed number would silently retarget anything keyed on the name.
+function nextDefaultName() {
+  let max = 0;
+  for (const p of userPatches()) {
+    const m = /^Zone (\d+)$/.exec(p.name || "");
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return `Zone ${max + 1}`;
 }
 
-// Delete ONE zone by id (Settings per-row delete icon) and persist. The list
-// compacts — the panel/numbering shift up to fill the gap. Deleting a zone
-// also drops its twin (save() sends operator patches; twins are regenerated).
+// Delete ONE zone by id (Settings per-row delete icon) and persist. Deleting a
+// zone must NOT rename or reorder any other — every surviving zone keeps its id
+// AND its label. (The list ordinal in the Settings rows is a display row-number,
+// not identity.) Deleting a zone also drops its twin (save() sends operator
+// patches; twins are regenerated).
 export function deletePatch(id) {
   const before = patches.length;
   patches = patches.filter((p) => p.id !== id && p.twin_of !== id);
-  if (patches.length !== before) {
-    renumberDefaults();
-    save();
-  }
+  if (patches.length !== before) save();
 }
 
 // Start drawing a new zone from a panel's "+ Add zone" placeholder. If a camera

@@ -23,9 +23,22 @@ import numpy as np
 import yaml
 
 
+def slugify_zone_id(name: str) -> str:
+    """Legacy fallback id for a zones.yaml entry that predates ``id:``."""
+    safe = "".join(ch.lower() if ch.isalnum() else "_" for ch in str(name)).strip("_")
+    return safe or "zone"
+
+
 @dataclass(slots=True, frozen=True)
 class Zone:
-    """One named polygonal floor region."""
+    """One polygonal floor region with a STABLE identity.
+
+    ``id`` is immutable and never reused: external systems (AGVs, WMS, MQTT
+    subscribers) key off it, so deleting or renaming a zone must not disturb
+    the identity of any other. ``name`` is the operator-facing label and may
+    be edited freely. Files written before ids existed load with an id derived
+    from the name (``slugify_zone_id``) so nothing breaks on upgrade.
+    """
 
     name: str
     type: str
@@ -36,8 +49,11 @@ class Zone:
     # Sécurité (future module) reads the same fields.
     kind: str = "palette"
     severity: str = "info"
+    id: str = ""          # set in __post_init__ when absent (legacy files)
 
     def __post_init__(self) -> None:
+        if not self.id:
+            object.__setattr__(self, "id", slugify_zone_id(self.name))
         if self.polygon.ndim != 2 or self.polygon.shape[1] != 2:
             raise ValueError(
                 f"Zone {self.name!r}: polygon must be shape (N, 2), got {self.polygon.shape}"
@@ -94,7 +110,12 @@ class ZoneRegistry:
         if len(names) != len(set(names)):
             duplicates = sorted({n for n in names if names.count(n) > 1})
             raise ValueError(f"duplicate zone names: {duplicates}")
+        ids = [z.id for z in zones]
+        if len(ids) != len(set(ids)):
+            duplicates = sorted({i for i in ids if ids.count(i) > 1})
+            raise ValueError(f"duplicate zone ids: {duplicates}")
         self._by_name: dict[str, Zone] = {z.name: z for z in zones}
+        self._by_id: dict[str, Zone] = {z.id: z for z in zones}
         self._by_type: dict[str, list[str]] = {}
         for z in zones:
             self._by_type.setdefault(z.type, []).append(z.name)
@@ -128,11 +149,20 @@ class ZoneRegistry:
                     polygon=polygon,
                     kind=entry.get("kind", "palette"),
                     severity=entry.get("severity", "info"),
+                    id=str(entry.get("id") or ""),   # "" ⇒ derived from name
                 )
             )
         return cls(zones)
 
     # ---- lookup ----
+
+    def by_id(self, zone_id: str) -> Zone | None:
+        """The zone with this STABLE id, or None. External systems key here."""
+        return self._by_id.get(zone_id)
+
+    def id_of(self, name: str) -> str | None:
+        z = self._by_name.get(name)
+        return z.id if z is not None else None
 
     def __len__(self) -> int:
         return len(self._by_name)
@@ -147,6 +177,16 @@ class ZoneRegistry:
     def names(self) -> tuple[str, ...]:
         return tuple(self._by_name.keys())
 
+    @property
+    def ids(self) -> tuple[str, ...]:
+        """STABLE ids of every zone, in load order. Internal state keys off these."""
+        return tuple(self._by_id.keys())
+
+    def name_of(self, zone_id: str) -> str | None:
+        """Operator-facing label for a stable id, or None if the id is unknown."""
+        z = self._by_id.get(zone_id)
+        return z.name if z is not None else None
+
     def by_type(self, type_: str) -> tuple[str, ...]:
         """All zone names with the given type. Empty tuple if no match."""
         return tuple(self._by_type.get(type_, ()))
@@ -154,3 +194,11 @@ class ZoneRegistry:
     def which(self, xy_m: tuple[float, float]) -> tuple[str, ...]:
         """Names of zones containing ``xy_m`` — handles overlapping zones."""
         return tuple(name for name, z in self._by_name.items() if z.contains(xy_m))
+
+    def which_ids(self, xy_m: tuple[float, float]) -> tuple[str, ...]:
+        """STABLE ids of zones containing ``xy_m``.
+
+        Prefer this over ``which`` for internal state that must survive a
+        zone rename: ids are immutable, names are not.
+        """
+        return tuple(zid for zid, z in self._by_id.items() if z.contains(xy_m))

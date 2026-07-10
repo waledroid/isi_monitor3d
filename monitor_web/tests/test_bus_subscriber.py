@@ -169,6 +169,39 @@ def test_zone_state_stored_by_zone_name() -> None:
         sub.stop()
 
 
+def test_zone_state_keyed_by_zone_id_when_present(monkeypatch) -> None:
+    """When the wire message carries a STABLE zone_id, the bus keys its store on
+    it (immutable identity), not on the mutable name. Legacy messages that
+    predate zone_id still fall back to the name (test above)."""
+    from backbone.comms import schemas as _schemas
+    from backbone.comms.schemas import ZoneObject, ZoneStateMessage
+    from pydantic import ConfigDict
+
+    # Stand-in for the not-yet-landed schema field: a ZoneStateMessage subclass
+    # that carries zone_id. isinstance(..., ZoneStateMessage) still holds, so the
+    # bus's dispatch branch runs unchanged.
+    class _WithId(ZoneStateMessage):
+        model_config = ConfigDict(extra="allow", frozen=True)
+        zone_id: str = ""
+
+    msg = _WithId(
+        ts=time.time(), zone="Dock North", zone_id="zp_stable",
+        objects=(ZoneObject(track_id=1, cls="palette", confidence=0.9,
+                            xy_m=(1.0, 1.0)),),
+        count=1,
+    )
+    sub, _ = _bind_subscriber()
+    # Route the raw payload straight to our crafted message (no real UDP schema
+    # change needed for the test).
+    monkeypatch.setattr(_schemas, "parse_envelope", lambda _d: msg, raising=True)
+    import monitor_web.bus_subscriber as _bus
+    monkeypatch.setattr(_bus, "parse_envelope", lambda _d: msg, raising=True)
+    sub._handle_payload(b"{}")
+    snap = sub.snapshot()
+    assert "zp_stable" in snap.zone_state_by_zone         # keyed by id, not name
+    assert "Dock North" not in snap.zone_state_by_zone
+
+
 def test_diagnostics_fps_stored_for_status_panel() -> None:
     """Diagnostics heartbeats populate per-camera + pipeline fps in the
     snapshot — the STATUS panel's camera-performance rows."""

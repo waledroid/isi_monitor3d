@@ -20,6 +20,7 @@ from backbone.comms.schemas import (
     Track2DMessage,
     Track3DMessage,
     ZoneSpec,
+    ZoneStateMessage,
     parse_envelope,
 )
 from backbone.core.types import Track2D, Track3D
@@ -605,3 +606,53 @@ def test_send_json_datagram_shared_fragmentation() -> None:
     assert parse_envelope(json.loads(text)) == msg
     recv.close()
     send.close()
+
+
+# ---------------------------------------------------------------------------
+# zone_id — STABLE zone identity on the wire (additive within v6)
+# ---------------------------------------------------------------------------
+
+def test_zone_id_round_trips_on_passing_and_zone_state_and_spec() -> None:
+    """zone_id survives serialization on all three carriers and parse_envelope."""
+    from backbone.comms.schemas import ZoneObject
+
+    ev = PassingEventMessage(
+        ts=1.0, track_id=5, cls="palette", zone="Loading Bay",
+        zone_id="z1", direction="enter",
+    )
+    assert parse_envelope(json.loads(ev.model_dump_json())).zone_id == "z1"
+
+    zs = ZoneStateMessage(
+        ts=1.0, zone="Loading Bay", zone_id="z1",
+        objects=(ZoneObject(track_id=7, cls="palette", confidence=0.9, xy_m=(1.0, 1.0)),),
+        count=1,
+    )
+    assert parse_envelope(json.loads(zs.model_dump_json())).zone_id == "z1"
+
+    spec = ZoneSpec(
+        name="Loading Bay", zone_id="z1", kind="palette", type="storage",
+        severity="info", polygon=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+    )
+    back = ZoneSpec.model_validate(json.loads(spec.model_dump_json()))
+    assert back.zone_id == "z1"
+
+
+def test_legacy_v6_payload_without_zone_id_still_parses() -> None:
+    """A payload from a pre-id Backbone (no zone_id key) parses with default "".
+
+    This is why the change is additive (default-valued) and needs NO version
+    bump — old v6 packets remain valid.
+    """
+    legacy_passing = {
+        "schema_version": 6, "type": "passing", "ts": 1.0, "track_id": 5,
+        "cls": "palette", "zone": "B3D", "direction": "enter",
+    }
+    parsed = parse_envelope(legacy_passing)
+    assert isinstance(parsed, PassingEventMessage)
+    assert parsed.zone_id == ""
+
+    legacy_zone_state = {
+        "schema_version": 6, "type": "zone_state", "ts": 1.0, "zone": "B3D",
+        "objects": [], "count": 0,
+    }
+    assert parse_envelope(legacy_zone_state).zone_id == ""

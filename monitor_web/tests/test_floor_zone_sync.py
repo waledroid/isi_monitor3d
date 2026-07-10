@@ -121,3 +121,49 @@ def test_rect_only_patch_uses_rect_corners(tmp_path) -> None:
     patches = [{"id": "zp_r", "name": "R", "camera": "cam_a",
                 "rect": [766.67, 433.33, 900.0, 566.67], "frame_wh": [1000, 1000]}]
     assert sync_floor_zones_from_patches(cfg, patches=patches, rig=rig) == 1
+
+
+def test_derived_zone_carries_patch_id_and_is_idempotent(tmp_path) -> None:
+    """The floor zone reuses the PATCH id as its stable id, and re-running the
+    sync with the same patches produces byte-identical zones.yaml (idempotent —
+    no renumbering, no id churn)."""
+    cfg, rig = _cfg(tmp_path), _rig(tmp_path)
+    patches = [{
+        "id": "zp_stable123", "name": "Dock", "camera": "cam_a",
+        "polygon": [[766.67, 433.33], [900.0, 433.33], [900.0, 566.67],
+                    [766.67, 566.67]],
+        "frame_wh": [1000, 1000],
+    }]
+    sync_floor_zones_from_patches(cfg, patches=patches, rig=rig)
+    first = (tmp_path / "zones.yaml").read_text()
+    (z,) = yaml.safe_load(first)["zones"]
+    assert z["id"] == "zp_stable123"          # patch id, not positional
+    assert z["name"] == "Dock"
+
+    # Re-run: same patches → same file, same id (no renumber, no drift).
+    sync_floor_zones_from_patches(cfg, patches=patches, rig=rig)
+    assert (tmp_path / "zones.yaml").read_text() == first
+
+    # The Backbone's ZoneRegistry accepts it and keys off the stable id.
+    from backbone.shared.zones import ZoneRegistry
+    reg = ZoneRegistry.load(tmp_path / "zones.yaml")
+    assert reg.by_id("zp_stable123") is not None
+    assert reg.id_of("Dock") == "zp_stable123"
+
+
+def test_deleting_one_patch_leaves_the_other_zone_id_intact(tmp_path) -> None:
+    """Deleting a zone (dropping its patch) must not disturb the identity of
+    any surviving zone — its id AND name are unchanged after the re-sync."""
+    cfg, rig = _cfg(tmp_path), _rig(tmp_path)
+    keep = {"id": "zp_keep", "name": "Zone 1", "camera": "cam_a",
+            "polygon": [[766.67, 433.33], [900.0, 433.33], [900.0, 566.67]],
+            "frame_wh": [1000, 1000]}
+    drop = {"id": "zp_drop", "name": "Zone 2", "camera": "cam_a",
+            "polygon": [[500.0, 433.33], [633.33, 433.33], [633.33, 566.67]],
+            "frame_wh": [1000, 1000]}
+    sync_floor_zones_from_patches(cfg, patches=[keep, drop], rig=rig)
+    # Delete "Zone 2": re-sync with only the surviving patch.
+    sync_floor_zones_from_patches(cfg, patches=[keep], rig=rig)
+    zones = yaml.safe_load((tmp_path / "zones.yaml").read_text())["zones"]
+    assert [z["id"] for z in zones] == ["zp_keep"]
+    assert [z["name"] for z in zones] == ["Zone 1"]   # never renumbered to renamed

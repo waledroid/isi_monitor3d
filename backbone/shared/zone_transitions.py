@@ -26,17 +26,26 @@ from backbone.shared.zones import ZoneRegistry
 
 @dataclass(frozen=True)
 class PassingEvent:
-    """One zone-boundary crossing by a tracked object."""
+    """One zone-boundary crossing by a tracked object.
+
+    ``zone_id`` is the STABLE identity (what consumers key on); ``zone`` is the
+    current operator label, carried for display.
+    """
 
     track_id: int
     cls: str
     zone: str
     direction: str   # "enter" | "leave"
     ts: float
+    zone_id: str = ""
 
 
 class ZoneTransitionDetector:
     """Detect enter/leave events from a stream of (track_id, position) updates.
+
+    Internal membership state is keyed by STABLE zone **id**, not name, so
+    renaming a zone (id unchanged) never emits a spurious leave-old/enter-new
+    pair. The current display name is resolved from the registry at emit time.
 
     Args:
         zones: The ``ZoneRegistry`` defining all known floor zones.
@@ -44,6 +53,7 @@ class ZoneTransitionDetector:
 
     def __init__(self, zones: ZoneRegistry) -> None:
         self._zones = zones
+        # track_id → frozenset of zone IDS the track was last inside.
         self._prev: dict[int, frozenset[str]] = {}
 
     # ------------------------------------------------------------------
@@ -69,23 +79,25 @@ class ZoneTransitionDetector:
             cls:      Object class string (e.g. "person", "palette").
             xy_m:     Floor-plane position in meters ``(X, Y)``.
             ts:       Capture timestamp for the event.
-            membership: Precomputed ``ZoneRegistry.which(xy_m)`` result, so a
-                caller that also feeds the ``ZoneStateTracker`` runs
+            membership: Precomputed ``ZoneRegistry.which_ids(xy_m)`` result (zone
+                IDS), so a caller that also feeds the ``ZoneStateTracker`` runs
                 point-in-polygon once per track. ``None`` → computed here.
         """
         now: frozenset[str] = frozenset(
-            membership if membership is not None else self._zones.which(xy_m)
+            membership if membership is not None else self._zones.which_ids(xy_m)
         )
         before: frozenset[str] = self._prev.get(track_id, frozenset())
         self._prev[track_id] = now
 
         events: list[PassingEvent] = []
-        for zone in sorted(now - before):   # sorted for deterministic test ordering
-            events.append(PassingEvent(track_id=track_id, cls=cls, zone=zone,
-                                       direction="enter", ts=ts))
-        for zone in sorted(before - now):
-            events.append(PassingEvent(track_id=track_id, cls=cls, zone=zone,
-                                       direction="leave", ts=ts))
+        for zid in sorted(now - before):   # sorted for deterministic test ordering
+            events.append(PassingEvent(track_id=track_id, cls=cls,
+                                       zone=self._zones.name_of(zid) or zid,
+                                       zone_id=zid, direction="enter", ts=ts))
+        for zid in sorted(before - now):
+            events.append(PassingEvent(track_id=track_id, cls=cls,
+                                       zone=self._zones.name_of(zid) or zid,
+                                       zone_id=zid, direction="leave", ts=ts))
         return events
 
     def forget(self, live_ids: set[int]) -> None:

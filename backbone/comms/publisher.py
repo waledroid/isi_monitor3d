@@ -65,13 +65,14 @@ class Publisher:
         zone: str,
         ts: float,
         url: str,
+        zone_id: str = "",
     ) -> None:
         """Fan-out an image-reference URL to all sinks via ``publish_image_ref``."""
         if self._closed:
             return
         for sink in self._sinks:
             try:
-                sink.publish_image_ref(track_id, cls, zone, ts, url)
+                sink.publish_image_ref(track_id, cls, zone, ts, url, zone_id=zone_id)
             except Exception:
                 logger.warning(
                     "sink %s failed on publish_image_ref", type(sink).__name__, exc_info=True

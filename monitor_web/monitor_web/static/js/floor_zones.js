@@ -27,13 +27,33 @@ function el(id) { return document.getElementById(id); }
 const KINDS = ["palette", "etagere", "danger"];
 const SEVERITIES = ["info", "warning", "critical"];
 
-let zones = [];        // [{name, kind, type, severity, polygon: [[X,Y] m]}]
+let zones = [];        // [{id, name, kind, type, severity, polygon: [[X,Y] m]}]
 let maxZones = 6;
 let loaded = false;    // guard: never persist a list we never loaded
+
+// Immutable per-zone id, generated ONCE at creation. External systems key on
+// it, so it must survive renames + never be reused after a delete.
+function newZoneId() {
+  return `fz_${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+}
+
+// Next UNUSED default label ("Zone N"): max existing index + 1, never
+// `length + 1` (which reuses a freed number and retargets name-keyed consumers).
+function nextDefaultName() {
+  let max = 0;
+  for (const z of zones) {
+    const m = /^Zone (\d+)$/.exec(z.name || "");
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return `Zone ${max + 1}`;
+}
 
 // Called by zone_manager.open() with the fresh GET /api/config body.
 export function loadFloorZones(configData) {
   zones = (configData && Array.isArray(configData.zones)) ? configData.zones.map((z) => ({
+    // Preserve the immutable id; mint one for a legacy zone that lacks it so a
+    // later rename can't shift its identity (persisted on the next save).
+    id: z.id || newZoneId(),
     name: z.name || "",
     kind: KINDS.includes(z.kind) ? z.kind : "palette",
     type: z.type || z.kind || "palette",
@@ -104,7 +124,8 @@ function drawNewZone() {
         onDone: async (worldPoints) => {
           if (Array.isArray(worldPoints) && worldPoints.length >= 3) {
             zones.push({
-              name: `Zone ${zones.length + 1}`,
+              id: newZoneId(),
+              name: nextDefaultName(),
               kind: "palette",
               type: "palette",
               severity: "info",

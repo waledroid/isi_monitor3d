@@ -296,6 +296,7 @@ async def zones(request: Request) -> JSONResponse:
         {
             "zones": [
                 {
+                    "id": registry[n].id,   # stable identity (id != name)
                     "name": registry[n].name,
                     "type": registry[n].type,
                     "kind": registry[n].kind,
@@ -323,13 +324,16 @@ async def zones_state(request: Request) -> JSONResponse:
     snap = bus.snapshot()
     return JSONResponse({
         "fresh": bus.is_fresh(2.0),
+        # The bus now keys its store by the STABLE zone_id, but this endpoint
+        # keeps its name-keyed contract (the COMMUNICATION cards match floor
+        # zones by name) — so key the output off each message's own ``zone``.
         "states": {
-            zone: {
+            msg.zone: {
                 "objects": [o.model_dump(mode="json") for o in msg.objects],
                 "count": msg.count,
                 "ts": msg.ts,
             }
-            for zone, msg in snap.zone_state_by_zone.items()
+            for msg in snap.zone_state_by_zone.values()
         },
     })
 

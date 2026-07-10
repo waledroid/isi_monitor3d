@@ -638,3 +638,90 @@ def test_six_zone_topics_per_node() -> None:
         assert topics == [f"isiMonitor3D/v1/zone_a/zone/zone{i}" for i in range(1, 7)]
         assert all(c[1].get("retain") is True for c in mock_instance.publish.call_args_list)
         sink.close()
+
+
+# ---------------------------------------------------------------------------
+# topic_zone flag — STABLE-id vs legacy-name zone topic segment
+# ---------------------------------------------------------------------------
+
+def test_topic_zone_validation() -> None:
+    """topic_zone outside {id, name} must raise ValueError."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client"):
+        from backbone.comms.mqtt_sink import MqttSink
+        with pytest.raises(ValueError, match="topic_zone"):
+            MqttSink(host="127.0.0.1", port=1883, topic_zone="slug")
+
+
+def test_topic_zone_id_uses_stable_id_segment() -> None:
+    """Default topic_zone='id' → zone topics embed the STABLE id, not the name.
+
+    Renaming the zone (name changes, id stays) keeps the topic stable, so
+    retained zone-state is never orphaned.
+    """
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        from backbone.comms.schemas import ZoneStateMessage
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node")
+
+        # zone_state — id segment
+        sink.publish_zone_state(
+            ZoneStateMessage(ts=1.0, zone="Loading Bay", zone_id="z1", objects=(), count=0)
+        )
+        assert mock_instance.publish.call_args[0][0] == "isiMonitor3D/v1/node/zone/z1"
+
+        # passing — id segment
+        ev = PassingEvent(track_id=3, cls="palette", zone="Loading Bay",
+                          zone_id="z1", direction="enter", ts=5.0)
+        sink.publish_event(ev)
+        assert mock_instance.publish.call_args[0][0] == "isiMonitor3D/v1/node/zone/z1/passings"
+
+        # image ref — id segment
+        sink.publish_image_ref(track_id=42, cls="palette", zone="Loading Bay",
+                               ts=5.0, url="file:///x.jpg", zone_id="z1")
+        assert mock_instance.publish.call_args[0][0] == "isiMonitor3D/v1/node/zone/z1/images/42"
+        sink.close()
+
+
+def test_topic_zone_name_restores_legacy_segment() -> None:
+    """topic_zone='name' (rollback) → zone topics embed the operator label."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        from backbone.comms.schemas import ZoneStateMessage
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node",
+                        topic_zone="name")
+
+        sink.publish_zone_state(
+            ZoneStateMessage(ts=1.0, zone="Loading Bay", zone_id="z1", objects=(), count=0)
+        )
+        # name is sanitised (space kept — only / + # are stripped) and used verbatim.
+        assert mock_instance.publish.call_args[0][0] == "isiMonitor3D/v1/node/zone/Loading Bay"
+
+        ev = PassingEvent(track_id=3, cls="palette", zone="Loading Bay",
+                          zone_id="z1", direction="enter", ts=5.0)
+        sink.publish_event(ev)
+        assert mock_instance.publish.call_args[0][0] == (
+            "isiMonitor3D/v1/node/zone/Loading Bay/passings"
+        )
+        sink.close()
+
+
+def test_topic_zone_id_falls_back_to_name_when_id_absent() -> None:
+    """topic_zone='id' but a legacy payload lacks zone_id → name segment (never blank)."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+
+        from backbone.comms.mqtt_sink import MqttSink
+        from backbone.comms.schemas import ZoneStateMessage
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node")
+        sink.publish_zone_state(
+            ZoneStateMessage(ts=1.0, zone="B3D", objects=(), count=0)   # zone_id=""
+        )
+        assert mock_instance.publish.call_args[0][0] == "isiMonitor3D/v1/node/zone/B3D"
+        sink.close()

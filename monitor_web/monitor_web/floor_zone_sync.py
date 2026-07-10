@@ -122,13 +122,23 @@ def sync_floor_zones_from_patches(cfg, patches: list[dict] | None = None,
         if name in used_names:                       # ZoneRegistry rejects dupes
             name = f"{name} ({p.get('id', '')})"
         used_names.add(name)
-        derived.append({
+        # STABLE identity: reuse the patch id (``zp_…``) so the pixel patch and
+        # this floor zone share ONE immutable id — never positional, never
+        # reused after a delete. The label (``name``) is free to change; the id
+        # is what AGVs/WMS/MQTT key on. Legacy patches without an id fall back to
+        # the loader's name-slug (still deterministic).
+        pid = str(p.get("id") or "").strip()
+        entry: dict = {}
+        if pid:
+            entry["id"] = pid
+        entry.update({
             "name": name,
             "type": "palette",
             "kind": "palette",
             "polygon": floor,
             "derived_from": _MARKER,                 # ignored by the loader
         })
+        derived.append(entry)
 
     path = _zones_yaml_path(cfg)
     try:

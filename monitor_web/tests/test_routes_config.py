@@ -1032,9 +1032,8 @@ def test_isistream_save_writes_global_knobs_and_a_real_plugin(tmp_path, monkeypa
     The plugin must be a REGISTERED implementation name derived from the
     model's outputs — never the model path (that crash-looped the producer).
     """
-    import yaml as _yaml
-
     import backbone.detection  # noqa: F401 — fires the @register decorators
+    import yaml as _yaml
     from backbone.core.interfaces import detector_registry
 
     app, backbone_yaml = _detection_app(tmp_path)
