@@ -41,6 +41,8 @@ import cv2
 import numpy as np
 
 from backbone.core.types import Detection, Frame, FramePair
+from backbone.detection.enhance import enhance_bgr
+from backbone.detection.tiling import merge_tiled, shift_detection, tile_boxes
 from backbone.shared.geometry import (
     densify_polygon,
     floor_to_pixel,
@@ -52,6 +54,8 @@ logger = logging.getLogger(__name__)
 # Synthetic camera-id separator for crop frames — must never appear in a real
 # camera id (YAML keys are operator-typed identifiers like "cam_a").
 _SEP = "\x00"
+# Prefix for batch-padding frames (TensorRT bucketing) — never a real crop.
+_PAD = "__pad__"
 
 
 def _project_world3(world3, K, D, R, t, image_size_wh) -> np.ndarray:
@@ -160,11 +164,37 @@ class ZoneScopedDetector:
     """
 
     def __init__(self, detector, boxes_by_camera,
-                 calib_wh_by_camera: dict[str, tuple[int, int]]) -> None:
+                 calib_wh_by_camera: dict[str, tuple[int, int]],
+                 *,
+                 sahi: dict | None = None,
+                 enhance: dict | None = None,
+                 batch_buckets: tuple[int, ...] | None = None) -> None:
         self._detector = detector
         self._boxes = boxes_by_camera
         self._calib_wh = {k: (int(v[0]), int(v[1]))
                           for k, v in calib_wh_by_camera.items()}
+        # SAHI: slice big zone crops into overlapping tiles so far/small
+        # objects keep their pixels. All tiles ride the SAME batched call.
+        sahi = sahi or {}
+        self._sahi_on = bool(sahi.get("enabled", False))
+        self._tile = int(sahi.get("tile", 0) or 0)      # 0 → the model input size
+        self._overlap = float(sahi.get("overlap", 0.2))
+        self._merge_iou = float(sahi.get("merge_iou", 0.5))
+        # ENH: CLAHE (+ gamma) on each crop/tile before letterboxing.
+        enhance = enhance or {}
+        self._enh_on = bool(enhance.get("enabled", False))
+        self._enh_kwargs = {
+            "clip_limit": float(enhance.get("clip_limit", 2.0)),
+            "tile_grid": int(enhance.get("tile_grid", 8)),
+            "gamma": float(enhance.get("gamma", 1.0)),
+        }
+        # TensorRT compiles ONE ENGINE PER INPUT SHAPE. A batch that changes
+        # with the number of visible zones / motion-gated cameras / SAHI tiles
+        # would trigger a multi-minute engine build at every new count. Pad the
+        # batch up to the next bucket instead: a handful of engines, built once
+        # and cached. (The padding frames are duplicates; their outputs are
+        # discarded.) None ⇒ no padding (CUDA EP handles any batch).
+        self._buckets = tuple(sorted(batch_buckets)) if batch_buckets else None
 
     def detect(self, pair: FramePair) -> dict[str, list[Detection]]:
         out: dict[str, list[Detection]] = {cid: [] for cid in pair.frames}
@@ -183,15 +213,28 @@ class ZoneScopedDetector:
                 fx1, fy1 = min(fw, math.ceil(x1 * sx)), min(fh, math.ceil(y1 * sy))
                 if fx1 - fx0 < 8 or fy1 - fy0 < 8:
                     continue
-                sid = f"{cam_id}{_SEP}{i}"
-                crops[sid] = Frame(camera_id=sid, capture_ts=frame.capture_ts,
-                                   frame_idx=frame.frame_idx,
-                                   image=frame.image[fy0:fy1, fx0:fx1])
-                origin[sid] = (cam_id, fx0, fy0)
+                crop_img = frame.image[fy0:fy1, fx0:fx1]
+                if self._enh_on:
+                    crop_img = enhance_bgr(crop_img, **self._enh_kwargs)
+                ch, cw = crop_img.shape[:2]
+                tile = self._tile or self._model_input_px()
+                rects = (tile_boxes(cw, ch, tile, self._overlap)
+                         if self._sahi_on else [(0, 0, cw, ch)])
+                for t, (tx0, ty0, tx1, ty1) in enumerate(rects):
+                    sid = f"{cam_id}{_SEP}{i}{_SEP}{t}"
+                    crops[sid] = Frame(camera_id=sid, capture_ts=frame.capture_ts,
+                                       frame_idx=frame.frame_idx,
+                                       image=crop_img[ty0:ty1, tx0:tx1])
+                    # Origin folds the zone-crop offset AND the tile offset, so
+                    # a detection maps straight back to frame coordinates.
+                    origin[sid] = (cam_id, fx0 + tx0, fy0 + ty0)
         if not crops:
             return out
-        raw = self._detector.detect(FramePair(
-            capture_ts=pair.capture_ts, frame_idx=pair.frame_idx, frames=crops))
+        raw = self._detect_padded(pair, crops)
+        # Tiled zones: merge each zone's tiles before remapping, so an object
+        # split across two tiles becomes one detection with the union box.
+        if self._sahi_on:
+            raw = self._merge_zone_tiles(raw, origin)
         for sid, dets in raw.items():
             cam_id, ox, oy = origin[sid]
             for d in dets:
@@ -213,3 +256,54 @@ class ZoneScopedDetector:
                     d.mask_offset_xy = (ox, oy)
                 out[cam_id].append(d)
         return out
+
+    # ---- internals ----
+
+    def _model_input_px(self) -> int:
+        size = getattr(self._detector, "input_size", None)
+        if isinstance(size, (tuple, list)) and size:
+            return int(size[0])
+        return 384
+
+    def _detect_padded(self, pair: FramePair, crops: dict[str, Frame]) -> dict:
+        """Run one batched inference, padding the batch to a bucket when the
+        backend compiles per-shape engines (TensorRT)."""
+        if not self._buckets:
+            return self._detector.detect(FramePair(
+                capture_ts=pair.capture_ts, frame_idx=pair.frame_idx, frames=crops))
+        n = len(crops)
+        target = next((b for b in self._buckets if b >= n), None)
+        padded = dict(crops)
+        if target is not None and target > n:
+            filler = next(iter(crops.values()))
+            for k in range(target - n):
+                padded[f"{_PAD}{k}"] = filler
+        elif target is None:
+            logger.debug("zone_scope: batch %d exceeds largest bucket %s",
+                         n, self._buckets[-1])
+        raw = self._detector.detect(FramePair(
+            capture_ts=pair.capture_ts, frame_idx=pair.frame_idx, frames=padded))
+        return {sid: dets for sid, dets in raw.items() if not sid.startswith(_PAD)}
+
+    def _merge_zone_tiles(self, raw: dict, origin: dict) -> dict:
+        """Union-merge the tiles of each zone crop (SAHI). Detections are
+        translated into ZONE-CROP coordinates for merging, then re-expressed
+        against a synthetic origin so the caller's remap stays unchanged."""
+        by_zone: dict[tuple[str, str], list] = {}
+        for sid, dets in raw.items():
+            cam_id, zone_idx, _tile = sid.split(_SEP)
+            by_zone.setdefault((cam_id, zone_idx), []).append((sid, dets))
+        merged: dict[str, list] = {}
+        for (cam_id, zone_idx), entries in by_zone.items():
+            # Anchor: the zone crop's own origin = min tile origin.
+            ox0 = min(origin[sid][1] for sid, _ in entries)
+            oy0 = min(origin[sid][2] for sid, _ in entries)
+            pooled: list = []
+            for sid, dets in entries:
+                _c, tx, ty = origin[sid]
+                for d in dets:
+                    pooled.append(shift_detection(d, tx - ox0, ty - oy0))
+            anchor = f"{cam_id}{_SEP}{zone_idx}{_SEP}0"
+            merged[anchor] = merge_tiled(pooled, iou_thresh=self._merge_iou)
+            origin[anchor] = (cam_id, ox0, oy0)
+        return merged

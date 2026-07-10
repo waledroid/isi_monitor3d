@@ -45,6 +45,11 @@ from backbone.shared.zones import ZoneRegistry
 
 logger = logging.getLogger(__name__)
 
+# Batch sizes we let TensorRT compile engines for. Any real batch (zones x
+# cameras x SAHI tiles) is padded up to the next bucket; the padded frames'
+# outputs are discarded. Keep the list SHORT — every entry is an engine.
+_BATCH_BUCKETS: tuple[int, ...] = (1, 2, 4, 8, 16, 32)
+
 
 class FrameProvider(Protocol):
     """The host's frame seam: newest real frame + capture_ts, or None."""
@@ -64,6 +69,10 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
                      "pose_imgsz", "pose_every_n", "person_pallet_max_distance_m",
                      "trt_enabled"):
         det_cfg.pop(pose_key, None)
+    # Global zone-inference options (Settings ▸ Isistream). ONE model, ONE
+    # batched call for every zone of every camera — these apply to all zones.
+    sahi_cfg = det_cfg.pop("sahi", None)
+    enhance_cfg = det_cfg.pop("enhance", None)
     imgsz = det_cfg.pop("inference_imgsz", None)
     if imgsz:
         det_cfg["input_size"] = (int(imgsz), int(imgsz))
@@ -82,9 +91,23 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
     if scope_is_zones:
         from backbone.detection.zone_scope import ZoneScopedDetector, zone_crop_boxes
         boxes = zone_crop_boxes(rig, zones)
+        # TensorRT compiles one engine per input shape: pad the batch to a
+        # small bucket set so a changing zone/tile/camera count can't trigger
+        # a multi-minute engine build mid-run. CUDA EP needs no padding.
+        from backbone.shared.ort_session import trt_available, trt_requested
+        buckets = _BATCH_BUCKETS if (trt_requested() and trt_available()) else None
         detector = ZoneScopedDetector(
             detector, boxes,
-            {cid: rig[cid].image_size_wh for cid in rig.camera_ids})
+            {cid: rig[cid].image_size_wh for cid in rig.camera_ids},
+            sahi=sahi_cfg, enhance=enhance_cfg, batch_buckets=buckets)
+        if sahi_cfg and sahi_cfg.get("enabled"):
+            logger.info("isistream: SAHI tiling ON (tile=%s, overlap=%.2f)",
+                        sahi_cfg.get("tile") or "model input",
+                        float(sahi_cfg.get("overlap", 0.2)))
+        if enhance_cfg and enhance_cfg.get("enabled"):
+            logger.info("isistream: crop enhancement ON (CLAHE clip=%.1f, gamma=%.2f)",
+                        float(enhance_cfg.get("clip_limit", 2.0)),
+                        float(enhance_cfg.get("gamma", 1.0)))
     return detector
 
 
