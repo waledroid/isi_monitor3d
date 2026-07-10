@@ -406,12 +406,12 @@ function selectModelOption(selId, path) {
   sel.value = path || "";
 }
 
-function fillModelSection(det) {
+function fillModelSection(det, isis) {
   if (!det) return;
+  isis = isis || {};
   const set = (id, v) => { const e = el(id); if (e != null) e.value = v ?? ""; };
   const poseEnabled = el("zm-pose-enabled");
   if (poseEnabled) poseEnabled.checked = det.pose_enabled !== false;
-  const isis = data.isistream || {};
   const mg = el("zm-motion-gate");
   if (mg) mg.checked = isis.motion_gate !== false;
   const ds = el("zm-detect-substream");
@@ -515,7 +515,7 @@ async function open() {
     // Camera FPS field (Cameras tab, backbone.yaml capture_fps).
     const camFpsEl = el("zm-camera-fps");
     if (camFpsEl) camFpsEl.value = configData.camera_fps ?? 20;
-    fillModelSection(configData.detection);
+    fillModelSection(configData.detection, configData.isistream);
     buildLinkLines(configData.link_lines || []);
     fillCommSection(configData.node_id, configData.mqtt_sink, uiSettings);
   } else {

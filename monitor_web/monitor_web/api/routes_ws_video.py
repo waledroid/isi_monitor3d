@@ -424,6 +424,10 @@ async def ws_video(ws: WebSocket) -> None:
                 msg = json.loads(await ws.receive_text())
             except (ValueError, KeyError):
                 continue
+            except RuntimeError:
+                # Socket already closed (app shutdown races the receive) —
+                # a normal end of life, not an error worth a traceback.
+                return
             if not isinstance(msg, dict):
                 continue
             sid = str(msg.get("sub") or "")
