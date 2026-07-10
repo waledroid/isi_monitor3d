@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import threading
 
@@ -63,6 +64,12 @@ def main() -> None:
 
     def pump(cam_id: str, src_cfg_full: dict) -> None:
         backoff = 2.0
+        # The shared frame bus: every decoded frame is published to
+        # /dev/shm so display consumers (the dashboard's camera hub) read
+        # THIS decode instead of opening a second RTSP session per camera —
+        # one ingest, one decode, DeepStream-style fan-out.
+        from backbone.shared.frame_shm import FrameShmWriter
+        bus_writer = FrameShmWriter(cam_id)
         while not stop.is_set():
             src = None
             streamed_since = None
@@ -80,6 +87,11 @@ def main() -> None:
                         break
                     with lock:
                         latest[cam_id] = (frame.image, frame.capture_ts)
+                    try:
+                        bus_writer.write(frame.image, frame.capture_ts)
+                    except Exception:
+                        logger.debug("perception: %s frame-bus write failed",
+                                     cam_id, exc_info=True)
                 if not stop.is_set():
                     logger.warning("perception: %s stream ended (EOS) — reconnecting", cam_id)
             except Exception:
@@ -92,12 +104,15 @@ def main() -> None:
                     except Exception:
                         logger.debug("perception: %s stop failed", cam_id, exc_info=True)
             if stop.is_set():
-                return
+                break
             import time as _time
             if streamed_since is not None and _time.monotonic() - streamed_since > 30.0:
                 backoff = 2.0        # a healthy run resets the backoff
             stop.wait(backoff)
             backoff = min(backoff * 2.0, 15.0)
+        # Deliberate shutdown: unlink the bus so readers see 'absent'
+        # immediately instead of waiting out the staleness window.
+        bus_writer.unlink()
 
     def frame_provider(camera_id: str):
         with lock:
@@ -119,6 +134,15 @@ def main() -> None:
             pass
     finally:
         core.stop()
+        # Unlink the frame bus from the MAIN thread — the daemon pumps never
+        # reach their own cleanup on interpreter exit, and readers should see
+        # 'absent' instantly instead of waiting out the staleness window.
+        from backbone.shared.frame_shm import shm_path
+        for cam_id in cfg["cameras"]:
+            try:
+                os.unlink(shm_path(cam_id))
+            except OSError:
+                pass
         logger.info("perception: standalone producer stopped")
 
 

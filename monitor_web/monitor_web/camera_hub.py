@@ -55,6 +55,11 @@ def _placeholder_frame(text: str) -> np.ndarray:
     return img
 
 
+# While on our OWN source, peek at the frame bus this often — when the
+# perception producer comes up we hand over and close the duplicate session.
+_BUS_RECHECK_S = 5.0
+
+
 def _cfg_key(src_cfg: dict) -> tuple:
     """A hashable, comparable key for a source config so the hub can tell when a
     camera was reconfigured (URL/device/type changed) and must be rebuilt."""
@@ -93,6 +98,7 @@ class CameraStream:
 
         self._cond = threading.Condition()
         self._latest: np.ndarray | None = None
+        self._shm_reader = None               # lazy FrameShmReader (frame bus)
         self._latest_ts: float = 0.0         # capture_ts of the latest REAL frame
         self._latest_is_placeholder = True   # the first published frame is always a placeholder
         self._version = 0
@@ -148,6 +154,19 @@ class CameraStream:
         backoff = _RETRY_MIN_S
         self._publish(_placeholder_frame("connecting to camera…"), placeholder=True)
         while not self._stop.is_set():
+            # Prefer the SHARED FRAME BUS: while the perception producer runs,
+            # it publishes every decoded frame to /dev/shm — stream from there
+            # (one ingest+decode per camera in the whole system, and the
+            # panels show the exact pixels the models saw). Absent/stale bus
+            # (backbone stopped, frames mode, pre-START preview) → open our
+            # own source exactly as before. _stream_from_bus returns when the
+            # bus goes stale, so the loop naturally falls through to RTSP and
+            # back again when the bus revives.
+            if self.plugin in ("rtsp", "v4l2") and self._stream_from_bus():
+                if self._stop.is_set():
+                    return
+                self._publish(_placeholder_frame("reconnecting…"), placeholder=True)
+                continue
             try:
                 src = _build_source(self.camera_id, self.plugin, self.src_cfg)
             except Exception as exc:  # startup failure must not kill the pump
@@ -160,11 +179,22 @@ class CameraStream:
                 continue
             backoff = _RETRY_MIN_S
             self._src = src
+            last_bus_check = 0.0
             try:
                 for frame in src.frames():
                     if self._stop.is_set():
                         break
                     self._publish(frame.image, capture_ts=frame.capture_ts)
+                    # Periodically peek at the bus: when the producer comes up
+                    # (START), hand over and drop our own RTSP session.
+                    now_m = time.monotonic()
+                    if (self.plugin in ("rtsp", "v4l2")
+                            and now_m - last_bus_check > _BUS_RECHECK_S):
+                        last_bus_check = now_m
+                        if self._bus_reader().fresh():
+                            logger.info("camhub %s: frame bus is live — "
+                                        "releasing own source", self.camera_id)
+                            break
             except Exception as exc:  # a mid-stream source error → reconnect
                 logger.warning("camhub %s: source error (%s)", self.camera_id, exc)
             finally:
@@ -185,6 +215,38 @@ class CameraStream:
             self._publish(_placeholder_frame("reconnecting…"), placeholder=True)
             if self._stop.wait(backoff):
                 return
+
+    def _bus_reader(self):
+        if self._shm_reader is None:
+            from backbone.shared.frame_shm import FrameShmReader
+            self._shm_reader = FrameShmReader(self.camera_id)
+        return self._shm_reader
+
+    def _stream_from_bus(self) -> bool:
+        """Stream from the shared frame bus until it goes stale.
+
+        Returns True if we streamed at least one frame (the caller re-loops:
+        stale bus → RTSP fallback), False when the bus was never fresh (go
+        straight to RTSP without logging noise)."""
+        reader = self._bus_reader()
+        got = reader.latest()
+        if got is None:
+            return False
+        logger.info("camhub %s: streaming from the shared frame bus", self.camera_id)
+        last_ts = 0.0
+        while not self._stop.is_set():
+            got = reader.latest()
+            if got is None:
+                logger.info("camhub %s: frame bus stale — falling back to own source",
+                            self.camera_id)
+                return True
+            image, ts = got
+            if ts > last_ts:
+                last_ts = ts
+                self._publish(image, capture_ts=ts)
+            else:
+                self._stop.wait(0.005)
+        return True
 
     # ---- reader (multi consumer) ----
 
