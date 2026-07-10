@@ -26,7 +26,6 @@ def _patch_overlay_helpers(monkeypatch, calls: dict) -> None:
     """Stub everything _detect_iter touches except the logic under test."""
     monkeypatch.setattr(routes_video, "distances_enabled", lambda cfg: False)
     monkeypatch.setattr(routes_video, "distance_line_style", lambda cfg: {})
-    monkeypatch.setattr(routes_video, "occupancy_enabled", lambda cfg: False)
     monkeypatch.setattr(routes_video, "nodes_enabled", lambda cfg: True)
     monkeypatch.setattr(routes_video, "masks_enabled", lambda cfg: True)
     monkeypatch.setattr(routes_video, "boxes_enabled", lambda cfg: True)
@@ -117,7 +116,6 @@ def _patch_for_pose_rate(monkeypatch, pose_call_log: list) -> None:
     runner so we can assert it is fed once per cam-view frame."""
     monkeypatch.setattr(routes_video, "distances_enabled", lambda cfg: False)
     monkeypatch.setattr(routes_video, "distance_line_style", lambda cfg: {})
-    monkeypatch.setattr(routes_video, "occupancy_enabled", lambda cfg: False)
     monkeypatch.setattr(routes_video, "nodes_enabled", lambda cfg: True)
     monkeypatch.setattr(routes_video, "masks_enabled", lambda cfg: True)
     monkeypatch.setattr(routes_video, "boxes_enabled", lambda cfg: True)

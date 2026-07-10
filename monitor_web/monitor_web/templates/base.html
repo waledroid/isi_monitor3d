@@ -17,6 +17,10 @@
        exists before any module (zone_patch.js) or classic script (big_panel.js)
        attaches a stream — defer + module scripts execute in document order. -->
   <script src="/static/js/video_ws.js" defer></script>
+  <!-- Compressed-video passthrough player (window.__passthrough): WebCodecs
+       decode of the camh264 bitstream + client-side overlays. Classic script
+       right after video_ws.js (it needs __videoWS; big_panel.js needs it). -->
+  <script src="/static/js/passthrough_player.js" defer></script>
   <!-- Import map MUST precede any `type="module"` that imports "three". -->
   <script type="importmap">
   {

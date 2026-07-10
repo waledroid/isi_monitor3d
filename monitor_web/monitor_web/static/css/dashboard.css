@@ -500,6 +500,23 @@ html, body {
   pointer-events: none;
 }
 
+/* Compressed-video passthrough (passthrough_player.js): the WebCodecs canvas
+   replaces the JPEG <img>. Intrinsic canvas size = the decoded frame, so
+   object-fit: contain renders it exactly like the <img> it covers; the det
+   overlay canvas shares intrinsic size + fit, so drawing in decoded-frame
+   pixel coordinates aligns with the video with no display math. The <img> is
+   hidden via visibility (NOT display) — its layout box keeps feeding the
+   draw-mode / zone-overlay geometry that reads its client size. */
+.cam-video {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.cam-det-overlay { object-fit: contain; }
+.cam-img.pt-hidden { visibility: hidden; }
+
 /* Overscan the cam view ~120% normally (tunable). Scaling the WRAPPER zooms the
    <img> and its overlay <canvas> identically, so zone / ROI overlays stay locked
    to the video with no per-shape math. .panel-body clips the spill. */

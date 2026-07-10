@@ -233,3 +233,95 @@ def test_output_wh_rejects_bad_values() -> None:
     with pytest.raises(ValueError):
         RtspFrameSource(camera_id="cam_a", url="rtsp://example/stream",
                         output_wh=(0, 720))
+
+
+# ---- nal_tap (compressed video passthrough) ----------------------------------
+
+
+def _noop_tap(au: bytes, capture_ts: float, keyframe: bool) -> None:
+    pass
+
+
+def test_nal_tap_adds_tee_and_h264_parse_branch() -> None:
+    """With a nal_tap, a tee splits post-depay: tap branch = own parser
+    (config-interval=-1 for SPS/PPS re-injection) + byte-stream/au caps +
+    a second appsink; main branch decodes exactly as before."""
+    src = RtspFrameSource(camera_id="cam_a", url="rtsp://example/stream",
+                          nal_tap=_noop_tap)
+    src._codec = "h264"
+    s = src._build_pipeline_str()
+    for piece in (
+        "tee name=nal_t",
+        "queue leaky=downstream max-size-buffers=120",
+        "h264parse config-interval=-1",
+        "video/x-h264,stream-format=byte-stream,alignment=au",
+        "appsink name=nal_sink emit-signals=true sync=false max-buffers=8 drop=false",
+        "nal_t. ! avdec_h264 ! videoconvert",    # main branch off the tee
+        "appsink name=sink",                     # the decoded-frame sink stays
+    ):
+        assert piece in s, f"nal tap branch missing: {piece}"
+
+
+@pytest.mark.parametrize("codec", ["hevc", "h265"])
+def test_nal_tap_hevc_variant(codec: str) -> None:
+    src = RtspFrameSource(camera_id="cam_b", url="rtsp://example/stream",
+                          nal_tap=_noop_tap)
+    src._codec = codec
+    s = src._build_pipeline_str()
+    assert "h265parse config-interval=-1" in s
+    assert "video/x-h265,stream-format=byte-stream,alignment=au" in s
+    assert "rtph265depay" in s and "avdec_h265" in s
+
+
+def test_nal_tap_nvdec_keeps_main_branch_parser(monkeypatch) -> None:
+    """The nvdec chain starts with its own h264parse — the tap branch adds a
+    SECOND parser instance; the main branch's stays untouched."""
+    src = RtspFrameSource(camera_id="cam_a", url="rtsp://example/stream",
+                          decoder="nvdec", nal_tap=_noop_tap)
+    src._codec = "h264"
+    monkeypatch.setattr(RtspFrameSource, "_nvdec_available", lambda self: True)
+    s = src._build_pipeline_str()
+    assert "nal_t. ! h264parse ! nvh264dec" in s      # main branch parser kept
+    assert s.count("h264parse") == 2                  # + the tap's own instance
+
+
+def test_no_nal_tap_pipeline_byte_identical() -> None:
+    """Regression pin: WITHOUT a nal_tap the rendered pipeline string is
+    byte-identical to the pre-passthrough one."""
+    src = RtspFrameSource(camera_id="cam_a", url="rtsp://cam/stream",
+                          latency_ms=100)
+    src._codec = "h264"
+    expected = PIPELINE_TEMPLATE.format(
+        url="rtsp://cam/stream", latency_ms=100,
+        depay="rtph264depay", decode_chain="avdec_h264 ! videoconvert",
+        sink_caps="video/x-raw,format=BGR",
+    )
+    assert src._build_pipeline_str() == expected
+    assert "tee" not in expected and "nal_sink" not in expected
+
+
+@pytest.mark.parametrize("codec", ["h264", "hevc"])
+def test_nal_tap_pipeline_parses(codec: str) -> None:
+    """The tee'd launch string must be valid gst-launch grammar: both
+    appsinks and the tee resolve by name after parse."""
+    _ensure_gst_initialized()
+    src = RtspFrameSource(camera_id="cam_a", url="rtsp://127.0.0.1/x",
+                          nal_tap=_noop_tap)
+    src._codec = codec
+    pipeline = Gst.parse_launch(src._build_pipeline_str())
+    assert pipeline is not None
+    for name in ("src", "sink", "nal_sink", "nal_t"):
+        assert pipeline.get_by_name(name) is not None, f"missing element: {name}"
+    pipeline.set_state(Gst.State.NULL)
+
+
+def test_nal_codec_property_normalized() -> None:
+    """`nal_codec` reports h264/h265 (never 'hevc'), None pre-probe, and
+    defaults unknown codecs to h264 — matching the tap branch actually built."""
+    src = RtspFrameSource(camera_id="cam_a", url="rtsp://example/stream",
+                          nal_tap=_noop_tap)
+    assert src.nal_codec is None
+    for raw, normalized in (("h264", "h264"), ("hevc", "h265"),
+                            ("h265", "h265"), ("mjpeg", "h264")):
+        src._codec = raw
+        assert src.nal_codec == normalized

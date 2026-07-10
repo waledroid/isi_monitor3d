@@ -9,6 +9,12 @@
 //
 // API:
 //   __videoWS.attach(imgEl, streamId)  — render that server stream into <img>
+//   __videoWS.attachRaw(streamId, cb)  — subscribe a RAW payload stream (the
+//                                        camh264 compressed-video passthrough):
+//                                        cb(Uint8Array) fires for EVERY binary
+//                                        payload, in order — no rAF slot, no
+//                                        latest-frame dropping, no acks (a video
+//                                        decoder needs the continuous stream)
 //   __videoWS.detach(streamId)         — stop it (panel hidden / removed)
 //   __videoWS.resubscribeAll()         — drop + re-establish every stream (after
 //                                        a config save, so a new model/source
@@ -52,7 +58,7 @@
   function render() {
     rafId = null;
     for (const [id, entry] of subs) {
-      if (entry.pending === null) continue;
+      if (entry.raw || entry.pending === null) continue;
       const buf = entry.pending;
       entry.pending = null;
       const url = URL.createObjectURL(new Blob([buf], { type: "image/jpeg" }));
@@ -69,9 +75,10 @@
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       retries = 0;
-      for (const id of subs.keys()) {
+      for (const [id, entry] of subs) {
         ws.send(JSON.stringify({ sub: id }));
-        ws.send(JSON.stringify({ ack: id }));   // prime the credit window
+        // Raw (passthrough) streams are outside the credit machinery.
+        if (!entry.raw) ws.send(JSON.stringify({ ack: id }));   // prime the credit window
       }
     };
     ws.onmessage = (ev) => {
@@ -87,6 +94,13 @@
       const id = decoder.decode(view.subarray(1, 1 + idLen));
       const entry = subs.get(id);
       if (!entry) return;
+      if (entry.raw) {
+        // Passthrough payloads: forward EVERY one, in order — the WebCodecs
+        // decoder consumes the continuous bitstream (dropping = corruption).
+        try { entry.raw(view.subarray(1 + idLen)); }
+        catch (e) { console.warn(`videoWS[${id}]: raw handler failed`, e); }
+        return;
+      }
       // Latest-slot only — no blob/src work here (that happens once per
       // animation frame in render(), always with the newest payload).
       entry.pending = view.subarray(1 + idLen);
@@ -113,10 +127,20 @@
       if (entry.img === img && id !== streamId) detach(id);
     }
     if (subs.has(streamId)) { subs.get(streamId).img = img; return; }
-    subs.set(streamId, { img, lastUrl: null, pending: null });
+    subs.set(streamId, { img, lastUrl: null, pending: null, raw: null });
     connect();
     send({ sub: streamId });
     send({ ack: streamId });                   // prime the credit window
+  }
+
+  // Subscribe a raw payload stream (compressed-video passthrough). The
+  // callback owns decoding/rendering; detach(streamId) stops it as usual.
+  function attachRaw(streamId, onPayload) {
+    if (!streamId || typeof onPayload !== "function") return;
+    if (subs.has(streamId)) { subs.get(streamId).raw = onPayload; return; }
+    subs.set(streamId, { img: null, lastUrl: null, pending: null, raw: onPayload });
+    connect();
+    send({ sub: streamId });
   }
 
   function detach(streamId) {
@@ -129,10 +153,10 @@
   }
 
   function resubscribeAll() {
-    for (const id of subs.keys()) {
+    for (const [id, entry] of subs) {
       send({ unsub: id });
       send({ sub: id });
-      send({ ack: id });                       // re-prime credit after rebuild
+      if (!entry.raw) send({ ack: id });       // re-prime credit after rebuild
     }
   }
 
@@ -142,5 +166,5 @@
     if (!document.hidden) scheduleRender();
   });
 
-  window.__videoWS = { attach, detach, resubscribeAll };
+  window.__videoWS = { attach, attachRaw, detach, resubscribeAll };
 })();

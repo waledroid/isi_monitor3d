@@ -37,6 +37,15 @@ function colorForZone(zone) {
 // centred (letterboxed). The cam wrapper's CSS overscan transform then scales this
 // canvas with the image, so overlays ride the overscan automatically — these are
 // pre-transform (clientWidth) coords by design.
+// Source-frame dimensions for a cam view. Normally the <img>'s natural size;
+// when the compressed-video passthrough is active the <img> has no src
+// (naturalWidth 0) — fall back to the decoded frame size it reports.
+function naturalSize(img, camId) {
+  if (img.naturalWidth && img.naturalHeight) return [img.naturalWidth, img.naturalHeight];
+  const pt = window.__passthrough;
+  return (pt && pt.frameSize && pt.frameSize(camId)) || [0, 0];
+}
+
 function sourceToDisplay(img, su, sv, natW, natH) {
   const dw = img.clientWidth, dh = img.clientHeight;
   const scale = Math.min(dw / natW, dh / natH);
@@ -101,7 +110,7 @@ function drawTrackLegend(ctx, camId) {
 function drawZonePatches(ctx, img, camId) {
   const ps = getPatches(camId);
   if (!ps.length) return;
-  const natW = img.naturalWidth, natH = img.naturalHeight;
+  const [natW, natH] = naturalSize(img, camId);
   if (!natW || !natH) return;
   ctx.lineWidth = 3;
   ctx.font = "bold 12px monospace";
@@ -148,7 +157,7 @@ function drawZonePatches(ctx, img, camId) {
 function drawPatchGhosts(ctx, img, camId) {
   const ghosts = getGhosts(camId);
   if (!ghosts.length) return;
-  const natW = img.naturalWidth, natH = img.naturalHeight;
+  const [natW, natH] = naturalSize(img, camId);
   if (!natW || !natH) return;
   ctx.lineWidth = 2;
   ctx.font = "11px monospace";

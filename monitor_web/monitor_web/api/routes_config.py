@@ -934,7 +934,14 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
 
 @router.get("/api/ui-settings")
 def get_ui_settings(request: Request) -> JSONResponse:
-    """Return the dashboard UI-preferences dict (e.g. {'mp4_selected': ...})."""
+    """Return the dashboard UI-preferences dict (e.g. {'mp4_selected': ...}).
+
+    Notable keys (the store is a generic merge — any JS can add its own):
+    - ``video_passthrough`` (default true when absent): the big CAM views use
+      the compressed-video passthrough (``camh264:`` over /ws/video + WebCodecs
+      decode + /ws/overlays client-side drawing). ``false`` forces the classic
+      server-drawn JPEG path (passthrough_player.js never subscribes camh264).
+    """
     return JSONResponse(_read_ui_settings(request.app.state.settings))
 
 

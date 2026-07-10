@@ -30,6 +30,8 @@ Capture timestamp:
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 
 from backbone.core.interfaces import frame_source_registry
 
@@ -98,6 +100,38 @@ _NVDEC_ELEMENTS = {
 _DEFAULT_CODEC = "h264"
 _DECODERS = ("software", "nvdec")
 
+# Compressed-bitstream tap (video passthrough). When a `nal_tap` callback is
+# given, a `tee` splits the stream RIGHT AFTER the depayloader: the main
+# branch decodes exactly as before, the tap branch re-frames the ORIGINAL
+# H.264/H.265 bitstream into Annex-B access units and hands them to the
+# callback — zero re-encode, near-zero CPU. Construction notes:
+#   * The tee sits between two static pads (depay src → tee sink), so the
+#     race-free-linking property of the explicit-depay design is preserved.
+#   * The tap branch has its OWN parser instance (the nvdec decode chain
+#     already starts with h264parse/h265parse — that one stays in the main
+#     branch, untouched). `config-interval=-1` makes the parser re-inject
+#     SPS/PPS(/VPS) before every keyframe, mandatory so a late-joining
+#     consumer can start decoding at any keyframe.
+#   * `queue leaky=downstream` isolates the tap from the decode branch: a
+#     slow tap consumer drops ITS buffers and can never back-pressure decode.
+# This slots into PIPELINE_TEMPLATE's {decode_chain} placeholder, so without
+# a tap the rendered pipeline string is byte-identical to before.
+_NAL_TAP_TEMPLATE = (
+    "tee name=nal_t "
+    "! queue leaky=downstream max-size-buffers=120 "
+    "! {parse} config-interval=-1 "
+    "! video/x-{media},stream-format=byte-stream,alignment=au "
+    "! appsink name=nal_sink emit-signals=true sync=false max-buffers=8 drop=false "
+    "nal_t. ! {decode_chain}"
+)
+# codec -> (tap parser element, caps media suffix). Unknown codecs fall back
+# to H.264, mirroring `_depay_decoder`'s default.
+_NAL_PARSE = {
+    "h264": ("h264parse", "h264"),
+    "hevc": ("h265parse", "h265"),
+    "h265": ("h265parse", "h265"),
+}
+
 # Codec probe cache, keyed by URL. ffprobe costs up to 8 s per call and a
 # stream's codec never changes mid-process — but the dashboard's camera hub
 # re-acquires sources every time the last viewer detaches (page reloads!), so
@@ -147,6 +181,7 @@ class RtspFrameSource(GstAppsinkFrameSource):
         capture_fps: float | None = None,
         decoder: str = "software",
         output_wh: tuple[int, int] | list[int] | None = None,
+        nal_tap: Callable[[bytes, float, bool], None] | None = None,
     ) -> None:
         if not url.startswith(("rtsp://", "rtsps://")):
             raise ValueError(f"RtspFrameSource: bad URL {url!r}, expected rtsp:// or rtsps://")
@@ -176,7 +211,24 @@ class RtspFrameSource(GstAppsinkFrameSource):
         # geometry is scale-guarded (detections are mapped to calibration-frame
         # pixels in the orchestrator), so calibration stays at native res.
         self._output_wh = output_wh
+        # Optional compressed-bitstream tap: called with (annex_b_access_unit,
+        # capture_ts, is_keyframe) for every AU, from the tap branch's own
+        # streaming thread. capture_ts is time.time() at the tap callback —
+        # the same clock policy as the decoded-frame appsink.
+        self._nal_tap = nal_tap
         self._codec: str | None = None  # resolved lazily on first _build_pipeline_str
+
+    @property
+    def nal_codec(self) -> str | None:
+        """The tapped bitstream's codec, normalized to ``"h264"``/``"h265"``.
+
+        ``None`` until the codec probe has run (i.e. before ``start()``).
+        Unknown codecs report ``"h264"`` — matching the tap branch actually
+        built (``_depay_decoder`` defaults unknowns to the H.264 elements).
+        """
+        if self._codec is None:
+            return None
+        return "h265" if self._codec in ("hevc", "h265") else "h264"
 
     def _nvdec_available(self) -> bool:
         """True iff the GStreamer nvcodec elements exist on this machine.
@@ -234,6 +286,10 @@ class RtspFrameSource(GstAppsinkFrameSource):
                 # Software chain: videoconvert can't scale — add videoscale.
                 # (The nvdec chain scales on the GPU in cudaconvertscale.)
                 decode_chain = f"{decode_chain} ! videoscale"
+        if self._nal_tap is not None:
+            parse, media = _NAL_PARSE.get(self._codec, _NAL_PARSE[_DEFAULT_CODEC])
+            decode_chain = _NAL_TAP_TEMPLATE.format(
+                parse=parse, media=media, decode_chain=decode_chain)
         return PIPELINE_TEMPLATE.format(
             url=self._url, latency_ms=self._latency_ms,
             depay=depay, decode_chain=decode_chain, sink_caps=sink_caps,
@@ -248,6 +304,41 @@ class RtspFrameSource(GstAppsinkFrameSource):
         src = pipeline.get_by_name("src")
         if src is not None:
             src.connect("select-stream", self._select_stream)
+        if self._nal_tap is not None:
+            nal_sink = pipeline.get_by_name("nal_sink")
+            if nal_sink is not None:
+                nal_sink.connect("new-sample", self._on_nal_sample)
+
+    def _on_nal_sample(self, sink) -> int:
+        """Tap-branch appsink callback: one Annex-B access unit per buffer.
+
+        Runs on the tap branch's own GStreamer streaming thread — a slow
+        `nal_tap` stalls only the leaky tap queue, never the decode branch.
+        The callback is exception-guarded: a broken consumer must never kill
+        the streaming thread (a half-torn pipeline segfaults later).
+        """
+        from backbone.ingestion._gst_source import Gst
+
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+        capture_ts = time.time()
+        buf = sample.get_buffer()
+        keyframe = not buf.has_flags(Gst.BufferFlags.DELTA_UNIT)
+        success, mapinfo = buf.map(Gst.MapFlags.READ)
+        if not success:
+            logger.warning("%s: nal buffer map failed", self._log_prefix())
+            return Gst.FlowReturn.OK
+        try:
+            data = bytes(mapinfo.data)
+        finally:
+            buf.unmap(mapinfo)
+        try:
+            self._nal_tap(data, capture_ts, keyframe)
+        except Exception:
+            logger.warning("%s: nal_tap callback failed", self._log_prefix(),
+                           exc_info=True)
+        return Gst.FlowReturn.OK
 
     @staticmethod
     def _select_stream(rtspsrc, num: int, caps) -> bool:

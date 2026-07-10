@@ -44,8 +44,8 @@ def main() -> None:
         cfg = yaml.safe_load(fh) or {}
     # TensorRT opt-in (Settings ▸ Detection): every session built in this
     # process (seg + pose) inherits it through the shared ort_session seam.
-    if bool((cfg.get("detection") or {}).get("trt_enabled", True)):
-        os.environ["ISI3D_TRT"] = "1"
+    os.environ["ISI3D_TRT"] = (
+        "1" if bool((cfg.get("detection") or {}).get("trt_enabled", True)) else "0")
     if str(cfg.get("ingestion", {}).get("mode", "frames")) != "points":
         raise SystemExit(
             "isistream: backbone.yaml has ingestion.mode != 'points' — the "
@@ -66,6 +66,20 @@ def main() -> None:
     lock = threading.Lock()
     stop = threading.Event()
 
+    # `isistream.detect_substream: false` ignores the per-camera detect_source
+    # blocks (detection back on the main stream) without losing their URLs.
+    # (pre-rename `perception:` key still reads.)
+    isis_cfg = cfg.get("isistream", cfg.get("perception", {})) or {}
+    # Compressed video passthrough: tee each RTSP camera's ORIGINAL
+    # H.264/H.265 bitstream (post-depay, pre-decode) and serve it on a
+    # per-camera unix socket (isistream/nal_relay.py). The dashboard relays
+    # it to browsers for hardware decode — no per-frame JPEG encode on the
+    # display path. Relays are keyed per camera and OUTLIVE source rebuilds:
+    # a reconnect keeps clients connected; the new stream resumes at its
+    # next keyframe naturally (relay clients gate on keyframes anyway).
+    video_passthrough = bool(isis_cfg.get("video_passthrough", True))
+    relays: dict = {}
+
     def pump(cam_id: str, src_cfg_full: dict, *, feed_detect: bool = True,
              feed_bus: bool = True) -> None:
         """One reconnecting capture loop. Default: one stream feeds BOTH the
@@ -84,14 +98,45 @@ def main() -> None:
         # one ingest, one decode, DeepStream-style fan-out.
         from backbone.shared.frame_shm import FrameShmWriter
         bus_writer = FrameShmWriter(cam_id) if feed_bus else None
+        # Bitstream tap: DISPLAY pump only (feed_bus), rtsp plugin only (raw
+        # sources — v4l2/replay — have no compressed bitstream to tee). The
+        # NalRelay is created lazily on the first tapped AU because the codec
+        # is only known after the source's probe (src.nal_codec at start()).
+        nal_tap = None
+        if video_passthrough and feed_bus and src_cfg_full.get("name") == "rtsp":
+            from isistream.nal_relay import NalRelay
+            src_holder: list = [None]
+            tap_disabled = [False]
+
+            def nal_tap(au: bytes, capture_ts: float, keyframe: bool) -> None:
+                if tap_disabled[0]:
+                    return
+                relay = relays.get(cam_id)
+                if relay is None:
+                    codec = getattr(src_holder[0], "nal_codec", None) or "h264"
+                    try:
+                        relay = NalRelay(cam_id, codec)
+                    except OSError:
+                        logger.warning(
+                            "isistream: %s NAL relay bind failed — video "
+                            "passthrough disabled for this camera", cam_id,
+                            exc_info=True)
+                        tap_disabled[0] = True
+                        return
+                    relays[cam_id] = relay
+                relay.push(au, capture_ts, keyframe)
         while not stop.is_set():
             src = None
             streamed_since = None
             try:
                 src_cfg = dict(src_cfg_full)
                 plugin = src_cfg.pop("name")
+                if nal_tap is not None:
+                    src_cfg["nal_tap"] = nal_tap
                 src = frame_source_registry.create(
                     plugin, camera_id=cam_id, **src_cfg)
+                if nal_tap is not None:
+                    src_holder[0] = src
                 if hasattr(src, "start"):
                     src.start()
                 import time as _time
@@ -141,9 +186,6 @@ def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
 
-    # `isistream.detect_substream: false` ignores the per-camera detect_source
-    # blocks (detection back on the main stream) without losing their URLs.
-    isis_cfg = cfg.get("isistream", cfg.get("perception", {})) or {}
     use_substream = bool(isis_cfg.get("detect_substream", True))
     for cam_id, cam_cfg in cfg["cameras"].items():
         detect_src = cam_cfg.get("detect_source") if use_substream else None
@@ -180,6 +222,13 @@ def main() -> None:
                 os.unlink(shm_path(cam_id))
             except OSError:
                 pass
+        # Same deal for the NAL relays: close from the MAIN thread so the
+        # unix-socket paths are unlinked on deliberate shutdown.
+        for relay in relays.values():
+            try:
+                relay.close()
+            except Exception:
+                logger.debug("isistream: relay close failed", exc_info=True)
         logger.info("isistream: standalone producer stopped")
 
 

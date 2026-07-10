@@ -31,7 +31,6 @@ from ..detection_overlay import (
     get_async_pose,
     masks_enabled,
     nodes_enabled,
-    occupancy_enabled,
     person_pallet_max_m,
 )
 from ..floor_rectify import (
@@ -336,10 +335,14 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
         running = is_running() if is_running is not None else True
         if running:
             dets = [_to_crop(d, x0, y0, ch, cw) for d in (get_dets() if get_dets else [])]
+            # show_occupancy=False: the machine state labels ('palette_vide',
+            # 'palette_carton_…') are decision data, not display — they live
+            # on in the COMMUNICATION cards and MQTT; the zone view stays
+            # clean (same rule the CAM views already follow).
             crop = annotate_frame(crop, None, cam_id=camera_id, detections=dets,
                                   show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
                                   show_boxes=boxes_enabled(cfg), pose_detector=None,
-                                  show_occupancy=occupancy_enabled(cfg))
+                                  show_occupancy=False)
             label = _ZONE_STATUS_LABELS.get(get_status() if get_status else "")
             if label:
                 cv2.putText(crop, label, (8, max(20, ch - 12)),

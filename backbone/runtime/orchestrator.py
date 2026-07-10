@@ -228,6 +228,11 @@ class Orchestrator:
             return self._build_metric_stack()
 
         det_cfg = dict(cfg["detection"])
+        # TensorRT default-on — same env-var seam as isistream (ort_session).
+        # Written BOTH ways ("1"/"0") so a rebuild never inherits a stale
+        # value from an earlier config in the same process (tests!).
+        import os
+        os.environ["ISI3D_TRT"] = "1" if bool(det_cfg.pop("trt_enabled", True)) else "0"
         det_plugin = det_cfg.pop("plugin")
         # `pose_onnx_path` configures a separate person-pose model (consumed by the
         # dashboard overlay today; the S5.5 `yolo_onnx_pose` plugin later) — it is

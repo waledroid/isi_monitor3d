@@ -123,12 +123,20 @@
            x-show="$store.bigPanel.view === 'cam_a'">
         <!-- src driven by video_ws.js via the bigPanel boot() effect (one WS for all video). -->
         <img id="cam_a-img" :class="{ 'fit-contain': $store.bigPanel.isWarped }" alt="cam_a live feed" class="cam-img" />
+        <!-- Compressed-video passthrough (passthrough_player.js): the WebCodecs-
+             decoded camera bitstream + the client-drawn detection overlay.
+             Hidden until the player activates; the <img> above is the JPEG
+             fallback (kept in layout via visibility while passthrough runs). -->
+        <canvas id="cam_a-video" class="cam-video hidden" aria-hidden="true"></canvas>
+        <canvas id="cam_a-det" class="cam-overlay cam-det-overlay hidden" aria-hidden="true"></canvas>
         <canvas id="cam_a-overlay" class="cam-overlay"></canvas>
       </div>
       <div id="cam_b-wrap" class="big-view" data-view="cam_b" x-cloak
            :class="{ 'cam-flat': $store.bigPanel.isWarped }"
            x-show="$store.bigPanel.view === 'cam_b'">
         <img id="cam_b-img" :class="{ 'fit-contain': $store.bigPanel.isWarped }" alt="cam_b live feed" class="cam-img" />
+        <canvas id="cam_b-video" class="cam-video hidden" aria-hidden="true"></canvas>
+        <canvas id="cam_b-det" class="cam-overlay cam-det-overlay hidden" aria-hidden="true"></canvas>
         <canvas id="cam_b-overlay" class="cam-overlay"></canvas>
       </div>
       <div id="unified-wrap" class="big-view" data-view="unified" x-cloak

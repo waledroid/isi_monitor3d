@@ -253,12 +253,25 @@
         window.Alpine.effect(() => {
           const VWS = window.__videoWS;
           if (!VWS) return;
+          const PT = window.__passthrough;   // compressed-video passthrough
           ["cam_a", "cam_b"].forEach((cam) => {
             const img = document.getElementById(`${cam}-img`);
             if (this.view === cam && img) {
               const warped = this.showWarp && this.calibratedCams.includes(cam);
-              VWS.attach(img, `cam:${cam}${warped ? ":warp" : ""}`);
+              if (!warped && PT) {
+                // Passthrough owns the live view: it decodes the camera's own
+                // bitstream client-side (WebCodecs canvas + /ws/overlays) and
+                // falls back to the `cam:<id>` JPEG stream BY ITSELF when
+                // unavailable/undecodable/disabled — so no attach here.
+                VWS.detach(`cam:${cam}:warp`);
+                PT.activate(cam);
+              } else {
+                // Warp verification stays on the server-rendered JPEG path.
+                if (PT) PT.deactivate(cam);
+                VWS.attach(img, `cam:${cam}${warped ? ":warp" : ""}`);
+              }
             } else {
+              if (PT) PT.deactivate(cam);
               VWS.detach(`cam:${cam}`);
               VWS.detach(`cam:${cam}:warp`);
             }
