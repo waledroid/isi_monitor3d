@@ -150,12 +150,24 @@ def test_control_state_endpoint_initially_stopped(app_with_settings) -> None:
 
 
 def test_control_stop_when_not_running_is_idempotent(app_with_settings) -> None:
+    """STOP answers instantly ("stopping") and tears down in the background;
+    on a not-running system the teardown is a no-op that settles to
+    "stopped" within moments. Repeated STOPs never error."""
+    import time as _time
+
     with TestClient(app_with_settings) as client:
         res = client.post("/api/control/stop")
         assert res.status_code == 200
-        body = res.json()
-        assert body["stopped"] is False
-        assert body["state"] == "stopped"
+        assert res.json()["state"] in ("stopping", "stopped")
+        deadline = _time.time() + 5.0
+        while _time.time() < deadline:
+            state = client.get("/api/control/state").json()["state"]
+            if state == "stopped":
+                break
+            _time.sleep(0.05)
+        assert state == "stopped"
+        # Idempotent: a second STOP on a stopped system is still fine.
+        assert client.post("/api/control/stop").status_code == 200
 
 
 # ---- S16: /api/link-lines ----

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 
 from fastapi import APIRouter, Request
@@ -23,6 +24,9 @@ _BOOT_POLL_S = 0.2
 # Logged by backbone.runtime once the orchestrator is fully built (past calibration,
 # detection, and sink construction) and about to run — a reliable "it's up" signal.
 _READY_MARKER = "backbone built"
+# STARTs arriving this soon after a completed STOP are treated as queued/
+# replayed clicks, not intent — a human confirmation click lands later.
+_START_DEBOUNCE_S = 3.0
 # Substrings that mark the most operator-relevant log line in a boot-crash tail.
 _REASON_HINTS = ("not found", "no metadata.sinks", "failed", "error", "cannot",
                  "filenotfound", "valueerror", "no such file")
@@ -45,6 +49,23 @@ async def start(request: Request) -> JSONResponse:
     # a queued/duplicated click replaying after a UI stall, and this line is
     # how the operator sees it happen.
     logger.info("control: START requested (state=%s)", supervisor.state)
+    # A deliberate STOP must STICK: refuse STARTs while the teardown runs and
+    # for a short window after it — that is exactly when browser-queued
+    # clicks replay. A human retry a few seconds later works normally.
+    if getattr(request.app.state, "stop_in_progress", False):
+        logger.warning("control: START ignored — STOP still in progress")
+        return JSONResponse({"action": "start", "spawned": False,
+                             "state": "stopping",
+                             "reason": "stop in progress — try again in a moment",
+                             "log_tail": []})
+    since_stop = time.monotonic() - getattr(request.app.state, "last_stop_done", -1e9)
+    if since_stop < _START_DEBOUNCE_S:
+        logger.warning("control: START ignored (%.1fs after STOP — queued click?)",
+                       since_stop)
+        return JSONResponse({"action": "start", "spawned": False,
+                             "state": supervisor.state,
+                             "reason": "just stopped — press START again to confirm",
+                             "log_tail": []})
     spawned = supervisor.start()
     # Poll until the orchestrator declares itself built (up) or the process exits
     # (crash), whichever comes first — don't trust an early "running" that's just
@@ -84,42 +105,54 @@ async def start(request: Request) -> JSONResponse:
 
 @router.post("/stop")
 async def stop(request: Request) -> JSONResponse:
-    supervisor = request.app.state.supervisor
-    # Off the event loop: supervisor.stop() blocks for the SIGTERM grace +
-    # memory trim (seconds — longer under host-RAM pressure, exactly when the
-    # operator most needs the UI alive). The loop keeps serving Settings and
-    # status while the teardown runs in a worker thread. (An earlier freeze
-    # attributed to this pattern was actually the Settings model-list walking
-    # 34k dataset files ON the loop — fixed in routes_config/detection_overlay;
-    # with that gone, off-loop stop is strictly better.)
+    """Answer INSTANTLY; tear down in the background.
+
+    The full teardown (producer SIGTERM grace + engine SIGTERM grace + memory
+    trim) takes a few seconds — blocking the HTTP response for it made the
+    STOP button feel dead and let the browser queue extra clicks. The route
+    now clears the LIVE caches immediately (panels blank at once), kicks the
+    teardown into a worker thread, and returns; ``/state`` reports
+    ``stopping`` until the thread finishes.
+    """
+    app_state = request.app.state
+    supervisor = app_state.supervisor
+    if getattr(app_state, "stop_in_progress", False):
+        return JSONResponse({"action": "stop", "state": "stopping"})
     logger.info("control: STOP requested (state=%s, pid=%s)",
                 supervisor.state, supervisor.pid)
-    t0 = time.monotonic()
-    # Producer first: it feeds the engine, and stopping it releases its hub
-    # readers + CUDA sessions before the memory trim below.
-    perception = getattr(request.app.state, "isistream", None)
-    if perception is not None:
-        await asyncio.to_thread(perception.stop)
-    stopped = await asyncio.to_thread(supervisor.stop)
-    # The system is DOWN — empty every live cache so the UI clears at once:
-    # tracks/zone_state/observations vanish from the map, cards and panels
-    # instead of aging out over their staleness windows.
-    bus = getattr(request.app.state, "bus", None)
+    app_state.stop_in_progress = True
+    # Blank the UI immediately — the system is going down by operator intent.
+    bus = getattr(app_state, "bus", None)
     if bus is not None:
         try:
             bus.clear_live_state()
         except Exception:
             logger.debug("control: bus clear failed", exc_info=True)
-    logger.info("control: STOP done in %.2fs (state=%s)",
-                time.monotonic() - t0, supervisor.state)
-    return JSONResponse(
-        {"action": "stop", "stopped": stopped, "state": supervisor.state}
-    )
+
+    def _teardown() -> None:
+        t0 = time.monotonic()
+        try:
+            perception = getattr(app_state, "isistream", None)
+            if perception is not None:
+                perception.stop()      # producer first — it feeds the engine
+            supervisor.stop()
+        finally:
+            app_state.stop_in_progress = False
+            # Debounce anchor: START clicks that were queued while the UI was
+            # busy replay AFTER this moment and get ignored (see start()).
+            app_state.last_stop_done = time.monotonic()
+            logger.info("control: STOP done in %.2fs (state=%s)",
+                        time.monotonic() - t0, supervisor.state)
+
+    threading.Thread(target=_teardown, daemon=True, name="stop-teardown").start()
+    return JSONResponse({"action": "stop", "stopped": True, "state": "stopping"})
 
 
 @router.get("/state")
 async def state(request: Request) -> JSONResponse:
     supervisor = request.app.state.supervisor
+    st = ("stopping" if getattr(request.app.state, "stop_in_progress", False)
+          else supervisor.state)
     return JSONResponse(
-        {"state": supervisor.state, "pid": supervisor.pid, "last_exit_code": supervisor.last_exit_code}
+        {"state": st, "pid": supervisor.pid, "last_exit_code": supervisor.last_exit_code}
     )

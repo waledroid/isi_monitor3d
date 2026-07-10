@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     freshness_threshold_s: float = 2.0
 
     # Subprocess control.
-    backbone_terminate_timeout_s: float = 5.0
+    backbone_terminate_timeout_s: float = 2.0
 
     # Log ring buffer (lines).
     log_buffer_size: int = 500

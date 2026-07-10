@@ -180,7 +180,10 @@
         try {
           const res = await fetch("/api/control/stop", { method: "POST" });
           const data = await res.json();
-          this.flashStatus(data.state === "stopped" ? "Backbone stopped" : `state: ${data.state}`, false);
+          // The server answers instantly with "stopping" and tears down in
+          // the background — both spellings mean the click WORKED.
+          const ok = data.state === "stopped" || data.state === "stopping";
+          this.flashStatus(ok ? "System stopped" : `state: ${data.state}`, !ok);
         } catch (e) {
           this.flashStatus("Stop request failed", true);
         } finally {

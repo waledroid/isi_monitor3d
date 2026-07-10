@@ -27,7 +27,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-_TERM_GRACE_S = 3.0
+_TERM_GRACE_S = 1.5
 # Auto-respawn after an UNEXPECTED producer death (segfault, OOM, camera-
 # library crash): the metric engine coasts, but only a running producer
 # brings detections back. Deliberate STOPs never respawn. The window guard

@@ -902,9 +902,21 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
     host = getattr(request.app.state, "isistream", None)
     if (host is not None and host.points_mode()
             and host.status().get("running")):
+        # In the background: the restart takes ~4 s (SIGTERM grace + model
+        # load) and the Save button must not hang on it. The engine keeps
+        # running; panels ride the RTSP fallback until the bus returns.
         logger.info("config: restarting isistream to apply the new settings")
-        host.stop()
-        host.start()
+        import threading as _threading
+
+        def _restart() -> None:
+            try:
+                host.stop()
+                host.start()
+            except Exception:
+                logger.warning("config: isistream restart failed", exc_info=True)
+
+        _threading.Thread(target=_restart, daemon=True,
+                          name="isistream-restart").start()
 
     return JSONResponse(
         {
