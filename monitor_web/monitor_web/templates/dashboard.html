@@ -369,13 +369,41 @@
         <!-- Tab 2: Detection -->
         <div class="settings-tab-content" id="tab-detection">
           <section class="config-section">
-            <h3 data-i18n="model_section">{{ t.model_section or 'Detection model' }}</h3>
-            <!-- Object-detection models are configured PER ZONE (Settings ▸ Zones) —
-                 the cam views run pose only, so this section manages just the human
-                 pose model + the display preferences. The toggles and distance-line
-                 styles AUTO-SAVE on change (POST /api/ui-settings — read live per
-                 frame by the overlay); only the pose model rides the Save button. -->
+            <h3 data-i18n="model_section">{{ t.model_section or 'Isistream' }}</h3>
+            <!-- isistream is the SINGLE source of ingestion + perception. ONE object
+                 model serves every zone of every camera in ONE batched inference;
+                 the knobs below are GLOBAL (there are no per-zone models). Model /
+                 size / conf / SAHI / ENH ride the Save button and hot-restart the
+                 producer; display toggles auto-save (POST /api/ui-settings). -->
             <div class="config-model">
+              <!-- OBJECT model — one for all zones (isistream, zone-scoped, batched). -->
+              <label data-i18n="model_object">{{ t.model_object or 'Object model (all zones, .onnx)' }}</label>
+              <select id="zm-model-onnx">
+                <option value="" data-i18n="model_object_placeholder">{{ t.model_object_placeholder or '— none —' }}</option>
+              </select>
+
+              <label data-i18n="model_zone_imgsz">{{ t.model_zone_imgsz or 'Inference size (px, per zone crop)' }}</label>
+              <input id="zm-model-zone-imgsz" type="number" step="32" min="128" max="1280" placeholder="384" />
+
+              <label data-i18n="model_conf">{{ t.model_conf or 'Detection confidence threshold' }}</label>
+              <input id="zm-model-conf" type="number" step="0.05" min="0" max="1" placeholder="0.25" />
+
+              <label class="zm-checkbox-row">
+                <input id="zm-sahi-enabled" type="checkbox" />
+                <span data-i18n="sahi_enabled">{{ t.sahi_enabled or 'SAHI tiling (small/far objects; all zones)' }}</span>
+              </label>
+              <label data-i18n="sahi_tile">{{ t.sahi_tile or 'SAHI tile size (px, 0 = model input)' }}</label>
+              <input id="zm-sahi-tile" type="number" step="32" min="0" max="1280" placeholder="0" />
+              <label data-i18n="sahi_overlap">{{ t.sahi_overlap or 'SAHI overlap (must exceed the largest object)' }}</label>
+              <input id="zm-sahi-overlap" type="number" step="0.05" min="0" max="0.9" placeholder="0.2" />
+
+              <label class="zm-checkbox-row">
+                <input id="zm-enh-enabled" type="checkbox" />
+                <span data-i18n="enh_enabled">{{ t.enh_enabled or 'Enhance crops (CLAHE contrast; all zones)' }}</span>
+              </label>
+              <label data-i18n="enh_gamma">{{ t.enh_gamma or 'Enhance gamma (1.0 = off)' }}</label>
+              <input id="zm-enh-gamma" type="number" step="0.05" min="0.2" max="3.0" placeholder="1.0" />
+
               <!-- Person-pose model. Dropdown of pose *.onnx (path contains "pose")
                    from /api/detection/pose-onnx-files. Option value = absolute path
                    persisted to backbone.yaml. Optional. -->
@@ -429,19 +457,8 @@
              ZONE panels), synced here from /api/zone-patches. The old metric
              "Zones (up to 6)" map-click editor was retired. -->
         <div class="settings-tab-content" id="tab-zones">
-          <!-- Zones FPS: the rate the background zone workers run object detection
-               (drives zone-patch video too). Editable; persisted to the UI-settings
-               display_fps key, read live per loop by the worker. -->
           <section class="config-section">
             <div class="config-general-fps">
-              <label for="zm-zones-fps" data-i18n="zones_fps">{{ t.zones_fps or 'Zones FPS' }}</label>
-              <input id="zm-zones-fps" type="number" min="1" max="30" step="1" class="zm-input" placeholder="10" />
-
-              <label for="zm-zone-source" data-i18n="zone_source">{{ t.zone_source or 'Zone detections source' }}</label>
-              <select id="zm-zone-source" class="zm-input">
-                <option value="backbone" data-i18n="zone_source_backbone">{{ t.zone_source_backbone or 'Backbone (one perception)' }}</option>
-                <option value="local" data-i18n="zone_source_local">{{ t.zone_source_local or 'Local models (dev/fallback)' }}</option>
-              </select>
             </div>
           </section>
           <!-- Camera zones (the red polygons drawn on a cam → ZONE panels). Synced

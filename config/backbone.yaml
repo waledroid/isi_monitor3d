@@ -61,6 +61,14 @@ detection:
   decode_masks: true
   pose_enabled: true
   trt_enabled: true
+  zone_imgsz: 384
+  sahi:
+    enabled: false
+    tile: 0
+    overlap: 0.2
+  enhance:
+    enabled: false
+    gamma: 1.0
 homography:
   cross_cam_fusion:
     match_distance_m:

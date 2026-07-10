@@ -147,22 +147,6 @@ def test_pose_runs_every_frame_inherits_camera_fps(monkeypatch) -> None:
         f"Expected 10 pose calls (one per frame), got {len(pose_calls)}")
 
 
-def test_pose_rate_independent_of_display_fps(monkeypatch) -> None:
-    """The zones-only ``display_fps`` ("Zones FPS") must NOT throttle cam-view
-    pose: even with a tiny display_fps, pose still runs once per frame."""
-    pose_calls: list = []
-    _patch_for_pose_rate(monkeypatch, pose_calls)
-    # A low Zones-FPS must have zero effect on the cam-view pose rate.
-    monkeypatch.setattr(routes_video, "display_fps", lambda cfg: 1.0)
-
-    frames_out = list(routes_video._detect_iter(
-        iter([_frame() for _ in range(6)]), Settings(), "cam_a",
-        is_running=lambda: True, get_zone_dets=lambda: []))
-
-    assert len(frames_out) == 6
-    assert len(pose_calls) == 6, (
-        f"display_fps must not gate pose; expected 6 calls, got {len(pose_calls)}")
-
 
 def test_pose_runs_every_frame_for_cam_b(monkeypatch) -> None:
     """Both cam views get per-frame pose — the detect path runs per visible
@@ -200,4 +184,4 @@ def test_overlay_failure_yields_raw_frame_and_keeps_streaming(monkeypatch):
                                          is_running=lambda: True,
                                          get_zone_dets=lambda: []))
     assert len(out) == 3, "stream must survive overlay failures"
-    assert all(o is f for o, f in zip(out, frames)), "raw frames passed through"
+    assert all(o is f for o, f in zip(out, frames, strict=False)), "raw frames passed through"

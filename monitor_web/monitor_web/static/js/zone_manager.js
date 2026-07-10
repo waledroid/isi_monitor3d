@@ -65,6 +65,8 @@ async function populateModelSelect(selId, endpoint) {
 // Person-pose ONNX (pose *.onnx under runs/ + models/), newest first. Object
 // models are picked PER ZONE (Settings ▸ Zones) — no global model picker here.
 async function loadPoseOnnxFiles() {
+  // Every trained export is selectable; ONE object model serves all zones.
+  await populateModelSelect("zm-model-onnx", "/api/detection/onnx-files");
   await populateModelSelect("zm-model-pose-onnx", "/api/detection/pose-onnx-files");
 }
 
@@ -346,10 +348,23 @@ function collectLinkLines() {
 
 function collectPose() {
   const v = parseFloat(el("zm-model-pose-conf")?.value);
+  const num = (id, dflt) => {
+    const x = parseFloat(el(id)?.value);
+    return Number.isFinite(x) ? x : dflt;
+  };
+  // Settings ▸ Isistream: ONE object model + global knobs for ALL zones.
   return {
     pose_enabled: el("zm-pose-enabled")?.checked ?? true,
     pose_onnx_path: el("zm-model-pose-onnx")?.value.trim() || "",   // "" = clear
     pose_confidence_threshold: Number.isFinite(v) ? v : 0.3,
+    onnx_path: el("zm-model-onnx")?.value.trim() || "",
+    zone_imgsz: num("zm-model-zone-imgsz", 384),
+    confidence_threshold: num("zm-model-conf", 0.25),
+    sahi_enabled: el("zm-sahi-enabled")?.checked ?? false,
+    sahi_tile: num("zm-sahi-tile", 0),
+    sahi_overlap: num("zm-sahi-overlap", 0.2),
+    enhance_enabled: el("zm-enh-enabled")?.checked ?? false,
+    enhance_gamma: num("zm-enh-gamma", 1.0),
   };
 }
 
@@ -367,13 +382,8 @@ function syncUiPref(patch) {
 // Wire the change → POST hooks once (the modal markup is static).
 function wireUiPrefSync() {
   // Zones FPS (Zones tab): the editable zone-worker / zone-patch rate. Persisted
-  // to the same display_fps UI-settings key; read live per loop by the worker.
   // (Cam-view pose now inherits the Camera FPS, so it ignores this value.)
   const hooks = [
-    ["zm-zones-fps",
-      (e) => ({ display_fps: Math.max(1, Math.min(30, parseInt(e.value, 10) || 10)) })],
-    ["zm-zone-source", (e) => ({ zone_detection_source: e.value === "local" ? "local" : "backbone" })],
-    ["zm-model-show-nodes", (e) => ({ show_nodes: !!e.checked })],
     ["zm-model-show-masks", (e) => ({ show_masks: !!e.checked })],
     ["zm-model-show-boxes", (e) => ({ show_boxes: !!e.checked })],
     ["zm-model-dist-opacity",
@@ -412,6 +422,17 @@ function fillModelSection(det, isis) {
   const set = (id, v) => { const e = el(id); if (e != null) e.value = v ?? ""; };
   const poseEnabled = el("zm-pose-enabled");
   if (poseEnabled) poseEnabled.checked = det.pose_enabled !== false;
+  // Global isistream object-model knobs (one model serves every zone).
+  selectModelOption("zm-model-onnx", det.onnx_path || "");
+  set("zm-model-zone-imgsz", det.zone_imgsz ?? 384);
+  set("zm-model-conf", det.confidence_threshold ?? 0.25);
+  const sahiOn = el("zm-sahi-enabled");
+  if (sahiOn) sahiOn.checked = det.sahi_enabled === true;
+  set("zm-sahi-tile", det.sahi_tile ?? 0);
+  set("zm-sahi-overlap", det.sahi_overlap ?? 0.2);
+  const enhOn = el("zm-enh-enabled");
+  if (enhOn) enhOn.checked = det.enhance_enabled === true;
+  set("zm-enh-gamma", det.enhance_gamma ?? 1.0);
   const mg = el("zm-motion-gate");
   if (mg) mg.checked = isis.motion_gate !== false;
   const ds = el("zm-detect-substream");
@@ -503,11 +524,6 @@ async function open() {
   } catch (err) {
     console.warn("zone_manager: failed to load config", err);
   }
-  // Zones FPS field (Zones tab, UI-settings display_fps). Default 10.
-  const zonesFpsEl = el("zm-zones-fps");
-  if (zonesFpsEl) zonesFpsEl.value = (uiSettings && uiSettings.display_fps) ?? 10;
-  const srcEl = el("zm-zone-source");
-  if (srcEl) srcEl.value = (uiSettings && uiSettings.zone_detection_source) || "backbone";
   loadFloorZones(configData);   // metric floor zones (Zones tab, drawn on a cam)
   loadAlignment();              // cross-camera alignment fine-tune status
   if (configData) {

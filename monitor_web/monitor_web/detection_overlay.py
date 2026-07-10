@@ -16,8 +16,6 @@ from .engines import *  # noqa: F403
 # Private names some consumers import through this module.
 from .engines import (  # noqa: F401
     _ASYNC_POSE,
-    _ZONE_DETECTORS,
-    ZoneModelUnavailable,
     _gpu_free_mb,
 )
 from .model_store import *  # noqa: F403

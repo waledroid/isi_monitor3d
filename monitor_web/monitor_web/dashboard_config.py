@@ -11,9 +11,8 @@ directly (process-boundary rule), so they stay where they are.
 
 ``monitor_web_ui.yaml`` layout::
 
-    # top-level: UI preferences (display_fps, model_*_path, mp4 selection …) —
+    # top-level: UI preferences (model_*_path, mp4 selection …) —
     # left at the top level so existing readers keep working unchanged.
-    display_fps: 10
     ...
     # merged sections (sibling keys):
     link_lines:          {rules: [...]}

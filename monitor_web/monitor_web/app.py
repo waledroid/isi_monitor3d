@@ -56,16 +56,11 @@ async def _heartbeat(cfg: Settings, supervisor: BackboneSupervisor) -> None:
             info = current_model_info(cfg)
             loaded = info["loaded"]
             conf = info["configured"]
-            zones = info.get("zones") or []
-            # The full-frame preview is built only on a NO-zone cam. With zones,
-            # the cam view runs the per-zone detectors instead, so "none" here is
-            # normal — report the zone sessions so the line reflects reality.
+            # The dashboard runs no perception of its own (isistream is the single
+            # source). ``loaded`` is non-None only after the MP4 dev viewer has run
+            # its in-process detector; "none" is the normal live state.
             if loaded:
                 loaded_str = f"{loaded['plugin']} · {loaded['label']}"
-            elif zones:
-                z = zones[0]
-                loaded_str = (f"none (zone detection active: {len(zones)} session(s), "
-                              f"e.g. {z['label']} @{z['size']}px)")
             else:
                 loaded_str = "none (no preview run yet)"
             conf_str = f"{conf['plugin']} · {conf['label']}"
@@ -112,9 +107,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # one coherent snapshot per frame. Panels + cam views are pure renderers of it.
     zone_manager = ZoneWorkerManager(
         cfg, is_running=lambda: supervisor.state == "running",
-        # Late-binding: app.state.bus is attached below; the workers read the
-        # Backbone's per-camera observations from it (zone_detection_source
-        # "backbone" — ONE perception, zero dashboard inference).
+        # Late-binding: app.state.bus is attached below; the workers render the
+        # Backbone's per-camera observations from it — ONE perception, zero
+        # dashboard inference.
         bus_getter=lambda: getattr(app.state, "bus", None))
     templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 

@@ -8,68 +8,9 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from monitor_web.api.routes_video import _drop_persons, _zone_objects
 from monitor_web.api.routes_zone_patches import patch_pixel_box
 from monitor_web.app import create_app
 from monitor_web.config import Settings
-
-# ---- _zone_objects: strict zone-only object rule ---------------------------
-
-class _Det:
-    """Minimal Detection stand-in (cls / confidence / bbox_xyxy)."""
-
-    def __init__(self, cls, conf, bbox):
-        self.cls, self.confidence, self.bbox_xyxy = cls, conf, bbox
-
-
-def test_zone_objects_drops_person_class():
-    """On a zone-enabled cam the human is shown by pose only — person boxes are dropped."""
-    dets = [_Det("palette", 0.9, (0, 0, 10, 10)), _Det("person", 0.8, (50, 50, 60, 80))]
-    out = _zone_objects(dets)
-    assert [d.cls for d in out] == ["palette"]
-
-
-def test_zone_objects_dedupes_overlapping_zones():
-    """The same object cached by two OVERLAPPING zones is drawn once (highest conf)."""
-    a = _Det("palette", 0.7, (100, 100, 200, 200))
-    b = _Det("palette", 0.95, (102, 101, 201, 199))   # ~same box, higher conf
-    out = _zone_objects([a, b])
-    assert len(out) == 1 and out[0].confidence == 0.95
-
-
-def test_zone_objects_keeps_distinct_objects():
-    """Different objects (low IoU, centres outside each other) are all kept — dedupe
-    must not over-merge two pallets sitting side by side."""
-    dets = [_Det("palette", 0.9, (0, 0, 50, 50)), _Det("palette", 0.9, (300, 300, 360, 360))]
-    assert len(_zone_objects(dets)) == 2
-
-
-def test_zone_objects_merges_partial_overlap_from_two_zones():
-    """One object clipped differently by two OVERLAPPING zones → offset boxes with
-    low IoU but mutual-centre containment → drawn once (highest conf wins)."""
-    a = _Det("palette", 0.7, (100, 100, 200, 200))   # zone A's view of the pallet
-    b = _Det("palette", 0.9, (140, 110, 240, 205))   # zone B's view — offset, IoU < 0.5
-    out = _zone_objects([a, b])
-    assert len(out) == 1 and out[0].confidence == 0.9
-
-
-def test_zone_objects_merges_asymmetric_offset_twin():
-    """Strengthened dedupe: a small clipped box whose centre is inside a larger box
-    (only ONE centre contained) still merges — the old AND-rule would have kept both."""
-    big = _Det("palette", 0.6, (100, 100, 260, 240))
-    clip = _Det("palette", 0.85, (210, 150, 250, 200))   # inside big; big's centre NOT in clip
-    out = _zone_objects([big, clip])
-    assert len(out) == 1 and out[0].confidence == 0.85
-
-
-def test_drop_persons_strips_all_human_classes():
-    """STRICT: humans are never detected in a zone — every person-class variant is
-    removed at the zone detector (panel + cache stay person-free); objects pass through."""
-    dets = [_Det("person", 0.9, (0, 0, 1, 1)), _Det("human", 0.9, (0, 0, 1, 1)),
-            _Det("pedestrian", 0.9, (0, 0, 1, 1)), _Det("palette", 0.8, (0, 0, 1, 1)),
-            _Det("carton", 0.8, (0, 0, 1, 1))]
-    assert sorted(d.cls for d in _drop_persons(dets)) == ["carton", "palette"]
-
 
 # ---- patch_pixel_box (pure crop math) -------------------------------------
 

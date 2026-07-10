@@ -32,7 +32,7 @@ def _seed(cfg, data: dict) -> None:
 
 
 GOOD = {
-    "display_fps": 25,
+    "show_masks": True,
     "mode2_calibration_path": "/some/calibration.json",
     "zone_patches": {"patches": [{"id": "zp_1", "camera_id": "cam_a"}]},
 }
@@ -40,10 +40,10 @@ GOOD = {
 
 def test_write_all_keeps_bak_of_previous_content(cfg):
     _seed(cfg, GOOD)
-    dc.write_all(cfg, {"display_fps": 30})
+    dc.write_all(cfg, {"show_masks": False})
     bak = cfg.ui_settings_path.with_suffix(".yaml.bak")
     assert yaml.safe_load(bak.read_text()) == GOOD
-    assert dc.load_all(cfg) == {"display_fps": 30}
+    assert dc.load_all(cfg) == {"show_masks": False}
 
 
 def test_read_section_never_migrates_over_corrupt_store(cfg):

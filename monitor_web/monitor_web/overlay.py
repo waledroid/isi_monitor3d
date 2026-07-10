@@ -389,20 +389,6 @@ def distances_enabled(cfg) -> bool:
     return _ui_pref(cfg, "show_distances", True)
 
 
-def display_fps(cfg) -> float:
-    """Dashboard preference: cap the per-frame inference/compositing rate on display
-    streams (CAM detect, zone patches, unified). Read from the UI-settings YAML;
-    clamped to [1, 30]; default 10."""
-    path = Path(cfg.ui_settings_path)
-    val = 10.0
-    if path.exists():
-        try:
-            data = load_yaml_cached(path)
-            if isinstance(data, dict) and data.get("display_fps") is not None:
-                val = float(data["display_fps"])
-        except (OSError, yaml.YAMLError, TypeError, ValueError):
-            val = 10.0
-    return max(1.0, min(30.0, val))
 
 
 def person_pallet_max_m(cfg) -> float:

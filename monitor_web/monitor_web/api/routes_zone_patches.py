@@ -1,8 +1,9 @@
 """Zone-patch ROIs — pixel-space "watch boxes" drawn directly on a camera frame.
 
-Each ROI is cropped out of the live feed and run through the detector as a
-*targeted SAHI* tile: a small region upscaled to the model's input makes far/small
-objects easy to detect. Stored in ``zone_patches.yaml`` next to ``backbone.yaml``;
+Each ROI is a display crop of the live feed for the ZONE panels; its contents come
+from the Backbone's per-camera observations (one perception — the dashboard runs no
+detector). The zone worker groups those wire detections into these polygons for the
+COMMUNICATION cards. Stored in ``zone_patches.yaml`` next to ``backbone.yaml``;
 monitor_web-only (the Backbone never reads these — they're a UI monitoring aid, not
 metric floor zones). Rects are in SOURCE-frame pixels, with the frame size they were
 drawn at so the crop stays correct if the live resolution differs.
@@ -87,29 +88,18 @@ class PatchRect(BaseModel):
     rect: list[float] | None = Field(default=None, min_length=4, max_length=4)
     polygon: list[list[float]] | None = None                     # [[u,v], ...] source px
     frame_wh: list[int] | None = None                            # [W,H] drawn at (guard)
-    model: str | None = None    # per-zone detection model (onnx path); None = global
-    # Detection input size for this zone: the bounding-rect crop is resized to fit
-    # this (INTER_AREA on downscale) before inference — smaller = faster/lighter.
-    infer_size: int = 320
     color: str | None = None    # outline colour on the cam overlay (hex); None = red
-    confidence: float | None = None   # per-zone detection confidence; None = global
-    # SAHI (Slicing Aided Hyper Inference) — slice this zone's crop into a
-    # rows x cols grid of overlapping tiles, detect each at infer_size, NMS-merge,
-    # remap to source. OFF by default (zero behaviour change). Only worth it on
-    # FAR zones whose distant objects shrink to a few pixels under the single
-    # resize. ``sahi_overlap`` is the fraction of tile size shared with neighbours.
-    sahi: bool = False
-    # ENH: far/dim-slice enhancement before detection (EMA temporal denoise +
-    # cubic upscale + local contrast + mild unsharp). Composable with tiling.
-    enhance: bool = False
-    sahi_rows: int = 2
-    sahi_cols: int = 2
-    sahi_overlap: float = 0.2
+    # Per-zone DISPLAY confidence floor on the Backbone's wire detections (one
+    # perception — the dashboard never infers). None = a sane default floor.
+    confidence: float | None = None
     # Set on server-derived cross-camera twins (the base patch's id). Twins in
     # a POST are dropped and regenerated — never operator-authoritative.
     twin_of: str | None = None
 
-    model_config = {"extra": "ignore"}   # tolerate legacy max_fps keys in saved YAML
+    # Tolerate legacy per-zone inference keys (model/infer_size/sahi/enhance/
+    # max_fps) still sitting in older saved YAML — they are ignored now that the
+    # dashboard runs no local inference; a resave drops them harmlessly.
+    model_config = {"extra": "ignore"}
 
     @model_validator(mode="after")
     def _derive_and_clamp(self) -> PatchRect:
@@ -119,10 +109,6 @@ class PatchRect(BaseModel):
             self.rect = [min(xs), min(ys), max(xs), max(ys)]
         if not self.rect or len(self.rect) != 4:
             raise ValueError("zone patch needs a rect or a polygon of >=3 points")
-        self.infer_size = max(64, min(1280, int(self.infer_size)))
-        self.sahi_rows = max(1, min(4, int(self.sahi_rows)))
-        self.sahi_cols = max(1, min(4, int(self.sahi_cols)))
-        self.sahi_overlap = max(0.0, min(0.5, float(self.sahi_overlap)))
         return self
 
 
@@ -250,15 +236,8 @@ def _make_twin(patch: dict, rig) -> dict | None:
         "camera": ghost["camera"],
         "polygon": [[float(u), float(v)] for u, v in poly],
         "frame_wh": [int(gw), int(gh)],
-        "model": patch.get("model"),
-        "infer_size": patch.get("infer_size", 320),
         "color": patch.get("color"),
         "confidence": patch.get("confidence"),
-        "sahi": patch.get("sahi", False),
-        "enhance": patch.get("enhance", False),
-        "sahi_rows": patch.get("sahi_rows", 2),
-        "sahi_cols": patch.get("sahi_cols", 2),
-        "sahi_overlap": patch.get("sahi_overlap", 0.2),
         "twin_of": patch["id"],
     }
 

@@ -7,7 +7,6 @@ drawing (overlay.py). Split out of detection_overlay.py.
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from pathlib import Path
 
@@ -49,17 +48,6 @@ _POSE_CONF: float | None = None
 _POSE_IMGSZ: int | None = None
 
 
-# Per-zone detector sessions, keyed by resolved onnx path — a zone patch can run a
-# DIFFERENT (usually lighter) model than the global one. Each distinct model is its
-# own CUDA session, so prefer small/nano models per zone.
-_ZONE_DETECTORS: dict[str, object] = {}
-
-
-# Serializes zone-detector BUILDS so concurrent first-access (e.g. both zone panels
-# + cam reuse opening at once) builds one CUDA session per key, not N racing ones.
-_ZONE_BUILD_LOCK = threading.Lock()
-
-
 # --- GPU memory guard --------------------------------------------------------
 # The dashboard preview loads its own CUDA session(s) ON TOP of the live Backbone
 # (and pose, and per-zone models). On a 12 GB card these can collectively exhaust
@@ -75,24 +63,7 @@ _GPU_MIN_FREE_MB = 900          # skip preview inference when free VRAM < this
 _GPU_PROBE_TTL_S = 1.5          # reuse the (subprocess) VRAM reading this long
 
 
-# Building a NEW zone session needs the margin PLUS room for the session itself
-# (weights + arena; ~300 MB for a nano @320, ~1.5 GB for RF-DETR @840 — this is a
-# refuse-early floor, not a sizing model). Below it, get_zone_detector raises
-# ZoneModelUnavailable instead of letting ORT OOM and corrupt the CUDA context.
-_ZONE_SESSION_HEADROOM_MB = 600
-
-
 _gpu_probe = {"ts": 0.0, "free_mb": None}
-
-
-class ZoneModelUnavailable(RuntimeError):
-    """A zone's detector session cannot be (safely) built right now — e.g. not
-    enough free VRAM. The zone worker disables just that zone for a cooldown and
-    keeps the others running; nothing else in the process is affected."""
-
-    def __init__(self, reason: str, detail: str = ""):
-        super().__init__(detail or reason)
-        self.reason = reason
 
 
 def _gpu_free_mb():
@@ -136,7 +107,6 @@ def reset_detector() -> None:
     _POSE_PATH = None
     _POSE_CONF = None
     _POSE_IMGSZ = None
-    _ZONE_DETECTORS.clear()   # drop per-zone sessions too
     # Drain the per-camera async pose runners: each pins its OWN PoseEngine
     # CUDA session (independent of _POSE) plus a worker thread — without this,
     # pose VRAM outlived STOP indefinitely.
@@ -312,96 +282,14 @@ def get_detector(cfg):
     return _DETECTOR
 
 
-def get_zone_detector(model_path, cfg, input_size: int = 320):
-    """Detector for a zone patch, built at ``input_size`` (small = fast/light), cached
-    per ``(resolved model, input_size)``. Uses the zone's own model when set, else the
-    globally-configured one (or the latest trained fallback). Zones sharing a
-    (model, size) share one CUDA session; a 320 session is far lighter than the main
-    640 preview one, which is the point — run zone detection cheaply.
-
-    NOTE: confidence is deliberately NOT part of the cache key. The session is built
-    at a low floor and each zone's threshold is applied as a cheap POST-FILTER on the
-    returned detections (see ``_zone_patch_iter``). Keying by confidence would rebuild
-    a whole CUDA session on every conf change — multi-second stalls + leaked sessions.
-
-    The task plugin is auto-picked from the ONNX outputs (same rule as the main
-    detector). Class names come from config when using the global model, else default
-    to the RF-DETR / pallet sets."""
-    det_cfg = read_backbone(cfg).get("detection") or {}
-    # Resolve the model: per-zone override, else the global configured model, else
-    # the latest trained export so a fresh setup still previews.
-    resolved = resolve_model(model_path, cfg) if model_path else None
-    using_global = resolved is None
-    if resolved is None:
-        raw = det_cfg.get("onnx_path")
-        resolved = resolve_model(raw, cfg) if raw else None
-    if resolved is None:
-        fb = latest_trained_onnx()
-        resolved = Path(fb) if fb else None
-    if resolved is None:
-        return get_detector(cfg)        # nothing resolvable → shared global (may 503)
-    # Build at a LOW floor so per-zone post-filtering is authoritative down to it
-    # (never above the configured global, so a low global still wins).
-    conf = min(float(det_cfg.get("confidence_threshold", 0.3)), 0.05)
-    key = (str(resolved), int(input_size))
-    det = _ZONE_DETECTORS.get(key)
-    if det is not None:
-        return det
-    # Double-checked locking: serialize the (slow, multi-second) CUDA-session build
-    # so concurrent first-access for the same key builds ONCE — not N racing sessions
-    # that each grab VRAM before one wins the cache slot.
-    with _ZONE_BUILD_LOCK:
-        det = _ZONE_DETECTORS.get(key)
-        if det is not None:
-            return det
-        # VRAM admission: refuse to even START building when the card is nearly
-        # full — an ORT CUDA OOM mid-build throws error 700, which corrupts the
-        # context for EVERY resident session (Backbone + pose + other zones).
-        # Raising here keeps the failure scoped to this one zone. No GPU /
-        # unknown probe → no check (CPU execution can't trigger it).
-        free = _gpu_free_mb()
-        if free is not None and free < _GPU_MIN_FREE_MB + _ZONE_SESSION_HEADROOM_MB:
-            raise ZoneModelUnavailable(
-                "no_vram",
-                f"refusing to build zone session for {resolved.name}: "
-                f"{free:.0f} MB free < {_GPU_MIN_FREE_MB + _ZONE_SESSION_HEADROOM_MB} MB required",
-            )
-        plugin = "yolo_onnx"
-        try:
-            import onnx as _onnx
-            out_names = [o.name for o in _onnx.load(str(resolved)).graph.output]
-            plugin = select_plugin(plugin, out_names)
-        except Exception as exc:
-            logger.warning("zone detector: could not introspect %s: %s", resolved, exc)
-        cfg_names = det_cfg.get("class_names")
-        if using_global and isinstance(cfg_names, list) and cfg_names:
-            names = list(cfg_names)
-        else:
-            names = list(_RFDETR_DEFAULT_CLASS_NAMES if plugin == "rfdetr_onnx_seg" else _DEFAULT_CLASS_NAMES)
-        try:
-            import backbone.detection  # noqa: F401 — registers the detector plugins
-            from backbone.core.interfaces import detector_registry
-            kwargs = dict(onnx_path=str(resolved), class_names=names, confidence_threshold=conf)
-            if plugin != "rfdetr_onnx_seg":   # RF-DETR reads its own fixed square input
-                kwargs["input_size"] = (int(input_size), int(input_size))
-            det = detector_registry.create(plugin, **kwargs)
-        except Exception as exc:
-            logger.warning("zone detector: build failed for %s (%s) — using global: %s",
-                           resolved, plugin, exc)
-            return get_detector(cfg)
-        _ZONE_DETECTORS[key] = det
-    logger.info("zone detector: loaded %s @ %dpx floor-conf=%.2f (%s)", plugin, input_size, conf, resolved)
-    return det
-
-
 def current_model_info(cfg) -> dict:
     """Snapshot of the detection model for the heartbeat / status line.
 
     ``loaded`` is what the live overlay singleton actually built (None until a
-    ``?detect=1`` stream has run since the last reset). ``configured`` is what
-    ``backbone.yaml`` points at right now — what the next stream and the next
-    Backbone boot will use. They differ exactly while a change is pending a
-    reload, which is what makes this worth logging.
+    ``?detect=1`` stream — the MP4 dev viewer — has run since the last reset).
+    ``configured`` is what ``backbone.yaml`` points at right now — what the next
+    stream and the next Backbone boot will use. They differ exactly while a change
+    is pending a reload, which is what makes this worth logging.
     """
     det_cfg = read_backbone(cfg).get("detection") or {}
     plugin = det_cfg.get("plugin", "yolo_onnx")
@@ -410,13 +298,6 @@ def current_model_info(cfg) -> dict:
     resolved = resolve_model(raw, cfg) if raw else None
     conf_path = str(resolved) if resolved else (raw or None)
     loaded_path = _LOADED["path"] if _LOADED else None
-    # Per-zone detector sessions actually doing the cam-view detection (the
-    # full-frame `_LOADED` preview is NOT built when zones exist). Keyed by
-    # (resolved path, input_size) — surface a short summary of each.
-    zones = [
-        {"label": model_label(k[0]), "size": k[1]}
-        for k in _ZONE_DETECTORS
-    ]
     return {
         "configured": {
             "plugin": plugin,
@@ -427,5 +308,4 @@ def current_model_info(cfg) -> dict:
         "loaded": (
             {**_LOADED, "label": model_label(loaded_path)} if _LOADED else None
         ),
-        "zones": zones,
     }

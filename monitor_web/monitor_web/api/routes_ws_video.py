@@ -35,7 +35,7 @@ keeps overwriting with newer frames, so what eventually goes out is always the
 NEWEST. A subscription runs in legacy free-run mode until its first ack (old
 clients / the MJPEG-parity tests keep working); ``ACK_REFILL_S`` recovers lost
 acks and gives hidden tabs a slow keepalive instead of a frozen stale image.
-Zone/unified/warp streams are display_fps-capped upstream, so credit never
+Zone/unified/warp streams are source-paced (camera fps), so credit never
 binds them. The hidden MP4 dev viewer and curl debugging keep the MJPEG
 endpoints.
 """

@@ -25,7 +25,6 @@ from ..camera_hub import get_hub
 from ..detection_overlay import (
     annotate_frame,
     boxes_enabled,
-    display_fps,
     distance_line_style,
     distances_enabled,
     get_async_pose,
@@ -77,15 +76,6 @@ def _backbone_running(state) -> bool:
         return bool(sup) and sup.state == "running"
     except Exception:
         return False
-
-
-# Zone detection now lives in the background ZoneDetectionWorker (zone_worker.py) —
-# one thread per camera, all zones on the same frame, one atomic snapshot. These
-# re-exports keep existing imports/tests stable.
-from ..zone_worker import (  # noqa: E402, F401
-    _drop_persons,
-    _zone_objects,
-)
 
 
 def _load_cameras_from_backbone_yaml(path: Path) -> dict[str, dict]:
@@ -323,21 +313,12 @@ def _to_crop(d, x0: int, y0: int, ch: int, cw: int):
         occupancy_confidence=getattr(d, "occupancy_confidence", 0.0))
 
 
-_ZONE_STATUS_LABELS = {
-    "no_vram": "MODEL UNAVAILABLE (VRAM)",
-    "error": "DETECTION ERROR",
-}
-
-
 def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
-                      infer_size: int = 320, is_running=None, get_dets=None,
-                      get_status=None) -> Iterator:
+                      infer_size: int = 320, is_running=None, get_dets=None) -> Iterator:
     """Pure RENDERER for a zone panel — NO detection in the HTTP path. Crops each
     frame to the zone's bounding rect, draws the background worker's published
     detections for this zone (translated to crop coords), then downsizes to the
-    panel display size. Backbone stopped → raw crop (the pre-START state). A zone
-    the worker disabled (circuit breaker) gets its status banner drawn instead of
-    silently looking object-free."""
+    panel display size. Backbone stopped → raw crop (the pre-START state)."""
     for image in frames:
         ih, iw = image.shape[:2]
         box = patch_pixel_box(rect, stored_wh, (iw, ih))
@@ -357,12 +338,6 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
                                   show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
                                   show_boxes=boxes_enabled(cfg), pose_detector=None,
                                   show_occupancy=False)
-            label = _ZONE_STATUS_LABELS.get(get_status() if get_status else "")
-            if label:
-                cv2.putText(crop, label, (8, max(20, ch - 12)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
-                cv2.putText(crop, label, (8, max(20, ch - 12)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (60, 60, 255), 1, cv2.LINE_AA)
         # Downscale to the panel display size (longest side = infer_size) for
         # bandwidth parity with the old fed-image stream.
         longest = max(ch, cw)
@@ -374,9 +349,9 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
 
 
 def build_zone_stream(state, patch_id: str) -> Iterator:
-    """Frame iterator for one zone-patch panel (crop + worker detections + status
-    banner). Shared by the MJPEG endpoint and /ws/video. Raises ``LookupError``
-    when the ROI or its camera isn't configured."""
+    """Frame iterator for one zone-patch panel (crop + worker detections). Shared
+    by the MJPEG endpoint and /ws/video. Raises ``LookupError`` when the ROI or
+    its camera isn't configured."""
     cfg = state.settings
     patch = find_patch(cfg, patch_id)
     if patch is None:
@@ -390,13 +365,12 @@ def build_zone_stream(state, patch_id: str) -> Iterator:
     if rect is None:
         raise LookupError(f"zone patch {patch_id!r} has no rect/polygon")
     manager = getattr(state, "zone_manager", None)
-    frames = _cap_fps(_frame_iter(camera_id, src_cfg), display_fps(cfg))
+    frames = _frame_iter(camera_id, src_cfg)   # source-paced; no display cap
     return _zone_render_iter(
         frames, cfg, camera_id, rect, patch.get("frame_wh"),
         infer_size=int(patch.get("infer_size") or 320),
         is_running=lambda: _backbone_running(state),
         get_dets=(lambda: manager.zone_dets(patch_id)) if manager is not None else None,
-        get_status=(lambda: manager.zone_status(patch_id)) if manager is not None else None,
     )
 
 
@@ -476,7 +450,7 @@ def build_unified_stream(state) -> Iterator:
         raise LookupError("unified view needs 2 configured+calibrated cameras")
     views = {cid: rig[cid] for cid in cam_ids}
     src_cfgs = {cid: cameras[cid].get("source", {}) for cid in cam_ids}
-    return _unified_iter(cam_ids, src_cfgs, views, display_fps(cfg))
+    return _unified_iter(cam_ids, src_cfgs, views, DISPLAY_FPS)
 
 
 @router.get("/stream/unified")
@@ -528,7 +502,7 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         # calibration visibility (replaces the retired unified BEV render).
         mode2 = len(cameras) >= 2
         # Cap before the (expensive) warp+detect; raw passthrough below stays smooth.
-        frames = _warp_detect_iter(_cap_fps(frames, display_fps(cfg)) if detect else frames,
+        frames = _warp_detect_iter(frames,
                                    cfg, camera_id, warp_cam, M, out_wh, do_detect=detect,
                                    is_running=is_running,
                                    bus=getattr(state, "bus", None), mode2=mode2)
@@ -536,7 +510,7 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         # Per-frame detector lookup (see _detect_iter) so model changes apply live.
         # NO _cap_fps here: the source is already capped at capture_fps (Camera FPS)
         # by the camera-hub. _detect_iter runs POSE on every frame, so pose inherits
-        # the Camera-FPS cam-view rate (Zones FPS / display_fps is zones-only now).
+        # the Camera-FPS cam-view rate (there is no separate zones rate cap).
         manager = getattr(state, "zone_manager", None)
         perception = getattr(state, "isistream", None)
         wire_pose = None

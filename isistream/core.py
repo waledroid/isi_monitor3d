@@ -91,11 +91,16 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
     if scope_is_zones:
         from backbone.detection.zone_scope import ZoneScopedDetector, zone_crop_boxes
         boxes = zone_crop_boxes(rig, zones)
-        # TensorRT compiles one engine per input shape: pad the batch to a
-        # small bucket set so a changing zone/tile/camera count can't trigger
-        # a multi-minute engine build mid-run. CUDA EP needs no padding.
+        # TensorRT compiles one engine per input shape. WITHOUT SAHI the batch
+        # is deterministic (zones x cameras, at most a couple of values) and
+        # its engines are already cached — padding would only force new builds
+        # and waste inference on filler frames. WITH SAHI the tile count moves
+        # with zone geometry, so bucket the batch: a handful of engines instead
+        # of one per tile count. CUDA EP takes any batch and never pads.
         from backbone.shared.ort_session import trt_available, trt_requested
-        buckets = _BATCH_BUCKETS if (trt_requested() and trt_available()) else None
+        trt_on = trt_requested() and trt_available()
+        sahi_on = bool((sahi_cfg or {}).get("enabled"))
+        buckets = _BATCH_BUCKETS if (trt_on and sahi_on) else None
         detector = ZoneScopedDetector(
             detector, boxes,
             {cid: rig[cid].image_size_wh for cid in rig.camera_ids},
@@ -104,6 +109,12 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
             logger.info("isistream: SAHI tiling ON (tile=%s, overlap=%.2f)",
                         sahi_cfg.get("tile") or "model input",
                         float(sahi_cfg.get("overlap", 0.2)))
+            if buckets:
+                logger.warning(
+                    "isistream: SAHI + TensorRT — the FIRST tick at each new "
+                    "batch size compiles an engine (MINUTES, one time). They "
+                    "are cached in models/.trt_cache; detections resume "
+                    "automatically. Buckets: %s", list(buckets))
         if enhance_cfg and enhance_cfg.get("enabled"):
             logger.info("isistream: crop enhancement ON (CLAHE clip=%.1f, gamma=%.2f)",
                         float(enhance_cfg.get("clip_limit", 2.0)),

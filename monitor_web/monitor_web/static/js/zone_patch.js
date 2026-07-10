@@ -9,17 +9,8 @@ import { startDraw } from "/static/js/draw_mode.js";
 
 const MAX_PATCHES = 6;   // max zones the operator can create (drawn on CAM)
 
-let zoneSource = "backbone";   // per-zone inference knobs only apply in "local"
-let patches = [];   // [{id, name, camera, polygon:[[u,v]..], rect:[x0,y0,x1,y1], frame_wh:[W,H], model, infer_size, confidence, color}]
-let models = [];    // [{path, label}] trained detection models for the per-zone picker
+let patches = [];   // [{id, name, camera, polygon:[[u,v]..], rect:[x0,y0,x1,y1], frame_wh:[W,H], confidence, color}]
 let panelStreamIds = [];   // /ws/video streams currently attached to the ZONE panels
-
-async function loadModels() {
-  try {
-    const r = await fetch("/api/detection/onnx-files");
-    if (r.ok) models = (await r.json()).files || [];
-  } catch { /* keep what we have */ }
-}
 
 export function getPatches(camId) {
   return camId ? patches.filter((p) => (p.camera || "cam_a") === camId) : patches.slice();
@@ -50,12 +41,6 @@ async function load() {
     const r = await fetch("/api/zone-patches");
     if (r.ok) patches = (await r.json()).patches || [];
   } catch { /* keep what we have on a network blip */ }
-  try {
-    // Source of zone detections (backbone|local) — decides whether the
-    // per-zone inference knobs are live or greyed out.
-    const u = await fetch("/api/ui-settings");
-    if (u.ok) zoneSource = (await u.json()).zone_detection_source || "backbone";
-  } catch { /* keep last known */ }
   renderPanels();
   renderSettingsList();
   updateDrawButton();
@@ -107,9 +92,6 @@ export function startPatchDraw(camId) {
         polygon: points,                                   // red overlay + crop region
         rect: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
         frame_wh: [img?.naturalWidth || 0, img?.naturalHeight || 0],
-        infer_size: 320,                                   // detection input size (INTER_AREA)
-        sahi: false,                                       // SAHI slicing off by default
-        enhance: false,                                    // slice enhancement off by default
       });
       save();
     },
@@ -231,19 +213,10 @@ function renderSettingsList() {
             `<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>` +
         `</button>` +
       `</div>` +
-      /* ── controls line: model · size · conf · colour · SAHI ─────────── */
+      /* ── controls line: confidence (display floor) · colour ─────────── */
       `<div class="czr-controls">` +
-        `<span class="czr-field">` +
-          `<label class="czr-label" title="Detection model for this zone">Model</label>` +
-          `<select class="zm-model">${modelOptions(p.model || "")}</select>` +
-        `</span>` +
         `<span class="czr-field czr-field--narrow">` +
-          `<label class="czr-label" title="Input resolution fed to the detector (px)">Size</label>` +
-          `<input class="zm-size" type="number" min="64" max="1280" step="32"` +
-                ` value="${p.infer_size || 320}" placeholder="px" />` +
-        `</span>` +
-        `<span class="czr-field czr-field--narrow">` +
-          `<label class="czr-label" title="Confidence threshold 0–1 (blank = global)">Conf</label>` +
+          `<label class="czr-label" title="Display confidence floor 0–1 (blank = default)">Conf</label>` +
           `<input class="zm-conf" type="number" min="0" max="1" step="0.05"` +
                 ` value="${p.confidence ?? ""}" placeholder="—" />` +
         `</span>` +
@@ -251,14 +224,6 @@ function renderSettingsList() {
           `<label class="czr-label" title="Zone outline colour on the camera view">Color</label>` +
           `<input class="zm-color" type="color" value="${color}" />` +
         `</span>` +
-        `<label class="czr-sahi-toggle" title="SAHI slicing — fixed tile grid for small/far objects">` +
-          `<input class="zm-sahi-cb" type="checkbox" ${p.sahi ? "checked" : ""} />` +
-          `<span class="czr-sahi-label">SAHI</span>` +
-        `</label>` +
-        `<label class="czr-sahi-toggle" title="Enhance slice for far/dim objects: temporal denoise + upscale + contrast + sharpen. Tip: raising this zone's Size is the biggest single win.">` +
-          `<input class="zm-enh-cb" type="checkbox" ${p.enhance ? "checked" : ""} />` +
-          `<span class="czr-sahi-label">ENH</span>` +
-        `</label>` +
       `</div>` +
       /* ── info bar: slice chip · polygon chip ─────────────────────────── */
       `<div class="czr-info-bar">` +
@@ -273,47 +238,18 @@ function renderSettingsList() {
       `</div>`;
 
     row.querySelector(".zm-name").addEventListener("change", (e) => { p.name = e.target.value.trim(); save(); });
-    // Per-zone model/conf/SAHI/ENH drive LOCAL inference only; in backbone
-    // mode (one perception — detections come from the Backbone's wire) they
-    // are inert, so grey them out with an explanatory tooltip.
-    if (zoneSource === "backbone") {
-      // .zm-conf stays live: it filters the WIRE detections for display.
-      for (const sel of [".zm-model", ".zm-size", ".zm-sahi", ".zm-enh"]) {
-        const ctl = row.querySelector(sel);
-        if (ctl) {
-          ctl.disabled = true;
-          ctl.title = "Zone detections come from the Backbone (Settings \u25b8 Zones \u25b8 source)";
-        }
-      }
-    }
-    row.querySelector(".zm-model").addEventListener("change", (e) => { p.model = e.target.value || null; save(); });
-    row.querySelector(".zm-size").addEventListener("change", (e) => {
-      const v = parseInt(e.target.value, 10);
-      p.infer_size = Number.isFinite(v) ? Math.max(64, Math.min(1280, v)) : 320;
-      save();
-    });
+    // Per-zone confidence is a DISPLAY floor on the Backbone's wire detections
+    // (one perception -- the dashboard never infers). It is the only per-zone
+    // knob left after the local-inference path was retired.
     row.querySelector(".zm-conf").addEventListener("change", (e) => {
       const v = parseFloat(e.target.value);
       p.confidence = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null;
       save();
     });
     row.querySelector(".zm-color").addEventListener("change", (e) => { p.color = e.target.value; save(); });
-    row.querySelector(".zm-sahi-cb").addEventListener("change", (e) => { p.sahi = e.target.checked; save(); });
-    row.querySelector(".zm-enh-cb").addEventListener("change", (e) => { p.enhance = e.target.checked; save(); });
     row.querySelector(".zm-delete").addEventListener("click", () => deletePatch(p.id));
     host.appendChild(row);
   });
-}
-
-// Build <option>s for the per-zone model picker: "global" + each trained model.
-function modelOptions(selected) {
-  const opts = ['<option value="">— global model —</option>'];
-  for (const m of models) {
-    const path = m.path || m;
-    const label = m.label || path;
-    opts.push(`<option value="${path}"${path === selected ? " selected" : ""}>${label}</option>`);
-  }
-  return opts.join("");
 }
 
 // Reflect the 6-zone cap on the draw button: disabled + a hint once full.
@@ -329,7 +265,7 @@ function updateDrawButton() {
 function wire() {
   const draw = document.getElementById("btn-draw-patch");
   if (draw) draw.onclick = () => startPatchDraw();
-  loadModels().then(load);   // models first so the per-zone picker has options
+  load();
 }
 
 window.__zonePatch = { startPatchDraw, deletePatch };

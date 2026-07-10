@@ -276,7 +276,6 @@ pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.onnx
 show_nodes: false
 show_masks: true
 show_boxes: false
-display_fps: 25
 mode2_calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
 alignment_refinement:
   pairs: []
@@ -296,4 +295,3 @@ alignment_refinement:
   refined_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
 gateway_url: ''
 gateway_token: ''
-zone_detection_source: backbone

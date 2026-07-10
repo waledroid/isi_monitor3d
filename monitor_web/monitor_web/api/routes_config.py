@@ -190,16 +190,11 @@ class DetectionConfig(BaseModel):
     show_boxes: bool = True
     # Dashboard-only: cap the per-frame inference/compositing rate on display
     # streams (CAM detect, zone patches, unified). Stored in the UI-settings YAML.
-    display_fps: int = 10
     # Dashboard-only: person↔pallet distance-line look (UI-settings YAML).
     distance_line_opacity: float = 0.25
     distance_line_color: str = "#ffffff"
     distance_line_thickness: int = 2
 
-    @field_validator("display_fps")
-    @classmethod
-    def _fps_range(cls, v: int) -> int:
-        return max(1, min(30, int(v)))
 
     @field_validator("distance_line_opacity")
     @classmethod
@@ -228,13 +223,28 @@ class DetectionConfig(BaseModel):
 
 
 class PosePayload(BaseModel):
-    """The Settings modal's pose-only model section. Object-detection models are
-    configured per zone (zone_patches); the dashboard no longer manages the
-    global `detection` block — only its pose keys. Empty path = clear."""
+    """The Settings ▸ Isistream section.
+
+    isistream is the single perception: ONE object model, zone-scoped and
+    batched, serves every zone of every camera — so the object model, its
+    inference size, confidence, SAHI and enhancement are GLOBAL here (there
+    are no per-zone models any more). All of these are spliced into
+    backbone.yaml's ``detection`` block and hot-applied by restarting the
+    producer. Empty path = clear.
+    """
 
     pose_enabled: bool = True
     pose_onnx_path: str = ""
     pose_confidence_threshold: float = 0.3
+    # Global object model (all zones). Empty = leave the configured one.
+    onnx_path: str = ""
+    zone_imgsz: int | None = None
+    confidence_threshold: float | None = None
+    sahi_enabled: bool | None = None
+    sahi_tile: int | None = None
+    sahi_overlap: float | None = None
+    enhance_enabled: bool | None = None
+    enhance_gamma: float | None = None
 
 
 class MqttSinkConfig(BaseModel):
@@ -445,6 +455,12 @@ def get_config(request: Request) -> JSONResponse:
         # Person-pose model (separate ONNX). Pre-fill from the saved config /
         # UI memory / newest pose export so the dropdown shows a real choice.
         "decode_masks": bool(det_raw.get("decode_masks", False)),
+        "zone_imgsz": int(det_raw.get("zone_imgsz", 384) or 384),
+        "sahi_enabled": bool((det_raw.get("sahi") or {}).get("enabled", False)),
+        "sahi_tile": int((det_raw.get("sahi") or {}).get("tile", 0) or 0),
+        "sahi_overlap": float((det_raw.get("sahi") or {}).get("overlap", 0.2)),
+        "enhance_enabled": bool((det_raw.get("enhance") or {}).get("enabled", False)),
+        "enhance_gamma": float((det_raw.get("enhance") or {}).get("gamma", 1.0)),
         "pose_enabled": bool(det_raw.get("pose_enabled", True)),
         "pose_onnx_path": (det_raw.get("pose_onnx_path") or ui.get("pose_onnx_path")
                            or latest_pose_onnx() or ""),
@@ -456,7 +472,6 @@ def get_config(request: Request) -> JSONResponse:
         "show_nodes": bool(ui.get("show_nodes", True)),
         "show_masks": bool(ui.get("show_masks", True)),
         "show_boxes": bool(ui.get("show_boxes", True)),
-        "display_fps": int(ui.get("display_fps", 10)),
         "distance_line_opacity": float(ui.get("distance_line_opacity", 0.25)),
         "distance_line_color": str(ui.get("distance_line_color", "#ffffff")),
         "distance_line_thickness": int(ui.get("distance_line_thickness", 2)),
@@ -744,7 +759,6 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             "show_nodes": bool(det.show_nodes),
             "show_masks": bool(det.show_masks),
             "show_boxes": bool(det.show_boxes),
-            "display_fps": int(det.display_fps),
             "distance_line_opacity": float(det.distance_line_opacity),
             "distance_line_color": str(det.distance_line_color),
             "distance_line_thickness": int(det.distance_line_thickness),
@@ -771,6 +785,37 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             block.pop("pose_onnx_path", None)   # empty = clear
         block["pose_enabled"] = bool(payload.pose.pose_enabled)
         block["pose_confidence_threshold"] = payload.pose.pose_confidence_threshold
+
+        # ---- global isistream object-model knobs (one model, all zones) ----
+        p = payload.pose
+        if p.onnx_path and p.onnx_path.strip():
+            onnx_path = p.onnx_path.strip()
+            block["onnx_path"] = onnx_path
+            # Pick the TASK plugin from the model's own output names (detect /
+            # seg / RF-DETR), exactly like the camera-save path does. The base
+            # backend stays hardware-decided.
+            block["plugin"] = select_plugin(_detect_backend(),
+                                            _onnx_output_names(onnx_path))
+        if p.zone_imgsz is not None:
+            block["zone_imgsz"] = max(128, min(1280, int(p.zone_imgsz)))
+        if p.confidence_threshold is not None:
+            block["confidence_threshold"] = max(0.0, min(1.0, float(p.confidence_threshold)))
+        if p.sahi_enabled is not None or p.sahi_tile is not None or p.sahi_overlap is not None:
+            sahi = dict(block.get("sahi") or {})
+            if p.sahi_enabled is not None:
+                sahi["enabled"] = bool(p.sahi_enabled)
+            if p.sahi_tile is not None:
+                sahi["tile"] = max(0, min(1280, int(p.sahi_tile)))
+            if p.sahi_overlap is not None:
+                sahi["overlap"] = max(0.0, min(0.9, float(p.sahi_overlap)))
+            block["sahi"] = sahi
+        if p.enhance_enabled is not None or p.enhance_gamma is not None:
+            enh = dict(block.get("enhance") or {})
+            if p.enhance_enabled is not None:
+                enh["enabled"] = bool(p.enhance_enabled)
+            if p.enhance_gamma is not None:
+                enh["gamma"] = max(0.2, min(3.0, float(p.enhance_gamma)))
+            block["enhance"] = enh
         backbone_data["detection"] = block
 
     if payload.decode_masks is not None:

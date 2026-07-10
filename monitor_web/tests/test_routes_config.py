@@ -8,6 +8,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+import monitor_web.api.routes_config as routes_config
 from monitor_web.app import create_app
 from monitor_web.config import Settings
 
@@ -374,32 +375,6 @@ def test_ui_settings_round_trips(tmp_path: Path) -> None:
         got = client.get("/api/ui-settings").json()
         assert got["mp4_selected"] == "video/p/clip.mp4" and got["lang"] == "fr"
 
-
-def test_zones_fps_round_trips_via_ui_settings(tmp_path: Path) -> None:
-    """The Zones-FPS field (Zones settings tab) persists the same ``display_fps``
-    UI-settings key it always used — POST a value → GET reads it back. It moved
-    tabs (Detection → Zones) but the endpoint + key are unchanged, and the zone
-    worker reads it via ``display_fps(cfg)``."""
-    backbone_yaml = tmp_path / "backbone.yaml"
-    backbone_yaml.write_text(yaml.safe_dump({"cameras": {}}))
-    cfg = Settings(
-        backbone_config_path=backbone_yaml,
-        ui_settings_path=tmp_path / "ui.yaml",
-        udp_port=0, port=0,
-    )
-    app = create_app(cfg)
-    with TestClient(app) as client:
-        r = client.post("/api/ui-settings", json={"display_fps": 7})
-        assert r.status_code == 200 and r.json()["ok"] is True
-        assert client.get("/api/ui-settings").json()["display_fps"] == 7
-        # display_fps(cfg) reflects the saved value (zone worker reads this).
-        from monitor_web.detection_overlay import display_fps
-        assert display_fps(cfg) == 7.0
-
-
-# ---- S13.1: detection model — backend auto-selected from hardware ----
-
-import monitor_web.api.routes_config as routes_config  # noqa: E402
 
 
 def _detection_app(tmp_path: Path):
@@ -1049,3 +1024,61 @@ def test_post_camera_fps_clamped_to_1_30(tmp_path: Path) -> None:
         })
         src = yaml.safe_load(backbone_yaml.read_text())["cameras"]["cam_a"]["source"]
         assert src["capture_fps"] == 30
+
+
+def test_isistream_save_writes_global_knobs_and_a_real_plugin(tmp_path, monkeypatch):
+    """Settings ▸ Isistream: one model + global size/conf/SAHI/ENH for ALL zones.
+
+    The plugin must be a REGISTERED implementation name derived from the
+    model's outputs — never the model path (that crash-looped the producer).
+    """
+    import yaml as _yaml
+
+    import backbone.detection  # noqa: F401 — fires the @register decorators
+    from backbone.core.interfaces import detector_registry
+
+    app, backbone_yaml = _detection_app(tmp_path)
+    _force_gpu(monkeypatch, True)
+    monkeypatch.setattr(routes_config, "_onnx_output_names",
+                        lambda p: ["output0", "output1"])       # YOLO seg head
+
+    with TestClient(app) as client:
+        res = client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://x"}},
+            "pose": {
+                "pose_enabled": True, "pose_onnx_path": "", "pose_confidence_threshold": 0.3,
+                "onnx_path": "/models/best.onnx",
+                "zone_imgsz": 512, "confidence_threshold": 0.2,
+                "sahi_enabled": True, "sahi_tile": 320, "sahi_overlap": 0.35,
+                "enhance_enabled": True, "enhance_gamma": 1.2,
+            },
+        })
+        assert res.status_code == 200, res.text
+
+    det = _yaml.safe_load(backbone_yaml.read_text())["detection"]
+    assert det["onnx_path"] == "/models/best.onnx"
+    assert det["plugin"] in detector_registry.names(), det["plugin"]
+    assert det["zone_imgsz"] == 512
+    assert det["confidence_threshold"] == 0.2
+    assert det["sahi"] == {"enabled": True, "tile": 320, "overlap": 0.35}
+    assert det["enhance"] == {"enabled": True, "gamma": 1.2}
+
+
+def test_isistream_save_clamps_out_of_range_knobs(tmp_path, monkeypatch):
+    import yaml as _yaml
+
+    app, backbone_yaml = _detection_app(tmp_path)
+    _force_gpu(monkeypatch, True)
+    with TestClient(app) as client:
+        res = client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://x"}},
+            "pose": {"pose_onnx_path": "", "zone_imgsz": 99999,
+                     "confidence_threshold": 5.0, "sahi_overlap": 3.0,
+                     "enhance_gamma": 99.0},
+        })
+        assert res.status_code == 200, res.text
+    det = _yaml.safe_load(backbone_yaml.read_text())["detection"]
+    assert det["zone_imgsz"] == 1280
+    assert det["confidence_threshold"] == 1.0
+    assert det["sahi"]["overlap"] == 0.9
+    assert det["enhance"]["gamma"] == 3.0
