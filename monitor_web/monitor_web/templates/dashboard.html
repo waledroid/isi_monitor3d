@@ -283,8 +283,11 @@
           <svg class="icon-collapse" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
         </button>
       </section>
+      <!-- LOGS defaults to MINIMIZED on every page load (panel starts null and
+           is not persisted): collapsed whenever it is not the user's explicit
+           choice — the expand button is the only way it opens. -->
       <section class="sidebar-section"
-               :class="{ 'section-expanded': panel==='logs', 'section-collapsed': panel==='status' }">
+               :class="{ 'section-expanded': panel==='logs', 'section-collapsed': panel!=='logs' }">
         <h2 class="sidebar-title" data-i18n="logs">{{ t.logs or 'LOGS' }}</h2>
         <div id="logs-content"
              class="sidebar-content logs-content"

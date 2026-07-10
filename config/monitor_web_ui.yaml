@@ -296,3 +296,4 @@ alignment_refinement:
   refined_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
 gateway_url: ''
 gateway_token: ''
+zone_detection_source: local
