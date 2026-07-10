@@ -131,8 +131,11 @@ def test_core_pose_every_n_amortizes() -> None:
             core.tick()
         _drain(got, 4)
         assert len(calls) == 2               # pose ran on ticks 2 and 4 only
+        # Cached-emission semantics: once pose has run, every subsequent set
+        # carries the LAST person result (off-pose ticks re-emit the cache) —
+        # downstream sees a continuous stream, so only tick 1 is person-less.
         with_person = [ds for ds in got if ds.detections]
-        assert len(with_person) == 2
+        assert len(with_person) == 3
         assert with_person[0].detections[0].keypoints_uv is not None
     finally:
         ing.stop()

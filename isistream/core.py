@@ -143,6 +143,7 @@ class IsistreamCore:
         perception_fps: float = 12.0,
         pose_every_n: int = 1,
         producer_id: str = "isistream",
+        motion_gate=None,
     ) -> None:
         self._camera_ids = list(camera_ids)
         self._frames = frame_provider
@@ -154,6 +155,9 @@ class IsistreamCore:
         self._pose_every_n = max(1, int(pose_every_n))
         self._producer_id = producer_id
 
+        self._gate = motion_gate
+        self._wire_obj: dict[str, tuple] = {}      # cam → cached object WireDetections
+        self._wire_person: dict[str, tuple] = {}   # cam → cached person WireDetections
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._seq: dict[str, int] = dict.fromkeys(self._camera_ids, 0)
         self._last_ts: dict[str, float] = dict.fromkeys(self._camera_ids, -1.0)
@@ -209,10 +213,12 @@ class IsistreamCore:
             # Operator heartbeat: one stats line every ~30 s at the target
             # rate, so tick health is visible in the producer's own log.
             if self._tick_count % max(1, int(30.0 / self._interval)) == 0:
-                logger.info("isistream: tick %.0f ms (stages %s), sets %s",
+                gate = ("" if self._gate is None else
+                        f", gated obj={self._gate.obj_skips} pose={self._gate.pose_skips}")
+                logger.info("isistream: tick %.0f ms (stages %s), sets %s%s",
                             self.last_tick_ms,
                             {k: round(v) for k, v in self.stage_ms.items()},
-                            dict(self.sets_sent))
+                            dict(self.sets_sent), gate)
             # Fixed pacing minus work time — detection latency doesn't
             # compound into the tick rate until it exceeds the interval.
             self._stop_event.wait(max(0.0, self._interval - (now() - t0)))
@@ -236,19 +242,34 @@ class IsistreamCore:
         if not fresh:
             return
 
-        dets_by_cam: dict[str, list[Detection]] = {cid: [] for cid in fresh}
-        pair = FramePair(capture_ts=max(f.capture_ts for f in fresh.values()),
-                         frame_idx=self._tick_count, frames=fresh)
+        now_s = now()
+        # Motion gate: run each model only on cameras whose relevant regions
+        # visibly changed (or whose forced-refresh interval elapsed). Gated
+        # cameras re-emit their CACHED wire detections — same boxes, same
+        # mask polygons — under the NEW frame's capture_ts, so downstream
+        # sees an uninterrupted observation stream while the GPU idles.
+        obj_cams = dict(fresh)
+        pose_cams = dict(fresh) if self._tick_count % self._pose_every_n == 0 else {}
+        if self._gate is not None:
+            obj_cams = {cid: f for cid, f in fresh.items()
+                        if self._gate.objects_due(cid, f.image, now_s)}
+            pose_cams = {cid: f for cid, f in pose_cams.items()
+                         if self._gate.pose_due(cid, f.image, now_s)}
+
         t = now()
-        if self._detector is not None:
+        if self._detector is not None and obj_cams:
+            pair = FramePair(capture_ts=max(f.capture_ts for f in obj_cams.values()),
+                             frame_idx=self._tick_count, frames=obj_cams)
             for cid, dets in self._detector.detect(pair).items():
-                dets_by_cam.setdefault(cid, []).extend(dets)
+                self._wire_obj[cid] = tuple(_to_wire(d) for d in dets)
         self.stage_ms["detect"] = (now() - t) * 1000.0
         t = now()
-        if self._pose is not None and self._tick_count % self._pose_every_n == 0:
+        if self._pose is not None and pose_cams:
             try:
+                pair = FramePair(capture_ts=max(f.capture_ts for f in pose_cams.values()),
+                                 frame_idx=self._tick_count, frames=pose_cams)
                 for cid, dets in self._pose.detect(pair).items():
-                    dets_by_cam.setdefault(cid, []).extend(dets)
+                    self._wire_person[cid] = tuple(_to_wire(d) for d in dets)
             except Exception:
                 logger.debug("isistream: pose failed this tick", exc_info=True)
         self.stage_ms["pose"] = (now() - t) * 1000.0
@@ -263,7 +284,8 @@ class IsistreamCore:
                 seq=self._seq[cam_id],
                 producer_id=self._producer_id,
                 config_fingerprint=self._fingerprint,
-                dets=tuple(_to_wire(d) for d in dets_by_cam.get(cam_id, [])),
+                dets=(self._wire_obj.get(cam_id, ())
+                      + self._wire_person.get(cam_id, ())),
             )
             self._seq[cam_id] += 1
             try:
@@ -296,6 +318,19 @@ def build_isistream_core(
     # Config key is `isistream:`; the pre-rename `perception:` still reads.
     perception_cfg = cfg.get("isistream", cfg.get("perception", {}))
     det = cfg.get("detection", {})
+
+    # Motion gate (default ON): zone-crop signatures gate the object
+    # detector, a full-frame signature gates pose. `isistream.motion_gate:
+    # false` disables; `motion_refresh_s` tunes the self-heal interval.
+    gate = None
+    if bool(perception_cfg.get("motion_gate", True)):
+        from backbone.detection.zone_scope import zone_crop_boxes
+        from isistream.motion_gate import MotionGate
+        gate = MotionGate(
+            zone_crop_boxes(rig, zones) if len(zones) else {},
+            {cid: rig[cid].image_size_wh for cid in rig.camera_ids},
+            refresh_s=float(perception_cfg.get("motion_refresh_s", 2.0)))
+
     return IsistreamCore(
         camera_ids=list(cfg["cameras"]),
         frame_provider=frame_provider,
@@ -307,4 +342,5 @@ def build_isistream_core(
         perception_fps=float(perception_cfg.get("fps", 12.0)),
         pose_every_n=int(det.get("pose_every_n", 1)),
         producer_id=producer_id,
+        motion_gate=gate,
     )

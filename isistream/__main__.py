@@ -62,14 +62,24 @@ def main() -> None:
     lock = threading.Lock()
     stop = threading.Event()
 
-    def pump(cam_id: str, src_cfg_full: dict) -> None:
+    def pump(cam_id: str, src_cfg_full: dict, *, feed_detect: bool = True,
+             feed_bus: bool = True) -> None:
+        """One reconnecting capture loop. Default: one stream feeds BOTH the
+        detection slot and the display frame bus. With a per-camera
+        ``detect_source`` (the camera's SUBSTREAM), two pumps split the
+        duties: the substream feeds detection (smaller frames → cheaper
+        preprocessing), the main stream feeds only the frame bus (full-detail
+        display). Detections stay correct either way — DetectionSetMessage
+        declares its own frame_wh and the engine's scale boundary maps any
+        resolution to calibration pixels.
+        """
         backoff = 2.0
         # The shared frame bus: every decoded frame is published to
         # /dev/shm so display consumers (the dashboard's camera hub) read
         # THIS decode instead of opening a second RTSP session per camera —
         # one ingest, one decode, DeepStream-style fan-out.
         from backbone.shared.frame_shm import FrameShmWriter
-        bus_writer = FrameShmWriter(cam_id)
+        bus_writer = FrameShmWriter(cam_id) if feed_bus else None
         while not stop.is_set():
             src = None
             streamed_since = None
@@ -85,13 +95,15 @@ def main() -> None:
                 for frame in src.frames():
                     if stop.is_set():
                         break
-                    with lock:
-                        latest[cam_id] = (frame.image, frame.capture_ts)
-                    try:
-                        bus_writer.write(frame.image, frame.capture_ts)
-                    except Exception:
-                        logger.debug("isistream: %s frame-bus write failed",
-                                     cam_id, exc_info=True)
+                    if feed_detect:
+                        with lock:
+                            latest[cam_id] = (frame.image, frame.capture_ts)
+                    if bus_writer is not None:
+                        try:
+                            bus_writer.write(frame.image, frame.capture_ts)
+                        except Exception:
+                            logger.debug("isistream: %s frame-bus write failed",
+                                         cam_id, exc_info=True)
                 if not stop.is_set():
                     logger.warning("isistream: %s stream ended (EOS) — reconnecting", cam_id)
             except Exception:
@@ -112,7 +124,8 @@ def main() -> None:
             backoff = min(backoff * 2.0, 15.0)
         # Deliberate shutdown: unlink the bus so readers see 'absent'
         # immediately instead of waiting out the staleness window.
-        bus_writer.unlink()
+        if bus_writer is not None:
+            bus_writer.unlink()
 
     def frame_provider(camera_id: str):
         with lock:
@@ -125,8 +138,24 @@ def main() -> None:
         signal.signal(sig, lambda *_: stop.set())
 
     for cam_id, cam_cfg in cfg["cameras"].items():
-        threading.Thread(target=pump, args=(cam_id, dict(cam_cfg["source"])),
-                         daemon=True, name=f"pump-{cam_id}").start()
+        detect_src = cam_cfg.get("detect_source")
+        if detect_src:
+            # Substream split: detection reads the camera's SUBSTREAM (e.g.
+            # 704p — half the preprocessing per frame), the frame bus serves
+            # the MAIN stream for full-detail display.
+            logger.info("isistream: %s split streams — detect on substream, "
+                        "display on main", cam_id)
+            threading.Thread(target=pump,
+                             args=(cam_id, dict(detect_src)),
+                             kwargs={"feed_detect": True, "feed_bus": False},
+                             daemon=True, name=f"pump-{cam_id}-detect").start()
+            threading.Thread(target=pump,
+                             args=(cam_id, dict(cam_cfg["source"])),
+                             kwargs={"feed_detect": False, "feed_bus": True},
+                             daemon=True, name=f"pump-{cam_id}-display").start()
+        else:
+            threading.Thread(target=pump, args=(cam_id, dict(cam_cfg["source"])),
+                             daemon=True, name=f"pump-{cam_id}").start()
     core.start()
     logger.info("isistream: standalone producer up (%d cameras)", len(cfg["cameras"]))
     try:
