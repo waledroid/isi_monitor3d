@@ -521,7 +521,7 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         # by the camera-hub. _detect_iter runs POSE on every frame, so pose inherits
         # the Camera-FPS cam-view rate (Zones FPS / display_fps is zones-only now).
         manager = getattr(state, "zone_manager", None)
-        perception = getattr(state, "perception", None)
+        perception = getattr(state, "isistream", None)
         wire_pose = None
         if perception is not None and perception.points_mode():
             from ..pose_overlay import WirePoseSource

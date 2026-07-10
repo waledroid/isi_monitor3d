@@ -224,8 +224,8 @@ async def status(request: Request) -> JSONResponse:
             },
             # Direction 1: the in-process perception producer (points mode).
             # {"running": False} in frames mode — harmless for old readers.
-            "perception": getattr(request.app.state, "perception", None).status()
-            if getattr(request.app.state, "perception", None) is not None else {"running": False},
+            "isistream": getattr(request.app.state, "isistream", None).status()
+            if getattr(request.app.state, "isistream", None) is not None else {"running": False},
             "udp": {
                 "received": snap.received,
                 "dropped_malformed": snap.dropped_malformed,
@@ -264,8 +264,8 @@ async def status(request: Request) -> JSONResponse:
                 # points mode: fps_by_camera is the DETECTION-SET rate, not
                 # camera capture fps — the frontend relabels on this flag.
                 "points_mode": bool(
-                    getattr(request.app.state, "perception", None)
-                    and request.app.state.perception.points_mode()),
+                    getattr(request.app.state, "isistream", None)
+                    and request.app.state.isistream.points_mode()),
                 "reproj_rms_px": _reprojection_px(cfg),
                 "reproj_target_px": 2.0,
                 "fps_by_camera": (

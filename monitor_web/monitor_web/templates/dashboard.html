@@ -368,6 +368,10 @@
               <!-- Person-pose model. Dropdown of pose *.onnx (path contains "pose")
                    from /api/detection/pose-onnx-files. Option value = absolute path
                    persisted to backbone.yaml. Optional. -->
+              <label class="zm-checkbox-row">
+                <input id="zm-pose-enabled" type="checkbox" checked />
+                <span data-i18n="pose_enabled">{{ t.pose_enabled or 'Pose detection (person skeletons)' }}</span>
+              </label>
               <label data-i18n="model_pose">{{ t.model_pose or 'Pose model (person, .onnx)' }}</label>
               <select id="zm-model-pose-onnx">
                 <option value="" data-i18n="model_pose_placeholder">{{ t.model_pose_placeholder or '— none —' }}</option>

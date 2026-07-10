@@ -92,5 +92,5 @@ metadata:
     on_event: enter
 zones_path: /home/aatanda/isi_monitor3d/config/zones.yaml
 subscriptions_path: /home/aatanda/isi_monitor3d/config/mode2/subscriptions.yaml
-perception:
+isistream:
   fps: 15.0

@@ -1,4 +1,4 @@
-"""``perception.PerceptionCore`` — the Direction-1 producer, hermetic.
+"""``perception.IsistreamCore`` — the Direction-1 producer, hermetic.
 
 Fake frame provider + stub detectors + a real loopback DetectionIngest on
 the receiving end: the full producer→engine wire path without cameras, CUDA,
@@ -13,7 +13,7 @@ import numpy as np
 
 from backbone.core.types import Detection
 from backbone.ingestion.points_in import DetectionIngest
-from perception.core import PerceptionCore
+from isistream.core import IsistreamCore
 
 
 class _StubDetector:
@@ -59,7 +59,7 @@ def test_core_emits_per_camera_sets_with_masks_and_seq() -> None:
     ing.start()
     try:
         feed = _FrameFeed(["cam_a", "cam_b"])
-        core = PerceptionCore(
+        core = IsistreamCore(
             camera_ids=["cam_a", "cam_b"], frame_provider=feed,
             object_detector=_StubDetector(), pose_detector=None,
             ingest_addr=ing.address, fingerprint="fp1")
@@ -94,7 +94,7 @@ def test_core_explicit_empty_heartbeat_without_detector() -> None:
     ing.start()
     try:
         feed = _FrameFeed(["cam_a"])
-        core = PerceptionCore(
+        core = IsistreamCore(
             camera_ids=["cam_a"], frame_provider=feed,
             object_detector=None, pose_detector=None,   # pose-only system, no pose either
             ingest_addr=ing.address)
@@ -122,7 +122,7 @@ def test_core_pose_every_n_amortizes() -> None:
     ing.start()
     try:
         feed = _FrameFeed(["cam_a"])
-        core = PerceptionCore(
+        core = IsistreamCore(
             camera_ids=["cam_a"], frame_provider=feed,
             object_detector=None, pose_detector=_PoseStub(),
             ingest_addr=ing.address, pose_every_n=2)
@@ -150,7 +150,7 @@ def test_core_run_loop_paces_and_stops() -> None:
                 feed.advance(0.001)
                 return feed(camera_id)
 
-        core = PerceptionCore(
+        core = IsistreamCore(
             camera_ids=["cam_a"], frame_provider=_AdvancingFeed(),
             object_detector=None, pose_detector=None,
             ingest_addr=ing.address, perception_fps=50.0)

@@ -343,6 +343,7 @@ function collectLinkLines() {
 function collectPose() {
   const v = parseFloat(el("zm-model-pose-conf")?.value);
   return {
+    pose_enabled: el("zm-pose-enabled")?.checked ?? true,
     pose_onnx_path: el("zm-model-pose-onnx")?.value.trim() || "",   // "" = clear
     pose_confidence_threshold: Number.isFinite(v) ? v : 0.3,
   };
@@ -404,6 +405,8 @@ function selectModelOption(selId, path) {
 function fillModelSection(det) {
   if (!det) return;
   const set = (id, v) => { const e = el(id); if (e != null) e.value = v ?? ""; };
+  const poseEnabled = el("zm-pose-enabled");
+  if (poseEnabled) poseEnabled.checked = det.pose_enabled !== false;
   selectModelOption("zm-model-pose-onnx", det.pose_onnx_path || "");
   set("zm-model-pose-conf", det.pose_confidence_threshold ?? 0.3);
   // NOTE: global Detection FPS removed — zones run at the fixed DEFAULT_DETECTION_FPS (10).

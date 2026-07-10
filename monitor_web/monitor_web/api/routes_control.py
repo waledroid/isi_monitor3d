@@ -61,7 +61,7 @@ async def start(request: Request) -> JSONResponse:
     # engine — start the in-process perception producer to feed it. Off the
     # event loop: it builds CUDA sessions (seconds).
     if state == "running":
-        perception = getattr(request.app.state, "perception", None)
+        perception = getattr(request.app.state, "isistream", None)
         if perception is not None and perception.points_mode():
             started = await asyncio.to_thread(perception.start)
             logger.info("control: perception producer %s",
@@ -97,7 +97,7 @@ async def stop(request: Request) -> JSONResponse:
     t0 = time.monotonic()
     # Producer first: it feeds the engine, and stopping it releases its hub
     # readers + CUDA sessions before the memory trim below.
-    perception = getattr(request.app.state, "perception", None)
+    perception = getattr(request.app.state, "isistream", None)
     if perception is not None:
         await asyncio.to_thread(perception.stop)
     stopped = await asyncio.to_thread(supervisor.stop)

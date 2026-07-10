@@ -2,7 +2,7 @@
 
 When ``backbone.yaml`` says ``ingestion.mode: points``, the Backbone is a pure
 metric engine and SOMEONE must produce detections. That someone is the
-standalone producer — ``python -m perception --config backbone.yaml`` —
+standalone producer — ``python -m isistream --config backbone.yaml`` —
 spawned and reaped here alongside the Backbone by the control routes.
 
 Why a subprocess and not an in-process thread: measured on the live rig, the
@@ -37,7 +37,7 @@ _RESPAWN_MAX_PER_WINDOW = 5
 _RESPAWN_WINDOW_S = 300.0
 
 
-class PerceptionHost:
+class IsistreamHost:
     """Spawn/stop the standalone producer with the Backbone's lifecycle."""
 
     def __init__(self, backbone_config_path) -> None:
@@ -73,19 +73,19 @@ class PerceptionHost:
             env.setdefault("OPENBLAS_NUM_THREADS", "2")
             try:
                 self._proc = subprocess.Popen(
-                    [sys.executable, "-m", "perception",
+                    [sys.executable, "-m", "isistream",
                      "--config", str(self._config_path)],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, env=env)
             except Exception:
-                logger.warning("perception host: spawn failed", exc_info=True)
+                logger.warning("isistream host: spawn failed", exc_info=True)
                 self._proc = None
                 return False
             self._reader = threading.Thread(
                 target=self._pump_logs, args=(self._proc,), daemon=True,
-                name="perception-logs")
+                name="isistream-logs")
             self._reader.start()
-            logger.info("perception host: producer spawned (pid=%d)", self._proc.pid)
+            logger.info("isistream host: producer spawned (pid=%d)", self._proc.pid)
             return True
 
     def stop(self) -> None:
@@ -94,18 +94,18 @@ class PerceptionHost:
             proc, self._proc = self._proc, None
         if proc is None or proc.poll() is not None:
             return
-        logger.info("perception host: STOP → SIGTERM pid=%d", proc.pid)
+        logger.info("isistream host: STOP → SIGTERM pid=%d", proc.pid)
         try:
             proc.terminate()
             try:
                 proc.wait(timeout=_TERM_GRACE_S)
             except subprocess.TimeoutExpired:
-                logger.warning("perception host: STOP → SIGKILL pid=%d", proc.pid)
+                logger.warning("isistream host: STOP → SIGKILL pid=%d", proc.pid)
                 proc.kill()
                 proc.wait(timeout=2.0)
         except ProcessLookupError:
             pass
-        logger.info("perception host: producer stopped (exit=%s)", proc.returncode)
+        logger.info("isistream host: producer stopped (exit=%s)", proc.returncode)
 
     def status(self) -> dict:
         proc = self._proc
@@ -121,7 +121,7 @@ class PerceptionHost:
         for line in proc.stdout:
             line = line.rstrip("\n")
             if line:
-                logger.info("[perception] %s", line)
+                logger.info("[isistream] %s", line)
         # EOF — the producer is gone. Deliberate STOP handles its own logging;
         # anything else is a crash (a segfault logs NOTHING python-side) and
         # gets respawned so a camera-library crash never silently halts
@@ -133,13 +133,13 @@ class PerceptionHost:
         self._respawns = [t for t in self._respawns if now - t < _RESPAWN_WINDOW_S]
         if len(self._respawns) >= _RESPAWN_MAX_PER_WINDOW:
             logger.error(
-                "perception host: producer died (exit=%s) %d times in %.0fs — "
+                "isistream host: producer died (exit=%s) %d times in %.0fs — "
                 "GIVING UP; press START to retry", rc,
                 len(self._respawns), _RESPAWN_WINDOW_S)
             return
         self._respawns.append(now)
         logger.warning(
-            "perception host: producer died unexpectedly (exit=%s) — "
+            "isistream host: producer died unexpectedly (exit=%s) — "
             "respawning in %.0fs", rc, _RESPAWN_DELAY_S)
         timer = threading.Timer(_RESPAWN_DELAY_S, self._respawn)
         timer.daemon = True
@@ -158,7 +158,7 @@ class PerceptionHost:
         the Backbone supervisor's stray policy, for the same reason."""
         try:
             out = subprocess.run(
-                ["pgrep", "-f", r"python(3)? -m perception"],
+                ["pgrep", "-f", r"python(3)? -m isistream"],
                 capture_output=True, text=True, timeout=5.0).stdout
         except Exception:
             return
@@ -168,6 +168,6 @@ class PerceptionHost:
                 continue
             try:
                 os.kill(pid, signal.SIGKILL)
-                logger.warning("perception host: reaped stray producer pid %d", pid)
+                logger.warning("isistream host: reaped stray producer pid %d", pid)
             except OSError:
                 pass

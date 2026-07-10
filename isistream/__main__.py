@@ -1,13 +1,13 @@
-"""``python -m perception --config config/backbone.yaml`` — standalone producer.
+"""``python -m isistream --config config/backbone.yaml`` — standalone producer.
 
-The headless topology: perception runs as its own service (its own RTSP
+The headless topology: isistream runs as its own service (its own RTSP
 sources via the Backbone's FrameSource plugins), the Backbone runs as the
 metric engine (``ingestion.mode: points``), and the dashboard is optional —
 a pure consumer. Example systemd pairing:
 
-    # /etc/systemd/system/isi-perception.service
+    # /etc/systemd/system/isistream.service
     [Service]
-    ExecStart=/path/to/env/bin/python -m perception --config /path/to/backbone.yaml
+    ExecStart=/path/to/env/bin/python -m isistream --config /path/to/backbone.yaml
     Restart=always
 
     # /etc/systemd/system/isi-backbone.service
@@ -31,20 +31,20 @@ import yaml
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="isi perception producer")
+    parser = argparse.ArgumentParser(description="isistream — the perception producer")
     parser.add_argument("--config", required=True, help="path to backbone.yaml")
     args = parser.parse_args()
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s: %(message)s")
-    logger = logging.getLogger("perception.main")
+    logger = logging.getLogger("isistream.main")
 
     with open(args.config) as fh:
         cfg = yaml.safe_load(fh) or {}
     if str(cfg.get("ingestion", {}).get("mode", "frames")) != "points":
         raise SystemExit(
-            "perception: backbone.yaml has ingestion.mode != 'points' — the "
+            "isistream: backbone.yaml has ingestion.mode != 'points' — the "
             "Backbone owns perception in frames mode; a standalone producer "
             "would double every model and decode. Set ingestion.mode: points.")
 
@@ -90,19 +90,19 @@ def main() -> None:
                     try:
                         bus_writer.write(frame.image, frame.capture_ts)
                     except Exception:
-                        logger.debug("perception: %s frame-bus write failed",
+                        logger.debug("isistream: %s frame-bus write failed",
                                      cam_id, exc_info=True)
                 if not stop.is_set():
-                    logger.warning("perception: %s stream ended (EOS) — reconnecting", cam_id)
+                    logger.warning("isistream: %s stream ended (EOS) — reconnecting", cam_id)
             except Exception:
-                logger.warning("perception: source %s error — reconnecting", cam_id,
+                logger.warning("isistream: source %s error — reconnecting", cam_id,
                                exc_info=True)
             finally:
                 if src is not None and hasattr(src, "stop"):
                     try:
                         src.stop()
                     except Exception:
-                        logger.debug("perception: %s stop failed", cam_id, exc_info=True)
+                        logger.debug("isistream: %s stop failed", cam_id, exc_info=True)
             if stop.is_set():
                 break
             import time as _time
@@ -118,8 +118,8 @@ def main() -> None:
         with lock:
             return latest.get(camera_id)
 
-    from perception import build_perception_core
-    core = build_perception_core(cfg, frame_provider, producer_id="perception-standalone")
+    from isistream import build_isistream_core
+    core = build_isistream_core(cfg, frame_provider, producer_id="isistream")
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
@@ -128,7 +128,7 @@ def main() -> None:
         threading.Thread(target=pump, args=(cam_id, dict(cam_cfg["source"])),
                          daemon=True, name=f"pump-{cam_id}").start()
     core.start()
-    logger.info("perception: standalone producer up (%d cameras)", len(cfg["cameras"]))
+    logger.info("isistream: standalone producer up (%d cameras)", len(cfg["cameras"]))
     try:
         while not stop.wait(timeout=0.5):
             pass
@@ -143,7 +143,7 @@ def main() -> None:
                 os.unlink(shm_path(cam_id))
             except OSError:
                 pass
-        logger.info("perception: standalone producer stopped")
+        logger.info("isistream: standalone producer stopped")
 
 
 if __name__ == "__main__":

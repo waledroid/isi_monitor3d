@@ -128,5 +128,6 @@
   "zone_source_backbone": "Backbone (one perception)",
   "zone_source_local": "Local models (dev/fallback)",
   "det_rate_label": "Detections",
-  "ui_lag_label": "UI lag p50"
+  "ui_lag_label": "UI lag p50",
+  "pose_enabled": "Pose detection (person skeletons)"
 }

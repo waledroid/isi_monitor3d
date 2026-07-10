@@ -106,8 +106,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # dashboard hosts the perception producer (hub-backed, one decode per
     # camera) for the metric engine. Started/stopped with the Backbone by
     # the control routes; a no-op in frames mode.
-    from .perception_host import PerceptionHost
-    perception = PerceptionHost(cfg.backbone_config_path)
+    from .isistream_host import IsistreamHost
+    perception = IsistreamHost(cfg.backbone_config_path)
     # Background zone detection: one worker thread per camera with zones, publishing
     # one coherent snapshot per frame. Panels + cam views are pure renderers of it.
     zone_manager = ZoneWorkerManager(
@@ -155,7 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = cfg
     app.state.bus = bus
     app.state.supervisor = supervisor
-    app.state.perception = perception
+    app.state.isistream = perception
     app.state.zone_manager = zone_manager
     app.state.templates = templates
     app.state.broadcast_queue = broadcast_queue

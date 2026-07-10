@@ -283,8 +283,8 @@ def test_wire_pose_source_smooths_between_wire_ticks(monkeypatch):
     import time as _time
 
     import numpy as np
-
     from backbone.comms.schemas import ObservationDet, ObservationsMessage
+
     from monitor_web.pose_overlay import WirePoseSource
 
     def person(x, ts):

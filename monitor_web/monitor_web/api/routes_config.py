@@ -153,6 +153,7 @@ class DetectionConfig(BaseModel):
     # Optional person-POSE ONNX (handled by a separate pose model in the design;
     # gives ankle foot nodes). Written to backbone.yaml's detection block as
     # `pose_onnx_path` and remembered in UI-settings. Empty/None = no pose model.
+    pose_enabled: bool = True
     pose_onnx_path: str | None = None
     # Person-pose detection confidence (the separate pose engine's `conf`).
     pose_confidence_threshold: float = 0.3
@@ -221,6 +222,7 @@ class PosePayload(BaseModel):
     configured per zone (zone_patches); the dashboard no longer manages the
     global `detection` block — only its pose keys. Empty path = clear."""
 
+    pose_enabled: bool = True
     pose_onnx_path: str = ""
     pose_confidence_threshold: float = 0.3
 
@@ -426,6 +428,7 @@ def get_config(request: Request) -> JSONResponse:
         # Person-pose model (separate ONNX). Pre-fill from the saved config /
         # UI memory / newest pose export so the dropdown shows a real choice.
         "decode_masks": bool(det_raw.get("decode_masks", False)),
+        "pose_enabled": bool(det_raw.get("pose_enabled", True)),
         "pose_onnx_path": (det_raw.get("pose_onnx_path") or ui.get("pose_onnx_path")
                            or latest_pose_onnx() or ""),
         "pose_confidence_threshold": det_raw.get("pose_confidence_threshold", 0.3),
@@ -701,6 +704,7 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             block["pose_onnx_path"] = det.pose_onnx_path.strip()
         else:
             block.pop("pose_onnx_path", None)
+        block["pose_enabled"] = bool(det.pose_enabled)
         block["pose_confidence_threshold"] = det.pose_confidence_threshold
         block["decode_masks"] = bool(det.decode_masks)
         backbone_data["detection"] = block
@@ -735,6 +739,7 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             block["pose_onnx_path"] = pose_path
         else:
             block.pop("pose_onnx_path", None)   # empty = clear
+        block["pose_enabled"] = bool(payload.pose.pose_enabled)
         block["pose_confidence_threshold"] = payload.pose.pose_confidence_threshold
         backbone_data["detection"] = block
 
@@ -842,6 +847,17 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
     mgr = getattr(request.app.state, "zone_manager", None)
     if mgr is not None:
         mgr.reload()
+
+    # Direction 1 hot-apply: a RUNNING isistream producer reads backbone.yaml
+    # only at spawn, so model/camera/fps changes take a producer restart —
+    # done here automatically (a few seconds; the metric engine keeps running
+    # and coasts, the panels ride the RTSP fallback until the bus returns).
+    host = getattr(request.app.state, "isistream", None)
+    if (host is not None and host.points_mode()
+            and host.status().get("running")):
+        logger.info("config: restarting isistream to apply the new settings")
+        host.stop()
+        host.start()
 
     return JSONResponse(
         {

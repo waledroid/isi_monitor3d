@@ -233,6 +233,7 @@ class Orchestrator:
         # dashboard overlay today; the S5.5 `yolo_onnx_pose` plugin later) — it is
         # not a kwarg of the object detector, so drop it before constructing one.
         det_cfg.pop("pose_onnx_path", None)
+        det_cfg.pop("pose_enabled", None)                # pose-engine setting, not an object-detector kwarg
         det_cfg.pop("pose_confidence_threshold", None)   # pose-engine setting, not an object-detector kwarg
         det_cfg.pop("pose_imgsz", None)                  # pose-engine setting, not an object-detector kwarg
         # Run the pose model on every Nth pair only (1 = every pair). Person
@@ -292,7 +293,8 @@ class Orchestrator:
         # person `Track2D` (foot = ankle midpoint) for person↔pallet distance. A
         # missing/unloadable model degrades cleanly to "no persons".
         self._person_detector = None
-        pose_path = cfg["detection"].get("pose_onnx_path")
+        pose_path = (cfg["detection"].get("pose_onnx_path")
+                     if cfg["detection"].get("pose_enabled", True) else None)
         if pose_path:
             try:
                 pose_conf = float(cfg["detection"].get("pose_confidence_threshold", 0.3))

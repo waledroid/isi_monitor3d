@@ -1,6 +1,6 @@
-"""``PerceptionCore`` — capture → detect → pose → emit detection sets.
+"""``IsistreamCore`` — capture → detect → pose → emit detection sets.
 
-The producer half of Direction 1. Per tick (paced at ``perception_fps``):
+The producer half of Direction 1. Per tick (paced at ``isistream.fps``):
 
 1. pull the newest ``(image, capture_ts)`` per camera from the injected
    frame provider (the dashboard's camera hub in-process, or this package's
@@ -60,8 +60,8 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
     if not det_cfg or not det_cfg.get("plugin"):
         return None
     det_plugin = det_cfg.pop("plugin")
-    for pose_key in ("pose_onnx_path", "pose_confidence_threshold", "pose_imgsz",
-                     "pose_every_n", "person_pallet_max_distance_m"):
+    for pose_key in ("pose_onnx_path", "pose_enabled", "pose_confidence_threshold",
+                     "pose_imgsz", "pose_every_n", "person_pallet_max_distance_m"):
         det_cfg.pop(pose_key, None)
     imgsz = det_cfg.pop("inference_imgsz", None)
     if imgsz:
@@ -72,7 +72,7 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
     if det_plugin in ("yolo_onnx_seg", "yolo_openvino_seg"):
         det_cfg.setdefault("decode_masks", scope_is_zones)
     if scope_is_zones and len(zones) == 0:
-        logger.warning("perception: zone scope with no zones — object detection OFF "
+        logger.warning("isistream: zone scope with no zones — object detection OFF "
                        "(pose-only). Draw zones to enable it.")
         return None
     if scope_is_zones:
@@ -89,6 +89,9 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
 
 def _build_pose_detector(cfg: dict):
     det = cfg.get("detection", {})
+    if not det.get("pose_enabled", True):
+        logger.info("isistream: pose detection DISABLED via settings")
+        return None
     pose_path = det.get("pose_onnx_path")
     if not pose_path:
         return None
@@ -100,10 +103,10 @@ def _build_pose_detector(cfg: dict):
             "yolo_onnx_pose", onnx_path=pose_path,
             confidence_threshold=float(det.get("pose_confidence_threshold", 0.3)),
             **kwargs)
-        logger.info("perception: pose detector enabled (%s)", pose_path)
+        logger.info("isistream: pose detector enabled (%s)", pose_path)
         return pose
     except Exception as exc:
-        logger.warning("perception: pose detector disabled (%s)", exc)
+        logger.warning("isistream: pose detector disabled (%s)", exc)
         return None
 
 
@@ -124,7 +127,7 @@ def _to_wire(d: Detection) -> WireDetection:
     )
 
 
-class PerceptionCore:
+class IsistreamCore:
     """The perception loop. ``start()``/``stop()`` manage a daemon thread;
     hosts that want their own scheduling can call ``tick()`` directly."""
 
@@ -139,7 +142,7 @@ class PerceptionCore:
         fingerprint: str | None = None,
         perception_fps: float = 12.0,
         pose_every_n: int = 1,
-        producer_id: str = "perception",
+        producer_id: str = "isistream",
     ) -> None:
         self._camera_ids = list(camera_ids)
         self._frames = frame_provider
@@ -171,9 +174,9 @@ class PerceptionCore:
             return
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True,
-                                        name="perception")
+                                        name="isistream")
         self._thread.start()
-        logger.info("perception: started → %s:%d @ %.1f fps (pose 1/%d)",
+        logger.info("isistream: started → %s:%d @ %.1f fps (pose 1/%d)",
                     self._addr[0], self._addr[1], 1.0 / self._interval,
                     self._pose_every_n)
 
@@ -186,7 +189,7 @@ class PerceptionCore:
             self._sock.close()
         except OSError:
             pass
-        logger.info("perception: stopped")
+        logger.info("isistream: stopped")
 
     @property
     def running(self) -> bool:
@@ -201,12 +204,12 @@ class PerceptionCore:
                 self.tick()
             except Exception as exc:
                 self.last_error = f"{type(exc).__name__}: {exc}"
-                logger.warning("perception: tick failed", exc_info=True)
+                logger.warning("isistream: tick failed", exc_info=True)
             self.last_tick_ms = (now() - t0) * 1000.0
             # Operator heartbeat: one stats line every ~30 s at the target
             # rate, so tick health is visible in the producer's own log.
             if self._tick_count % max(1, int(30.0 / self._interval)) == 0:
-                logger.info("perception: tick %.0f ms (stages %s), sets %s",
+                logger.info("isistream: tick %.0f ms (stages %s), sets %s",
                             self.last_tick_ms,
                             {k: round(v) for k, v in self.stage_ms.items()},
                             dict(self.sets_sent))
@@ -247,7 +250,7 @@ class PerceptionCore:
                 for cid, dets in self._pose.detect(pair).items():
                     dets_by_cam.setdefault(cid, []).extend(dets)
             except Exception:
-                logger.debug("perception: pose failed this tick", exc_info=True)
+                logger.debug("isistream: pose failed this tick", exc_info=True)
         self.stage_ms["pose"] = (now() - t) * 1000.0
 
         t = now()
@@ -268,18 +271,18 @@ class PerceptionCore:
                                    msg.model_dump_json().encode("utf-8"))
                 self.sets_sent[cam_id] += 1
             except OSError:
-                logger.warning("perception: emit failed", exc_info=True)
+                logger.warning("isistream: emit failed", exc_info=True)
         self.stage_ms["emit"] = (now() - t) * 1000.0
 
 
-def build_perception_core(
+def build_isistream_core(
     cfg: dict,
     frame_provider: FrameProvider,
     *,
-    producer_id: str = "perception",
-) -> PerceptionCore:
+    producer_id: str = "isistream",
+) -> IsistreamCore:
     """Build a core from a loaded ``backbone.yaml`` dict — the shared recipe
-    for the in-process (monitor_web) and standalone (``python -m perception``)
+    for the in-process (monitor_web) and standalone (``python -m isistream``)
     hosts. Reads the SAME config the metric engine reads, so the fingerprint
     matches by construction."""
     rig = CameraRig.from_file(cfg["calibration_path"])
@@ -290,9 +293,10 @@ def build_perception_core(
     import backbone.detection  # noqa: F401
 
     points_cfg = cfg.get("ingestion", {}).get("points", {})
-    perception_cfg = cfg.get("perception", {})
+    # Config key is `isistream:`; the pre-rename `perception:` still reads.
+    perception_cfg = cfg.get("isistream", cfg.get("perception", {}))
     det = cfg.get("detection", {})
-    return PerceptionCore(
+    return IsistreamCore(
         camera_ids=list(cfg["cameras"]),
         frame_provider=frame_provider,
         object_detector=_build_object_detector(cfg, rig, zones),
