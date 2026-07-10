@@ -129,5 +129,7 @@
   "zone_source_local": "Modèles locaux (dev/secours)",
   "det_rate_label": "Détections",
   "ui_lag_label": "Latence UI p50",
-  "pose_enabled": "Détection de pose (squelettes)"
+  "pose_enabled": "Détection de pose (squelettes)",
+  "motion_gate": "Filtrage par mouvement (zones statiques sans inférence)",
+  "detect_substream": "Détection sur le sous-flux caméra (affichage flux principal)"
 }

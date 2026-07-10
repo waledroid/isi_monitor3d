@@ -372,6 +372,14 @@
                 <input id="zm-pose-enabled" type="checkbox" checked />
                 <span data-i18n="pose_enabled">{{ t.pose_enabled or 'Pose detection (person skeletons)' }}</span>
               </label>
+              <label class="zm-checkbox-row">
+                <input id="zm-motion-gate" type="checkbox" checked />
+                <span data-i18n="motion_gate">{{ t.motion_gate or 'Motion gating (skip inference on static zones)' }}</span>
+              </label>
+              <label class="zm-checkbox-row">
+                <input id="zm-detect-substream" type="checkbox" checked />
+                <span data-i18n="detect_substream">{{ t.detect_substream or 'Detect on camera substream (display stays main)' }}</span>
+              </label>
               <label data-i18n="model_pose">{{ t.model_pose or 'Pose model (person, .onnx)' }}</label>
               <select id="zm-model-pose-onnx">
                 <option value="" data-i18n="model_pose_placeholder">{{ t.model_pose_placeholder or '— none —' }}</option>

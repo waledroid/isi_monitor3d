@@ -240,6 +240,9 @@ function collectPayload() {
   // distance-line styles auto-save on change (see wireUiPrefSync), so the Save
   // button no longer carries a `detection` block.
   payload.pose = collectPose();
+  // isistream perf toggles (default ON; a save applies them live).
+  payload.motion_gate = el("zm-motion-gate")?.checked ?? true;
+  payload.detect_substream = el("zm-detect-substream")?.checked ?? true;
   // S16: distance lines — always send the field (empty list clears the file).
   payload.link_lines = collectLinkLines();
   // Communication — MQTT broker + node identity.
@@ -407,6 +410,16 @@ function fillModelSection(det) {
   const set = (id, v) => { const e = el(id); if (e != null) e.value = v ?? ""; };
   const poseEnabled = el("zm-pose-enabled");
   if (poseEnabled) poseEnabled.checked = det.pose_enabled !== false;
+  const isis = data.isistream || {};
+  const mg = el("zm-motion-gate");
+  if (mg) mg.checked = isis.motion_gate !== false;
+  const ds = el("zm-detect-substream");
+  if (ds) {
+    ds.checked = isis.detect_substream !== false;
+    // Inert until a camera has a detect_source substream URL configured.
+    ds.disabled = !isis.has_detect_source;
+    ds.closest("label")?.classList.toggle("zm-disabled", !isis.has_detect_source);
+  }
   selectModelOption("zm-model-pose-onnx", det.pose_onnx_path || "");
   set("zm-model-pose-conf", det.pose_confidence_threshold ?? 0.3);
   // NOTE: global Detection FPS removed — zones run at the fixed DEFAULT_DETECTION_FPS (10).

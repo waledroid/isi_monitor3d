@@ -129,5 +129,7 @@
   "zone_source_local": "Local models (dev/fallback)",
   "det_rate_label": "Detections",
   "ui_lag_label": "UI lag p50",
-  "pose_enabled": "Pose detection (person skeletons)"
+  "pose_enabled": "Pose detection (person skeletons)",
+  "motion_gate": "Motion gating (skip inference on static zones)",
+  "detect_substream": "Detect on camera substream (display stays main)"
 }

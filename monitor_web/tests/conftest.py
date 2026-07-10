@@ -3,6 +3,17 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _isolate_frame_bus(tmp_path_factory, monkeypatch):
+    """Point the shared frame bus at a per-session temp dir. Without this a
+    LIVE isistream on the same box leaks its /dev/shm frames into the suite —
+    the camera-hub tests then stream from the real bus and never build their
+    fake sources (observed: test_multiple_viewers_share_one_source failing
+    only while the production stack ran)."""
+    monkeypatch.setenv("ISI3D_SHM_DIR",
+                       str(tmp_path_factory.mktemp("frame_bus")))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_ui_settings(tmp_path_factory, monkeypatch):
     """Redirect the unified dashboard config (``ui_settings_path``) to a throwaway
     file for every test, so tests never read or write the real

@@ -252,6 +252,10 @@ class ConfigPayload(BaseModel):
     # Backbone mask decode (the "Segmentation masks" switch): observations carry
     # mask polygons when on. None = leave untouched; applies at backbone START.
     decode_masks: bool | None = None
+    # isistream perf toggles (both default ON in the producer). None = leave
+    # untouched; a save hot-restarts a running producer so they apply live.
+    motion_gate: bool | None = None
+    detect_substream: bool | None = None
     # Distance-line rules (S16). Omitted == "no change"; an empty list explicitly
     # clears all rules on disk (the dashboard sends this when the operator
     # deletes every rule).
@@ -481,6 +485,16 @@ def get_config(request: Request) -> JSONResponse:
             "cameras": cameras_out,
             "zones": zones_out,
             "detection": detection_out,
+            "isistream": {
+                "motion_gate": bool((backbone_data.get("isistream") or {}).get("motion_gate", True)),
+                "detect_substream": bool(
+                    (backbone_data.get("isistream") or {}).get("detect_substream", True)),
+                # Substream URLs are configured per camera (detect_source); the
+                # toggle is inert until at least one camera has one.
+                "has_detect_source": any(
+                    isinstance(c, dict) and c.get("detect_source")
+                    for c in (backbone_data.get("cameras") or {}).values()),
+            },
             "link_lines": rules_to_dict(link_lines_rules),
             "max_zones": MAX_ZONES,
             "allowed_kinds": list(ALLOWED_KINDS),
@@ -748,6 +762,17 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
         if isinstance(block, dict):
             block["decode_masks"] = bool(payload.decode_masks)
             backbone_data["detection"] = block
+
+    # ---- isistream toggles (motion gate / substream detection) ----
+    if payload.motion_gate is not None or payload.detect_substream is not None:
+        isis = backbone_data.get("isistream")
+        if not isinstance(isis, dict):
+            isis = {}
+        if payload.motion_gate is not None:
+            isis["motion_gate"] = bool(payload.motion_gate)
+        if payload.detect_substream is not None:
+            isis["detect_substream"] = bool(payload.detect_substream)
+        backbone_data["isistream"] = isis
 
     # ---- communications: node_id + mqtt_sink ----
     # Both fields are optional: None = leave untouched. Handled BEFORE

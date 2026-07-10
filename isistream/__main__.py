@@ -137,8 +137,12 @@ def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
 
+    # `isistream.detect_substream: false` ignores the per-camera detect_source
+    # blocks (detection back on the main stream) without losing their URLs.
+    isis_cfg = cfg.get("isistream", cfg.get("perception", {})) or {}
+    use_substream = bool(isis_cfg.get("detect_substream", True))
     for cam_id, cam_cfg in cfg["cameras"].items():
-        detect_src = cam_cfg.get("detect_source")
+        detect_src = cam_cfg.get("detect_source") if use_substream else None
         if detect_src:
             # Substream split: detection reads the camera's SUBSTREAM (e.g.
             # 704p — half the preprocessing per frame), the frame bus serves
