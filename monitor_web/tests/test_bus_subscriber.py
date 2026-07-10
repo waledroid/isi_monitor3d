@@ -275,3 +275,48 @@ def test_fragmented_observations_reassemble_into_state():
     assert stored.dets[0].mask_poly == poly
     # Only the COMPLETED message counts as received (fragments are transport).
     assert snap.received == 1
+
+
+def test_wire_pose_source_smooths_between_wire_ticks(monkeypatch):
+    """WirePoseSource must interpolate/extrapolate between ~15 Hz wire results
+    so skeletons glide at panel rate — same machinery as AsyncPoseRunner."""
+    import time as _time
+
+    import numpy as np
+
+    from backbone.comms.schemas import ObservationDet, ObservationsMessage
+    from monitor_web.pose_overlay import WirePoseSource
+
+    def person(x, ts):
+        return ObservationsMessage(
+            ts=ts, camera_id="cam_a", frame_wh=(1280, 720),
+            dets=(ObservationDet(
+                cls="person", confidence=0.9,
+                bbox_xyxy=(x - 40.0, 300.0, x + 40.0, 600.0),
+                foot_uv=(x, 600.0),
+                keypoints_uv=tuple((x, 400.0, 0.9) for _ in range(17))),))
+
+    state = {}
+
+    class _Bus:
+        def snapshot(self):
+            from types import SimpleNamespace
+            return SimpleNamespace(observations_by_camera=dict(state))
+
+    src = WirePoseSource(lambda: _Bus(), "cam_a")
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+
+    t0 = _time.time()
+    # Two wire results 66 ms apart, person moving +60 px — establishes velocity.
+    state["cam_a"] = person(500.0, t0 - 0.066)
+    src.predict(frame)
+    state["cam_a"] = person(560.0, t0)
+    first = src.predict(frame)[0].foot_uv[0]
+    # Repeated renders with NO new wire data: the skeleton keeps advancing
+    # (extrapolation) instead of freezing at 560.
+    _time.sleep(0.05)
+    later = src.predict(frame)[0].foot_uv[0]
+    _time.sleep(0.05)
+    latest = src.predict(frame)[0].foot_uv[0]
+    assert first < later < latest, (first, later, latest)
+    assert latest > 560.0

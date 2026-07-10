@@ -376,20 +376,37 @@ class WirePoseSource:
     (person dets with ``keypoints_uv``, calibration-frame px). This source
     duck-types ``AsyncPoseRunner.predict`` for ``annotate_frame``: scale the
     wire keypoints to the display frame and return them as :class:`Pose`
-    objects. The producer amortizes pose across ticks, so the last person-
-    carrying result is held for a short bridge window instead of flickering.
+    objects.
+
+    FLUIDITY: the wire updates at the perception tick rate (~15 Hz) while
+    panels render at the camera rate (18-24 fps), so raw wire poses look
+    steppy. This source therefore reuses the AsyncPoseRunner's display
+    machinery on the wire results: motion-compensate the newest result for
+    its age (per-person velocity from the last two results, projected to
+    *now*) and exponentially smooth toward that moving target — identical
+    constants, identical feel, still zero inference.
     """
 
     _MAX_AGE_S = 2.0      # observations older than this ⇒ no skeletons
     _BRIDGE_S = 1.0       # hold last people across person-less ticks
+    _SMOOTH_TAU_S = 0.08
+    _SNAP_PX = 120.0
+    _EXTRAP_MAX_S = 0.35
 
     def __init__(self, bus_getter, camera_id: str) -> None:
         self._bus_getter = bus_getter
         self._camera_id = camera_id
         self._held: tuple[float, float, list[Pose]] = (0.0, 0.0, [])  # (msg_ts, seen_at, poses)
+        self._prev: tuple[float, list[Pose]] = (0.0, [])   # previous wire result
+        self._cur: tuple[float, list[Pose]] = (0.0, [])    # newest wire result
+        self._smoothed: list[Pose] = []
+        self._smooth_ts = 0.0
 
     def stop(self) -> None:      # lifecycle parity with AsyncPoseRunner
         self._held = (0.0, 0.0, [])
+        self._prev = (0.0, [])
+        self._cur = (0.0, [])
+        self._smoothed = []
 
     def draw(self, image: np.ndarray, poses: list[Pose],
              kpt_conf: float = 0.35) -> None:
@@ -435,13 +452,34 @@ class WirePoseSource:
                 score=float(od.confidence),
                 keypoints=k,
                 foot_uv=(float(od.foot_uv[0]) * sx, float(od.foot_uv[1]) * sy)))
-        held_ts, held_seen, held_poses = self._held
+        _held_ts, held_seen, _held_poses = self._held
         if poses:
             self._held = (float(msg.ts), now, poses)
-            return poses
-        if float(msg.ts) > held_ts and now - held_seen <= self._BRIDGE_S:
-            # A fresh person-less tick (pose amortized off this tick) — bridge.
-            return held_poses
-        if now - held_seen <= self._BRIDGE_S:
-            return held_poses
-        return []
+            if float(msg.ts) > self._cur[0]:
+                # A genuinely new wire result: shift the pair used for the
+                # per-person velocity estimate.
+                self._prev = self._cur
+                self._cur = (float(msg.ts), poses)
+        elif now - held_seen > self._BRIDGE_S:
+            # Persistently person-less: the scene really is empty.
+            self._prev = (0.0, [])
+            self._cur = (0.0, [])
+            self._smoothed = []
+            return []
+
+        cur_ts, cur_poses = self._cur
+        if not cur_poses:
+            return []
+        # Motion-compensate the newest wire result for its age, then smooth
+        # toward that moving target — the exact AsyncPoseRunner recipe, on
+        # wire data: skeletons glide at panel rate while pose ticks at ~15 Hz.
+        target = _extrapolate(
+            cur_poses, self._prev[1],
+            cur_ts - self._prev[0],
+            now - cur_ts,
+            max_age_s=self._EXTRAP_MAX_S, snap_px=self._SNAP_PX)
+        self._smoothed = _advance_smoothing(
+            self._smoothed, target, now - self._smooth_ts,
+            tau_s=self._SMOOTH_TAU_S, snap_px=self._SNAP_PX)
+        self._smooth_ts = now
+        return list(self._smoothed)
