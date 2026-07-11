@@ -15,6 +15,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -483,3 +484,64 @@ class WirePoseSource:
             tau_s=self._SMOOTH_TAU_S, snap_px=self._SNAP_PX)
         self._smooth_ts = now
         return list(self._smoothed)
+
+
+# Person classes ride WirePoseSource (skeletons); the object source drops them.
+_WIRE_PERSON_CLASSES = frozenset({"person", "people", "human", "pedestrian"})
+
+
+class WireObjectSource:
+    """Object detections straight from the bus observations — ZERO inference.
+
+    Points mode (Direction 1): isistream detects only inside the floor zones and
+    echoes per-camera ``ObservationsMessage``s (calibration/producer-frame px).
+    The cam view draws those object dets DIRECTLY — with NO dependency on the
+    pixel-space ``zone_patches`` that gate the ZONE PANELS. So boxes appear
+    wherever isistream detects, even when ``zone_patches.yaml`` is empty (without
+    this, the patch-scoped ``ZoneDetectionWorker`` renders nothing when no patch
+    is drawn, so a perfectly good detection never reaches the cam view).
+
+    Returns detections duck-typed for :func:`annotate_frame` — the same
+    ``SimpleNamespace`` shape ``ZoneDetectionWorker._snapshot_from_bus`` produces,
+    minus the per-zone grouping. Persons are dropped (they ride
+    :class:`WirePoseSource`).
+    """
+
+    _MAX_AGE_S = 2.0     # observations older than this ⇒ no boxes (no stale ghosts)
+
+    def __init__(self, bus_getter, camera_id: str) -> None:
+        self._bus_getter = bus_getter
+        self._camera_id = camera_id
+
+    def objects(self, frame_bgr: np.ndarray) -> list:
+        bus = self._bus_getter() if self._bus_getter is not None else None
+        if bus is None:
+            return []
+        try:
+            msg = bus.snapshot().observations_by_camera.get(self._camera_id)
+        except Exception:
+            return []
+        if msg is None or time.time() - float(msg.ts) > self._MAX_AGE_S:
+            return []
+        fh, fw = frame_bgr.shape[:2]
+        mw, mh = msg.frame_wh
+        sx, sy = fw / float(mw), fh / float(mh)
+        out: list = []
+        for od in msg.dets:
+            if str(od.cls).lower() in _WIRE_PERSON_CLASSES:
+                continue
+            x0, y0, x1, y1 = od.bbox_xyxy
+            out.append(SimpleNamespace(
+                camera_id=self._camera_id, capture_ts=float(msg.ts),
+                keypoints_uv=None, mask_offset_xy=None,
+                cls=od.cls, confidence=float(od.confidence),
+                bbox_xyxy=(x0 * sx, y0 * sy, x1 * sx, y1 * sy),
+                foot_uv=(od.foot_uv[0] * sx, od.foot_uv[1] * sy),
+                mask=None,
+                mask_poly=[[px * sx, py * sy] for px, py in od.mask_poly]
+                          if od.mask_poly else None,
+                occupancy_state=od.occupancy_state,
+                occupancy_content=od.occupancy_content,
+                occupancy_confidence=float(od.occupancy_confidence),
+            ))
+        return out

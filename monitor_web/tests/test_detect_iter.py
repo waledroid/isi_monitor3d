@@ -70,7 +70,7 @@ def test_zone_snapshot_detections_are_rendered(monkeypatch) -> None:
     cfg = Settings()
     out = list(routes_video._detect_iter(
         iter([_frame()]), cfg, "cam_a",
-        is_running=lambda: True, get_zone_dets=lambda: sentinel))
+        is_running=lambda: True, get_zone_dets=lambda _img=None: sentinel))
     assert len(out) == 1
     assert calls["detector_arg"] is None
     assert calls["detections"] is sentinel
@@ -98,7 +98,7 @@ def test_stop_releases_pose_ref_in_suspended_generator(monkeypatch) -> None:
     running = {"on": True}
     gen = routes_video._detect_iter(
         iter([_frame(), _frame(), _frame()]), Settings(), "cam_a",
-        is_running=lambda: running["on"], get_zone_dets=lambda: [object()])
+        is_running=lambda: running["on"], get_zone_dets=lambda _img=None: [object()])
     next(gen)                                   # running frame → pose fetched
     assert gen.gi_frame.f_locals.get("pose") is sentinel_pose
     running["on"] = False
@@ -140,7 +140,7 @@ def test_pose_runs_every_frame_inherits_camera_fps(monkeypatch) -> None:
     frames_in = [_frame() for _ in range(10)]
     frames_out = list(routes_video._detect_iter(
         iter(frames_in), Settings(), "cam_a",
-        is_running=lambda: True, get_zone_dets=lambda: []))
+        is_running=lambda: True, get_zone_dets=lambda _img=None: []))
 
     assert len(frames_out) == 10           # all frames yielded (fluid)
     assert len(pose_calls) == 10, (
@@ -156,7 +156,7 @@ def test_pose_runs_every_frame_for_cam_b(monkeypatch) -> None:
 
     frames_out = list(routes_video._detect_iter(
         iter([_frame() for _ in range(5)]), Settings(), "cam_b",
-        is_running=lambda: True, get_zone_dets=lambda: []))
+        is_running=lambda: True, get_zone_dets=lambda _img=None: []))
 
     assert len(frames_out) == 5
     assert len(pose_calls) == 5
@@ -182,6 +182,6 @@ def test_overlay_failure_yields_raw_frame_and_keeps_streaming(monkeypatch):
     frames = [np.zeros((4, 4, 3), dtype=np.uint8) for _ in range(3)]
     out = list(routes_video._detect_iter(iter(frames), cfg=None, camera_id="cam_a",
                                          is_running=lambda: True,
-                                         get_zone_dets=lambda: []))
+                                         get_zone_dets=lambda _img=None: []))
     assert len(out) == 3, "stream must survive overlay failures"
     assert all(o is f for o, f in zip(out, frames, strict=False)), "raw frames passed through"

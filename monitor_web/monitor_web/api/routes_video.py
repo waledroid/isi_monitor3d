@@ -138,11 +138,13 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
     frame — no detection, pose or lines — so the cam view just confirms the camera.
 
     STRICT rule: the cam view NEVER runs a full-frame object detector. The only
-    model that runs on the full frame here is HUMAN POSE; objects come SOLELY from
-    the background :class:`~monitor_web.zone_worker.ZoneDetectionWorker`'s snapshot
-    (``get_zone_dets`` closure: one coherent frame's worth, already person-free and
-    cross-zone deduped at publish time) — naturally empty when the camera has no
-    zones.
+    model that runs on the full frame here is HUMAN POSE; objects come from the
+    ``get_zone_dets(image)`` closure — in points mode the producer's zone-scoped
+    observations straight off the bus (:class:`~monitor_web.pose_overlay.WireObjectSource`,
+    person-free, boxes wherever detection fires, independent of the pixel-space
+    zone_patches that gate the ZONE PANELS); in frames mode the background
+    :class:`~monitor_web.zone_worker.ZoneDetectionWorker`'s patch-scoped snapshot
+    (naturally empty when the camera has no zones).
 
     POSE IS ASYNC: the video loop never waits on the pose model. A per-camera
     background worker (``AsyncPoseRunner``) infers on the newest frame at
@@ -171,7 +173,7 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
         # inference (wire_pose). Frames mode keeps the async runner (the
         # dashboard is then the only pose in the system for display).
         pose = wire_pose if wire_pose is not None else get_async_pose(cfg, camera_id)
-        dets = get_zone_dets() if get_zone_dets is not None else []
+        dets = get_zone_dets(image) if get_zone_dets is not None else []
         # show_occupancy stays False on the CAM views: the raw machine labels
         # ('palette_vide' / 'palette_carton_…') read as noise here — the human
         # summary lives in the COMMUNICATION zone cards. Zone panels + the MP4
@@ -514,14 +516,26 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         manager = getattr(state, "zone_manager", None)
         perception = getattr(state, "isistream", None)
         wire_pose = None
+        # Cam-view object boxes. Points mode (the deployed default): draw
+        # isistream's zone-scoped observations DIRECTLY off the bus
+        # (WireObjectSource) — boxes appear wherever detection fires, with NO
+        # dependency on the pixel-space zone_patches that gate the ZONE PANELS.
+        # (An empty zone_patches.yaml otherwise leaves the patch-scoped worker
+        # idle, so a perfectly good detection never reaches the cam view.)
+        # Frames mode keeps the patch-scoped worker snapshot.
+        get_zone_dets = None
         if perception is not None and perception.points_mode():
-            from ..pose_overlay import WirePoseSource
+            from ..pose_overlay import WireObjectSource, WirePoseSource
             bus = getattr(state, "bus", None)
             wire_pose = WirePoseSource(lambda: bus, camera_id)
+            get_zone_dets = WireObjectSource(lambda: bus, camera_id).objects
+        elif manager is not None:
+            def get_zone_dets(_img, _m=manager, _c=camera_id):
+                return _m.camera_dets(_c)
         frames = _detect_iter(
             frames, cfg, camera_id,
             is_running=is_running,
-            get_zone_dets=(lambda: manager.camera_dets(camera_id)) if manager is not None else None,
+            get_zone_dets=get_zone_dets,
             wire_pose=wire_pose,
         )
     return frames
