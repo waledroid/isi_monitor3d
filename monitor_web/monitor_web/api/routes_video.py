@@ -11,6 +11,7 @@ share the underlying RTSP URL (RTSP is one-to-many).
 
 from __future__ import annotations
 
+import functools
 import logging
 import time
 from collections.abc import Iterator
@@ -39,7 +40,14 @@ from ..floor_rectify import (
     rectify_params_for_frame,
     shared_bev_layout,
 )
+from ..floor_zone_sync import _zones_yaml_path
 from ..video_stream import JPEG_BOUNDARY, mjpeg_stream
+from ..zone_projection import (
+    clip_to_zones,
+    draw_zone_outlines,
+    project_zone_polygons,
+    scale_polygons,
+)
 from .routes_calibrate import _mode_calibration_path
 from .routes_projection import _load_rig_cached
 from .routes_zone_patches import find_patch, patch_pixel_box, patch_rect
@@ -131,7 +139,8 @@ def grab_real_frame(camera_id: str, source_cfg: dict, timeout: float = 4.0):
 
 
 def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
-                 get_zone_dets=None, wire_pose=None) -> Iterator:
+                 get_zone_dets=None, wire_pose=None,
+                 zone_polys=None, zone_calib_wh=None) -> Iterator:
     """Annotate each cam frame before MJPEG-encoding.
 
     Gated by ``is_running`` (the Backbone-running check): until START, yields the RAW
@@ -174,6 +183,16 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
         # dashboard is then the only pose in the system for display).
         pose = wire_pose if wire_pose is not None else get_async_pose(cfg, camera_id)
         dets = get_zone_dets(image) if get_zone_dets is not None else []
+        # Zone-based: keep only detections whose foot lands inside a floor zone
+        # (projected into this camera + scaled to the display frame), and draw
+        # the zone outlines below. Persons/skeletons are the deliberate global
+        # safety exception — never zone-clipped. No zones ⇒ no object boxes.
+        scaled_zones = None
+        if zone_polys and zone_calib_wh:
+            fh, fw = image.shape[:2]
+            scaled_zones = scale_polygons(
+                zone_polys, fw / zone_calib_wh[0], fh / zone_calib_wh[1])
+            dets = clip_to_zones(dets, scaled_zones)
         # show_occupancy stays False on the CAM views: the raw machine labels
         # ('palette_vide' / 'palette_carton_…') read as noise here — the human
         # summary lives in the COMMUNICATION zone cards. Zone panels + the MP4
@@ -194,6 +213,10 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
                 logger.warning("cam %s: overlay failed — showing the raw frame "
                                "(throttled 30s)", camera_id, exc_info=True)
             out = image
+        # The floor-zone boundaries on top of the annotated frame — the operator
+        # sees exactly where each zone is and that boxes fall inside it.
+        if scaled_zones:
+            draw_zone_outlines(out, scaled_zones)
         # No fused-track ring markers here (the '#id cls' amber/green circles
         # were retired as clutter, like the mirrored rings before them): every
         # zone has a detecting TWIN on the other camera, so boxes/masks appear
@@ -471,6 +494,38 @@ async def unified_stream(request: Request) -> StreamingResponse:
     )
 
 
+@functools.lru_cache(maxsize=4)
+def _load_zones_cached(path_str: str, mtime_ns: int):
+    """Load the floor ZoneRegistry keyed by (path, mtime) — edits invalidate."""
+    from backbone.shared.zones import ZoneRegistry
+    return ZoneRegistry.load(path_str)
+
+
+def _camera_zone_polys(cfg, camera_id: str):
+    """Project the metric floor zones into a camera, calibration-frame px.
+
+    Returns ``(polys, (calib_w, calib_h))`` or ``(None, None)`` when the camera
+    is uncalibrated or sees no zone — the zone-based cam view then shows no
+    object boxes (nothing outside a zone). Computed once per stream build (a
+    config save rebuilds the stream), not per frame.
+    """
+    cal_path = _mode_calibration_path(cfg)
+    if not cal_path.exists():
+        return None, None
+    try:
+        rig = _load_rig_cached(str(cal_path.resolve()), cal_path.stat().st_mtime_ns)
+        zpath = _zones_yaml_path(cfg)
+        zones = _load_zones_cached(str(zpath), zpath.stat().st_mtime_ns)
+        polys = project_zone_polygons(rig, zones, camera_id)
+        if not polys or camera_id not in rig:
+            return None, None
+        w, h = rig[camera_id].image_size_wh
+        return polys, (int(w), int(h))
+    except Exception:
+        logger.warning("cam %s: floor-zone projection failed", camera_id, exc_info=True)
+        return None, None
+
+
 def build_cam_stream(state, camera_id: str, *, detect: bool = False,
                      warp: bool = False) -> Iterator:
     """Frame iterator for a camera view. Shared by the MJPEG endpoint and
@@ -524,11 +579,17 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         # idle, so a perfectly good detection never reaches the cam view.)
         # Frames mode keeps the patch-scoped worker snapshot.
         get_zone_dets = None
+        zone_polys = zone_calib_wh = None
         if perception is not None and perception.points_mode():
             from ..pose_overlay import WireObjectSource, WirePoseSource
             bus = getattr(state, "bus", None)
             wire_pose = WirePoseSource(lambda: bus, camera_id)
             get_zone_dets = WireObjectSource(lambda: bus, camera_id).objects
+            # Zone-based cam view: project the floor zones into THIS camera —
+            # the dashed outline + the clip that drops any detection whose foot
+            # falls outside a zone (isistream detects in the zone's larger
+            # bounding-box crop, so its observations spill past the polygon).
+            zone_polys, zone_calib_wh = _camera_zone_polys(cfg, camera_id)
         elif manager is not None:
             def get_zone_dets(_img, _m=manager, _c=camera_id):
                 return _m.camera_dets(_c)
@@ -537,6 +598,7 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
             is_running=is_running,
             get_zone_dets=get_zone_dets,
             wire_pose=wire_pose,
+            zone_polys=zone_polys, zone_calib_wh=zone_calib_wh,
         )
     return frames
 
