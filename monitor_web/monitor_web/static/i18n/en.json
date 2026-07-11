@@ -137,5 +137,10 @@
   "enh_gamma": "Enhance gamma (1.0 = off)",
   "detect_quality": "Detection quality (display always full)",
   "detect_quality_high": "High — main stream (sharper, sees far objects)",
-  "detect_quality_low": "Low — camera substream (faster, lighter)"
+  "detect_quality_low": "Low — camera substream (faster, lighter)",
+  "group_detection": "Object detection",
+  "group_accuracy": "Accuracy boosters (optional)",
+  "group_pose": "Pose (person skeletons)",
+  "group_performance": "Performance",
+  "group_display": "Display overlays (applies instantly)"
 }

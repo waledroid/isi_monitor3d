@@ -137,5 +137,10 @@
   "enh_gamma": "Gamma d'amélioration (1.0 = off)",
   "detect_quality": "Qualité de détection (affichage toujours complet)",
   "detect_quality_high": "Élevée — flux principal (net, objets lointains)",
-  "detect_quality_low": "Basse — sous-flux caméra (plus rapide, léger)"
+  "detect_quality_low": "Basse — sous-flux caméra (plus rapide, léger)",
+  "group_detection": "Détection d'objets",
+  "group_accuracy": "Amélioration de précision (optionnel)",
+  "group_pose": "Pose (squelettes)",
+  "group_performance": "Performance",
+  "group_display": "Superpositions (appliqué instantanément)"
 }

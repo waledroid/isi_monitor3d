@@ -376,79 +376,82 @@
                  size / conf / SAHI / ENH ride the Save button and hot-restart the
                  producer; display toggles auto-save (POST /api/ui-settings). -->
             <div class="config-model">
-              <!-- OBJECT model — one for all zones (isistream, zone-scoped, batched). -->
+              <!-- ── OBJECT DETECTION — one model, all zones, one batched call ── -->
+              <h4 class="config-subhead" data-i18n="group_detection">{{ t.group_detection or 'Object detection' }}</h4>
               <label data-i18n="model_object">{{ t.model_object or 'Object model (all zones, .onnx)' }}</label>
               <select id="zm-model-onnx">
                 <option value="" data-i18n="model_object_placeholder">{{ t.model_object_placeholder or '— none —' }}</option>
               </select>
-
               <label data-i18n="model_zone_imgsz">{{ t.model_zone_imgsz or 'Inference size (px, per zone crop)' }}</label>
               <input id="zm-model-zone-imgsz" type="number" step="32" min="128" max="1280" placeholder="384" />
-
               <label data-i18n="model_conf">{{ t.model_conf or 'Detection confidence threshold' }}</label>
               <input id="zm-model-conf" type="number" step="0.05" min="0" max="1" placeholder="0.25" />
 
+              <!-- ── ACCURACY BOOSTERS — optional, off by default ── -->
+              <h4 class="config-subhead" data-i18n="group_accuracy">{{ t.group_accuracy or 'Accuracy boosters (optional)' }}</h4>
               <label class="zm-checkbox-row">
                 <input id="zm-sahi-enabled" type="checkbox" />
                 <span data-i18n="sahi_enabled">{{ t.sahi_enabled or 'SAHI tiling (small/far objects; all zones)' }}</span>
               </label>
-              <label data-i18n="sahi_tile">{{ t.sahi_tile or 'SAHI tile size (px, 0 = model input)' }}</label>
+              <label class="zm-sub" data-i18n="sahi_tile">{{ t.sahi_tile or 'SAHI tile size (px, 0 = model input)' }}</label>
               <input id="zm-sahi-tile" type="number" step="32" min="0" max="1280" placeholder="0" />
-              <label data-i18n="sahi_overlap">{{ t.sahi_overlap or 'SAHI overlap (must exceed the largest object)' }}</label>
+              <label class="zm-sub" data-i18n="sahi_overlap">{{ t.sahi_overlap or 'SAHI overlap (must exceed the largest object)' }}</label>
               <input id="zm-sahi-overlap" type="number" step="0.05" min="0" max="0.9" placeholder="0.2" />
-
               <label class="zm-checkbox-row">
                 <input id="zm-enh-enabled" type="checkbox" />
                 <span data-i18n="enh_enabled">{{ t.enh_enabled or 'Enhance crops (CLAHE contrast; all zones)' }}</span>
               </label>
-              <label data-i18n="enh_gamma">{{ t.enh_gamma or 'Enhance gamma (1.0 = off)' }}</label>
+              <label class="zm-sub" data-i18n="enh_gamma">{{ t.enh_gamma or 'Enhance gamma (1.0 = off)' }}</label>
               <input id="zm-enh-gamma" type="number" step="0.05" min="0.2" max="3.0" placeholder="1.0" />
 
-              <!-- Person-pose model. Dropdown of pose *.onnx (path contains "pose")
-                   from /api/detection/pose-onnx-files. Option value = absolute path
-                   persisted to backbone.yaml. Optional. -->
+              <!-- ── POSE — person skeletons (the one global model exception) ── -->
+              <h4 class="config-subhead" data-i18n="group_pose">{{ t.group_pose or 'Pose (person skeletons)' }}</h4>
               <label class="zm-checkbox-row">
                 <input id="zm-pose-enabled" type="checkbox" checked />
                 <span data-i18n="pose_enabled">{{ t.pose_enabled or 'Pose detection (person skeletons)' }}</span>
               </label>
-              <label class="zm-checkbox-row">
-                <input id="zm-motion-gate" type="checkbox" checked />
-                <span data-i18n="motion_gate">{{ t.motion_gate or 'Motion gating (skip inference on static zones)' }}</span>
-              </label>
+              <label class="zm-sub" data-i18n="model_pose">{{ t.model_pose or 'Pose model (person, .onnx)' }}</label>
+              <select id="zm-model-pose-onnx">
+                <option value="" data-i18n="model_pose_placeholder">{{ t.model_pose_placeholder or '— none —' }}</option>
+              </select>
+              <label class="zm-sub" data-i18n="model_pose_conf">{{ t.model_pose_conf or 'Pose confidence threshold' }}</label>
+              <input id="zm-model-pose-conf" type="number" step="0.05" min="0" max="1" placeholder="0.3" />
+
+              <!-- ── PERFORMANCE — speed / hardware levers ── -->
+              <h4 class="config-subhead" data-i18n="group_performance">{{ t.group_performance or 'Performance' }}</h4>
               <label data-i18n="detect_quality">{{ t.detect_quality or 'Detection quality (display always full)' }}</label>
               <select id="zm-detect-quality">
                 <option value="high" data-i18n="detect_quality_high">{{ t.detect_quality_high or 'High — main stream (sharper, sees far objects)' }}</option>
                 <option value="low" data-i18n="detect_quality_low">{{ t.detect_quality_low or 'Low — camera substream (faster, lighter)' }}</option>
               </select>
               <label class="zm-checkbox-row">
+                <input id="zm-motion-gate" type="checkbox" checked />
+                <span data-i18n="motion_gate">{{ t.motion_gate or 'Motion gating (skip inference on static zones)' }}</span>
+              </label>
+              <label class="zm-checkbox-row">
                 <input id="zm-trt-enabled" type="checkbox" checked />
                 <span data-i18n="trt_enabled">{{ t.trt_enabled or 'TensorRT acceleration (else ONNX/CUDA fp16)' }}</span>
               </label>
-              <label data-i18n="model_pose">{{ t.model_pose or 'Pose model (person, .onnx)' }}</label>
-              <select id="zm-model-pose-onnx">
-                <option value="" data-i18n="model_pose_placeholder">{{ t.model_pose_placeholder or '— none —' }}</option>
-              </select>
 
-              <label data-i18n="model_pose_conf">{{ t.model_pose_conf or 'Pose confidence threshold' }}</label>
-              <input id="zm-model-pose-conf" type="number" step="0.05" min="0" max="1" placeholder="0.3" />
-
-              <label for="zm-model-show-nodes" data-i18n="show_nodes">{{ t.show_nodes or 'Show foot nodes' }}</label>
-              <input id="zm-model-show-nodes" type="checkbox" class="zm-checkbox" />
-
-              <label for="zm-model-show-masks" data-i18n="show_masks">{{ t.show_masks or 'Show segmentation masks' }}</label>
-              <input id="zm-model-show-masks" type="checkbox" class="zm-checkbox" />
-
-              <label for="zm-model-show-boxes" data-i18n="show_boxes">{{ t.show_boxes or 'Show bounding boxes' }}</label>
-              <input id="zm-model-show-boxes" type="checkbox" class="zm-checkbox" />
-
-
-              <label for="zm-model-dist-opacity" data-i18n="dist_opacity">{{ t.dist_opacity or 'Distance line — opacity' }}</label>
+              <!-- ── DISPLAY — overlay prefs (auto-save, no restart) ── -->
+              <h4 class="config-subhead" data-i18n="group_display">{{ t.group_display or 'Display overlays (applies instantly)' }}</h4>
+              <label class="zm-checkbox-row">
+                <input id="zm-model-show-nodes" type="checkbox" class="zm-checkbox" />
+                <span data-i18n="show_nodes">{{ t.show_nodes or 'Show foot nodes' }}</span>
+              </label>
+              <label class="zm-checkbox-row">
+                <input id="zm-model-show-masks" type="checkbox" class="zm-checkbox" />
+                <span data-i18n="show_masks">{{ t.show_masks or 'Show segmentation masks' }}</span>
+              </label>
+              <label class="zm-checkbox-row">
+                <input id="zm-model-show-boxes" type="checkbox" class="zm-checkbox" />
+                <span data-i18n="show_boxes">{{ t.show_boxes or 'Show bounding boxes' }}</span>
+              </label>
+              <label class="zm-sub" for="zm-model-dist-opacity" data-i18n="dist_opacity">{{ t.dist_opacity or 'Distance line — opacity' }}</label>
               <input id="zm-model-dist-opacity" type="number" min="0.05" max="1" step="0.05" class="zm-input" />
-
-              <label for="zm-model-dist-color" data-i18n="dist_color">{{ t.dist_color or 'Distance line — colour' }}</label>
+              <label class="zm-sub" for="zm-model-dist-color" data-i18n="dist_color">{{ t.dist_color or 'Distance line — colour' }}</label>
               <input id="zm-model-dist-color" type="color" class="zm-input" />
-
-              <label for="zm-model-dist-thickness" data-i18n="dist_thickness">{{ t.dist_thickness or 'Distance line — thickness (px)' }}</label>
+              <label class="zm-sub" for="zm-model-dist-thickness" data-i18n="dist_thickness">{{ t.dist_thickness or 'Distance line — thickness (px)' }}</label>
               <input id="zm-model-dist-thickness" type="number" min="1" max="8" step="1" class="zm-input" />
             </div>
           </section>
