@@ -60,6 +60,17 @@
 
   const WATCHDOG_MS = 8000;      // sub → first decoded frame, else fall back
   const MAX_BUFFERED_AUS = 240;  // pre-decoder-ready buffer (~8 s at 30 fps)
+  // Robustness: a decoder falling behind (queue piling up) renders visibly
+  // smeared/ghosted frames until the next keyframe — the "giant blurry label"
+  // artifact. If the queue exceeds this, flush and resync at the next keyframe
+  // (sub-second) instead of painting smears.
+  const MAX_DECODE_QUEUE = 6;
+  // If no keyframe has been decoded in this long while active, the H.264
+  // passthrough is unhealthy (lost keyframe / long GOP under loss) — hold the
+  // last GOOD frame and stop painting deltas; fall back to the clean
+  // server-JPEG path once it stays unhealthy past the grace.
+  const KEYFRAME_STALE_MS = 4000;
+  const KEYFRAME_GIVEUP_MS = 9000;
   const PREFS_REFRESH_MS = 5000; // show_* toggles auto-save server-side; poll
 
   const PERF_HUD = new URLSearchParams(location.search).get("perfhud") === "1";
@@ -152,7 +163,10 @@
       videoH: 0,
       obs: null,              // latest /ws/overlays payload
       decodeT0: new Map(),    // chunk timestamp -> submit time (decode-ms)
-      stats: { au: 0, presented: 0, dropped: 0, decodeMs: 0, overlayMs: 0 },
+      lastKeyMs: 0,           // performance.now() of the last decoded keyframe
+      degraded: false,        // holding last-good frame, awaiting a keyframe
+      healthTimer: null,
+      stats: { au: 0, presented: 0, dropped: 0, resyncs: 0, decodeMs: 0, overlayMs: 0 },
     };
   }
 
@@ -209,9 +223,14 @@
       try { s.decoder.close(); } catch { /* already closed */ }
       s.decoder = null;
     }
+    if (s.healthTimer !== null) { clearInterval(s.healthTimer); s.healthTimer = null; }
     s.pendingAUs = [];
     s.decodeT0.clear();
     if (window.__videoWS) window.__videoWS.detach(`camh264:${s.camId}`);
+    // Wipe the canvas — otherwise the last (possibly smeared) frame lingers
+    // under a swap to JPEG or a re-decode.
+    try { s.ctxV.clearRect(0, 0, s.els.video.width, s.els.video.height); } catch { /* noop */ }
+    try { s.ctxD.clearRect(0, 0, s.els.det.width, s.els.det.height); } catch { /* noop */ }
     s.els.video.classList.add("hidden");
     s.els.det.classList.add("hidden");
     s.els.img.classList.remove("pt-hidden");
@@ -295,10 +314,19 @@
 
   function decodeAU(s, au) {
     if (!s.decoder || s.decoder.state !== "configured") return;
+    // Decoder falling behind → drop to the next keyframe instead of queuing
+    // deltas that will paint smeared. Costs one GOP of latency, kills the
+    // ghosting.
+    if (!s.needKeyframe && s.decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+      s.needKeyframe = true;
+      s.degraded = true;
+      s.stats.resyncs++;
+    }
     if (s.needKeyframe) {
       if (!au.key) { s.stats.dropped++; return; }
       s.needKeyframe = false;
     }
+    if (au.key) { s.lastKeyMs = performance.now(); s.degraded = false; }
     const usTs = Math.round(au.ts * 1e6);      // capture_ts (s) → µs
     try {
       s.decodeT0.set(usTs, performance.now());
@@ -322,6 +350,10 @@
     }
     try {
       if (s.stopped || s.fellBack) return;
+      // Degraded (post-backlog, pre-keyframe): hold the last GOOD frame rather
+      // than paint a smeared delta. present() still fires for in-flight deltas
+      // decoded before the flush — skip them.
+      if (s.degraded) return;
       const w = frame.displayWidth, h = frame.displayHeight;
       if (s.els.video.width !== w || s.els.video.height !== h) {
         s.els.video.width = w;
@@ -340,9 +372,29 @@
     // when enabled) — deliberately no per-video-frame overlay work.
   }
 
+  function startHealthMonitor(s) {
+    if (s.healthTimer !== null) return;
+    s.lastKeyMs = performance.now();
+    s.healthTimer = setInterval(() => {
+      if (s.stopped || s.fellBack || !s.active) return;
+      const age = performance.now() - s.lastKeyMs;
+      if (age > KEYFRAME_STALE_MS && !s.degraded) {
+        // No keyframe in a while → treat subsequent deltas as suspect: hold
+        // the last good frame and wait for a keyframe.
+        s.degraded = true;
+        s.needKeyframe = true;
+        s.stats.resyncs++;
+      }
+      if (age > KEYFRAME_GIVEUP_MS) {
+        fallBack(s, `no keyframe for ${(age / 1000).toFixed(1)}s`);
+      }
+    }, 1000);
+  }
+
   function markActive(s) {
     s.active = true;
     if (s.watchdog !== null) { clearTimeout(s.watchdog); s.watchdog = null; }
+    startHealthMonitor(s);
     s.els.video.classList.remove("hidden");
     s.els.det.classList.remove("hidden");
     // visibility (not display): the <img> keeps its layout box so draw-mode /
@@ -514,7 +566,8 @@
     const lines = [
       `passthrough ${s.camId}  ${s.videoW}x${s.videoH}`,
       `queue ${s.decoder ? s.decoder.decodeQueueSize : "-"}  au ${s.stats.au}`,
-      `presented ${s.stats.presented}  dropped ${s.stats.dropped}`,
+      `presented ${s.stats.presented}  dropped ${s.stats.dropped}  resyncs ${s.stats.resyncs}`,
+      `keyframe age ${((performance.now() - s.lastKeyMs) / 1000).toFixed(1)}s${s.degraded ? "  DEGRADED(hold)" : ""}`,
       `decode ${s.stats.decodeMs.toFixed(1)} ms  overlay ${s.stats.overlayMs.toFixed(2)} ms`,
       `longtasks/min ${longTasksPerMin()}`,
     ];
