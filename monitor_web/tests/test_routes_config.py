@@ -366,7 +366,11 @@ def test_ui_settings_round_trips(tmp_path: Path) -> None:
     )
     app = create_app(cfg)
     with TestClient(app) as client:
-        assert client.get("/api/ui-settings").json() == {}          # none yet
+        # Operator prefs start empty; the server-owned palette is always present.
+        body = client.get("/api/ui-settings").json()
+        assert "class_colors" in body and "class_color_default" in body
+        prefs = {k: v for k, v in body.items() if not k.startswith("class_color")}
+        assert prefs == {}   # none yet
         r = client.post("/api/ui-settings", json={"mp4_selected": "video/p/clip.mp4"})
         assert r.status_code == 200 and r.json()["ok"] is True
         assert client.get("/api/ui-settings").json()["mp4_selected"] == "video/p/clip.mp4"
@@ -1081,3 +1085,30 @@ def test_isistream_save_clamps_out_of_range_knobs(tmp_path, monkeypatch):
     assert det["confidence_threshold"] == 1.0
     assert det["sahi"]["overlap"] == 0.9
     assert det["enhance"]["gamma"] == 3.0
+
+
+def test_detection_quality_toggle_round_trips(tmp_path, monkeypatch):
+    """The High/Low detection-quality selector maps to isistream.detect_substream
+    (low = substream) and round-trips through GET /api/config."""
+    import yaml as _yaml
+
+    app, backbone_yaml = _detection_app(tmp_path)
+    _force_gpu(monkeypatch, True)
+    with TestClient(app) as client:
+        # Low quality → detect on the substream.
+        r = client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://x"}},
+            "pose": {"pose_onnx_path": ""},
+            "detect_substream": True})
+        assert r.status_code == 200, r.text
+        cfg = _yaml.safe_load(backbone_yaml.read_text())
+        assert cfg["isistream"]["detect_substream"] is True
+        assert client.get("/api/config").json()["isistream"]["detect_substream"] is True
+
+        # High quality → detect on the main stream.
+        r = client.post("/api/config", json={
+            "cameras": {"cam_a": {"url": "rtsp://x"}},
+            "pose": {"pose_onnx_path": ""},
+            "detect_substream": False})
+        assert r.status_code == 200, r.text
+        assert client.get("/api/config").json()["isistream"]["detect_substream"] is False

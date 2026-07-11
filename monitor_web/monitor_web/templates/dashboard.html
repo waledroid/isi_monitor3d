@@ -415,10 +415,11 @@
                 <input id="zm-motion-gate" type="checkbox" checked />
                 <span data-i18n="motion_gate">{{ t.motion_gate or 'Motion gating (skip inference on static zones)' }}</span>
               </label>
-              <label class="zm-checkbox-row">
-                <input id="zm-detect-substream" type="checkbox" checked />
-                <span data-i18n="detect_substream">{{ t.detect_substream or 'Detect on camera substream (display stays main)' }}</span>
-              </label>
+              <label data-i18n="detect_quality">{{ t.detect_quality or 'Detection quality (display always full)' }}</label>
+              <select id="zm-detect-quality">
+                <option value="high" data-i18n="detect_quality_high">{{ t.detect_quality_high or 'High — main stream (sharper, sees far objects)' }}</option>
+                <option value="low" data-i18n="detect_quality_low">{{ t.detect_quality_low or 'Low — camera substream (faster, lighter)' }}</option>
+              </select>
               <label class="zm-checkbox-row">
                 <input id="zm-trt-enabled" type="checkbox" checked />
                 <span data-i18n="trt_enabled">{{ t.trt_enabled or 'TensorRT acceleration (else ONNX/CUDA fp16)' }}</span>

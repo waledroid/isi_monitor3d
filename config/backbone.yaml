@@ -46,7 +46,7 @@ ingestion:
     degraded_emit_after_ms: 200.0
 detection:
   plugin: yolo_onnx_seg
-  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
+  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26l-seg_e200_640px_09-06-2026_00-24-57/weights/best.fp16.onnx
   class_names:
   - palette
   - carton
@@ -59,7 +59,7 @@ detection:
   pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.onnx
   pose_imgsz: 640
   decode_masks: true
-  pose_enabled: false
+  pose_enabled: true
   trt_enabled: true
   zone_imgsz: 384
   sahi:
@@ -67,7 +67,7 @@ detection:
     tile: 0
     overlap: 0.2
   enhance:
-    enabled: false
+    enabled: true
     gamma: 1.0
 homography:
   cross_cam_fusion:

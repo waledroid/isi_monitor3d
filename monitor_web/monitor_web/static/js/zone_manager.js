@@ -244,7 +244,9 @@ function collectPayload() {
   payload.pose = collectPose();
   // isistream perf toggles (default ON; a save applies them live).
   payload.motion_gate = el("zm-motion-gate")?.checked ?? true;
-  payload.detect_substream = el("zm-detect-substream")?.checked ?? true;
+  // Detection quality: high = main stream, low = camera substream. Applied on
+  // the fly (a save hot-restarts isistream ~4 s; the engine keeps running).
+  payload.detect_substream = el("zm-detect-quality")?.value === "low";
   payload.trt_enabled = el("zm-trt-enabled")?.checked ?? true;
   // S16: distance lines — always send the field (empty list clears the file).
   payload.link_lines = collectLinkLines();
@@ -435,12 +437,13 @@ function fillModelSection(det, isis) {
   set("zm-enh-gamma", det.enhance_gamma ?? 1.0);
   const mg = el("zm-motion-gate");
   if (mg) mg.checked = isis.motion_gate !== false;
-  const ds = el("zm-detect-substream");
-  if (ds) {
-    ds.checked = isis.detect_substream !== false;
-    // Inert until a camera has a detect_source substream URL configured.
-    ds.disabled = !isis.has_detect_source;
-    ds.closest("label")?.classList.toggle("zm-disabled", !isis.has_detect_source);
+  const dq = el("zm-detect-quality");
+  if (dq) {
+    dq.value = isis.detect_substream ? "low" : "high";
+    // "Low" needs a substream URL configured; if none, force + lock to High.
+    const lowOpt = dq.querySelector('option[value="low"]');
+    if (lowOpt) lowOpt.disabled = !isis.has_detect_source;
+    if (!isis.has_detect_source) dq.value = "high";
   }
   const trt = el("zm-trt-enabled");
   if (trt) {

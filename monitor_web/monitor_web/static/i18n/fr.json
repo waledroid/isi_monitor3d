@@ -126,7 +126,6 @@
   "ui_lag_label": "Latence UI p50",
   "pose_enabled": "Détection de pose (squelettes)",
   "motion_gate": "Filtrage par mouvement (zones statiques sans inférence)",
-  "detect_substream": "Détection sur le sous-flux caméra (affichage flux principal)",
   "trt_enabled": "Accélération TensorRT (sinon ONNX/CUDA fp16)",
   "model_object": "Modèle d'objets (toutes zones, .onnx)",
   "model_object_placeholder": "— aucun —",
@@ -135,5 +134,8 @@
   "sahi_tile": "Taille de tuile SAHI (px, 0 = entrée modèle)",
   "sahi_overlap": "Recouvrement SAHI (doit dépasser le plus grand objet)",
   "enh_enabled": "Amélioration des crops (CLAHE ; toutes zones)",
-  "enh_gamma": "Gamma d'amélioration (1.0 = off)"
+  "enh_gamma": "Gamma d'amélioration (1.0 = off)",
+  "detect_quality": "Qualité de détection (affichage toujours complet)",
+  "detect_quality_high": "Élevée — flux principal (net, objets lointains)",
+  "detect_quality_low": "Basse — sous-flux caméra (plus rapide, léger)"
 }

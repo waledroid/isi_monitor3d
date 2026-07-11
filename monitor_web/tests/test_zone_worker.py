@@ -385,17 +385,16 @@ def test_backbone_source_no_bus_publishes_empty_ok():
     assert w.zone_status("z1") == "ok"
 
 
-def test_backbone_source_respects_per_zone_confidence():
-    """The Backbone publishes at its own low threshold; the per-zone confidence
-    acts as a DISPLAY floor so cards/panels don't flicker on weak evidence."""
-    patch = _patch("z1", 0, 0, 160, 120, conf=0.6)
-    weak = _obs_det(cls="palette", conf=0.4, bbox=(40.0, 40.0, 120.0, 120.0))
-    strong = _obs_det(cls="palette", conf=0.9, bbox=(45.0, 45.0, 125.0, 125.0))
-    bus = _FakeBus(_obs_msg(dets=[weak, strong], frame_wh=(320, 240)))
-    w, _ = _worker([patch], bus=bus)
-    w._snapshot_from_bus(np.zeros((240, 320, 3), np.uint8), [patch])
-    dets = w.zone_dets("z1")
-    assert len(dets) == 1 and dets[0].confidence == 0.9
+def test_no_per_zone_confidence_knob_remains():
+    """ONE global model, ONE threshold (Settings > Isistream). The dashboard
+    renders every detection the wire carries; it never re-filters per zone."""
+    import inspect
+
+    from monitor_web import zone_worker
+
+    src = inspect.getsource(zone_worker)
+    assert "conf_floor" not in src
+
 
 
 def test_people_bridge_carries_last_seen_across_poseless_ticks():

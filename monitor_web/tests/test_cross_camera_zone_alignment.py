@@ -249,7 +249,7 @@ def test_save_derives_twin_on_other_camera(tmp_path: Path) -> None:
         client.post("/api/zone-patches", json={"patches": [
             {"id": "z1", "name": "Zone 1", "camera": "cam_b",
              "polygon": clicks, "frame_wh": list(IMG_WH),
-             "confidence": 0.2},
+             },
         ]})
         got = client.get("/api/zone-patches").json()["patches"]
 
@@ -258,9 +258,9 @@ def test_save_derives_twin_on_other_camera(tmp_path: Path) -> None:
     assert twin["camera"] == "cam_a"
     assert twin["twin_of"] == "z1"
     assert twin["name"] == "Zone 1"
-    # The per-zone DISPLAY confidence floor carries to the twin; local-inference
+    # No per-zone knobs survive to the twin (one global model, one threshold);
     # keys (model/infer_size/sahi/enhance) are gone — one perception, no local models.
-    assert twin["confidence"] == 0.2
+    assert "confidence" not in twin
     assert "infer_size" not in twin and "model" not in twin
     # The twin's floor footprint matches the authored zone (via cam_a's math).
     from monitor_web.api.routes_projection import _load_rig_cached

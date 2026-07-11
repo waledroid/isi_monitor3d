@@ -126,7 +126,6 @@
   "ui_lag_label": "UI lag p50",
   "pose_enabled": "Pose detection (person skeletons)",
   "motion_gate": "Motion gating (skip inference on static zones)",
-  "detect_substream": "Detect on camera substream (display stays main)",
   "trt_enabled": "TensorRT acceleration (else ONNX/CUDA fp16)",
   "model_object": "Object model (all zones, .onnx)",
   "model_object_placeholder": "— none —",
@@ -135,5 +134,8 @@
   "sahi_tile": "SAHI tile size (px, 0 = model input)",
   "sahi_overlap": "SAHI overlap (must exceed the largest object)",
   "enh_enabled": "Enhance crops (CLAHE contrast; all zones)",
-  "enh_gamma": "Enhance gamma (1.0 = off)"
+  "enh_gamma": "Enhance gamma (1.0 = off)",
+  "detect_quality": "Detection quality (display always full)",
+  "detect_quality_high": "High — main stream (sharper, sees far objects)",
+  "detect_quality_low": "Low — camera substream (faster, lighter)"
 }
