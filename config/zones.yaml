@@ -1,5 +1,6 @@
 zones:
-- name: Zone 1
+- id: zp_mr8z7cot
+  name: Zone 1
   type: palette
   kind: palette
   polygon:
@@ -12,7 +13,8 @@ zones:
   - - -4.643
     - -2.773
   derived_from: zone_patch
-- name: Zone 2
+- id: zp_mrc2y24v
+  name: Zone 2
   type: palette
   kind: palette
   polygon:
@@ -25,7 +27,8 @@ zones:
   - - 0.198
     - 0.036
   derived_from: zone_patch
-- name: Zone 3
+- id: zp_mrc2ypt4
+  name: Zone 3
   type: palette
   kind: palette
   polygon:

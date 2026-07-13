@@ -20,15 +20,8 @@ zone_patches:
     frame_wh:
     - 1280
     - 720
-    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
-    infer_size: 320
     color: '#ffc800'
     confidence: 0.1
-    sahi: false
-    enhance: false
-    sahi_rows: 2
-    sahi_cols: 2
-    sahi_overlap: 0.2
     twin_of: null
   - id: zp_mrc2y24v
     name: Zone 2
@@ -50,15 +43,8 @@ zone_patches:
     frame_wh:
     - 1280
     - 720
-    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
-    infer_size: 320
     color: null
     confidence: 0.1
-    sahi: false
-    enhance: false
-    sahi_rows: 2
-    sahi_cols: 2
-    sahi_overlap: 0.2
     twin_of: null
   - id: zp_mrc2ypt4
     name: Zone 3
@@ -80,15 +66,8 @@ zone_patches:
     frame_wh:
     - 1280
     - 720
-    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
-    infer_size: 320
     color: '#06fe44'
     confidence: 0.1
-    sahi: false
-    enhance: false
-    sahi_rows: 2
-    sahi_cols: 2
-    sahi_overlap: 0.2
     twin_of: null
   - id: zp_mr8z7cot__twin
     name: Zone 1
@@ -125,15 +104,8 @@ zone_patches:
     frame_wh:
     - 1920
     - 1080
-    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
-    infer_size: 320
     color: '#ffc800'
     confidence: 0.1
-    sahi: false
-    enhance: false
-    sahi_rows: 2
-    sahi_cols: 2
-    sahi_overlap: 0.2
     twin_of: zp_mr8z7cot
   - id: zp_mrc2y24v__twin
     name: Zone 2
@@ -206,15 +178,8 @@ zone_patches:
     frame_wh:
     - 1920
     - 1080
-    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
-    infer_size: 320
     color: null
     confidence: 0.1
-    sahi: false
-    enhance: false
-    sahi_rows: 2
-    sahi_cols: 2
-    sahi_overlap: 0.2
     twin_of: zp_mrc2y24v
   - id: zp_mrc2ypt4__twin
     name: Zone 3
@@ -249,15 +214,8 @@ zone_patches:
     frame_wh:
     - 1920
     - 1080
-    model: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
-    infer_size: 320
     color: '#06fe44'
     confidence: 0.1
-    sahi: false
-    enhance: false
-    sahi_rows: 2
-    sahi_cols: 2
-    sahi_overlap: 0.2
     twin_of: zp_mrc2ypt4
 warehouse_map:
   elements: []
