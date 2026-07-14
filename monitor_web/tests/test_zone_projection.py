@@ -137,8 +137,30 @@ def test_metric_clip_no_zones_shows_nothing():
                                 ZoneRegistry.empty()) == []
 
 
-def test_crop_box_stencil_covers_boxes_scaled():
-    from monitor_web.zone_projection import crop_box_stencil
-    st = crop_box_stencil((100, 200), [(100, 100, 300, 300)], (0.5, 0.5))
-    assert st[75, 100] == 255      # inside the scaled box (50..150 x 50..150)
-    assert st[75, 25] == 0         # outside
+def test_zone_hull_covers_height_but_stays_lateral():
+    """The mask stencil comes from the EXTRUDED hull: it must reach ABOVE the
+    flat floor polygon (an object's mask rises above its footprint) yet stay
+    far tighter laterally than the zone's bounding-rect crop box."""
+    from monitor_web.zone_projection import project_zone_hulls
+
+    view = _LookDownView()
+
+    class _Rig:
+        camera_ids = ("cam_a",)
+
+        def __contains__(self, c):
+            return c == "cam_a"
+
+        def __getitem__(self, c):
+            return view
+
+    rig = _Rig()
+    zones = _mzones([[0.3, -0.3], [0.9, -0.3], [0.9, 0.3], [0.3, 0.3]])
+    (zid, _name, hull), = project_zone_hulls(rig, zones, "cam_a")
+    assert zid == "z1"
+    # Floor footprint u-range: 600..800 px; the z=2m projection (depth 1m)
+    # stretches u to 1000*x/1+500 = 800..1400 → the hull must extend well
+    # beyond the floor-only footprint, but stay clipped to the frame.
+    floor_u_max = 1000.0 * 0.9 / 3.0 + 500.0
+    assert hull[:, 0].max() > floor_u_max + 100
+    assert hull[:, 0].max() <= 999.0 and hull[:, 1].min() >= 0.0

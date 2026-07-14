@@ -45,10 +45,11 @@ from ..floor_zone_sync import _zones_yaml_path
 from ..video_stream import JPEG_BOUNDARY, mjpeg_stream
 from ..zone_projection import (
     clip_to_zones_metric,
-    crop_box_stencil,
     draw_zone_outlines,
+    project_zone_hulls,
     project_zone_polygons,
     scale_polygons,
+    zone_stencil,
 )
 from .routes_calibrate import _mode_calibration_path
 from .routes_projection import _load_rig_cached
@@ -190,7 +191,8 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
         # (±0.15 m), so both cameras agree with each other AND with the fused
         # zone state (a pixel-polygon test dropped boundary objects on one
         # camera while the other showed them). Masks are stencil-bounded to
-        # the zones' crop boxes. Persons/skeletons are the deliberate global
+        # the zones' EXTRUDED HULLS (tight laterally, tall enough for the
+        # objects standing in the zone). Persons/skeletons are the deliberate global
         # safety exception — never zone-clipped. No zones ⇒ no object boxes.
         scaled_zones = stencil = None
         if zone_ctx is not None:
@@ -200,8 +202,8 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
             dets = clip_to_zones_metric(dets, zone_ctx["view"], (fw, fh),
                                         zone_ctx["zones"])
             if _stencil_wh != (fw, fh):     # zones are fixed per stream build
-                _stencil_cache = crop_box_stencil(
-                    (fh, fw), zone_ctx["crops"], (fw / cw, fh / ch))
+                _stencil_cache = zone_stencil(
+                    (fh, fw), scale_polygons(zone_ctx["hulls"], fw / cw, fh / ch))
                 _stencil_wh = (fw, fh)
             stencil = _stencil_cache
         # show_occupancy stays False on the CAM views: the raw machine labels
@@ -354,13 +356,13 @@ def _to_crop(d, x0: int, y0: int, ch: int, cw: int):
 
 def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
                       infer_size: int = 320, is_running=None, get_dets=None,
-                      polygon=None) -> Iterator:
+                      polygon=None, hull_calib=None, calib_wh=None) -> Iterator:
     """Pure RENDERER for a zone panel — NO detection in the HTTP path. Crops each
     frame to the zone's bounding rect, draws the background worker's published
-    detections for this zone (translated to crop coords, masks stencil-clipped
-    to the zone POLYGON so nothing renders outside the drawn boundary), then
-    downsizes to the panel display size. Backbone stopped → raw crop (the
-    pre-START state)."""
+    detections for this zone (translated to crop coords; masks stencil-clipped
+    to the zone's EXTRUDED HULL when calibrated — the drawn polygon is flat and
+    cuts the body off tall objects — else to the drawn polygon), then downsizes
+    to the panel display size. Backbone stopped → raw crop (pre-START state)."""
     import numpy as np
 
     from ..zone_worker import _scaled_polygon
@@ -381,11 +383,15 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
             # on in the COMMUNICATION cards and MQTT; the zone view stays
             # clean (same rule the CAM views already follow).
             stencil = None
-            if polygon is not None:
+            if hull_calib is not None or polygon is not None:
                 if _stencil_key != (iw, ih, x0, y0, ch, cw):
-                    poly = _scaled_polygon({"polygon": polygon,
-                                            "frame_wh": stored_wh}, (iw, ih))
-                    if poly is not None:
+                    if hull_calib is not None and calib_wh:
+                        poly = np.asarray(hull_calib, dtype=np.float64) * [
+                            iw / float(calib_wh[0]), ih / float(calib_wh[1])]
+                    else:
+                        poly = _scaled_polygon({"polygon": polygon,
+                                                "frame_wh": stored_wh}, (iw, ih))
+                    if poly is not None and len(poly) >= 3:
                         m = np.zeros((ch, cw), dtype=np.uint8)
                         cv2.fillPoly(m, [np.asarray(
                             poly - [x0, y0], dtype=np.int32)], 255)
@@ -423,6 +429,16 @@ def build_zone_stream(state, patch_id: str) -> Iterator:
     if rect is None:
         raise LookupError(f"zone patch {patch_id!r} has no rect/polygon")
     manager = getattr(state, "zone_manager", None)
+    # The zone's extruded hull in THIS camera (mask stencil) — the zone id is
+    # the base patch id; a twin panel shares its base's floor zone.
+    hull_calib = calib_wh = None
+    ctx = _camera_zone_ctx(cfg, camera_id)
+    if ctx is not None:
+        zid = str(patch.get("twin_of") or patch_id)
+        for h_zid, _n, hull in ctx["hulls"]:
+            if h_zid == zid:
+                hull_calib, calib_wh = hull, ctx["calib_wh"]
+                break
     frames = _frame_iter(camera_id, src_cfg)   # source-paced; no display cap
     return _zone_render_iter(
         frames, cfg, camera_id, rect, patch.get("frame_wh"),
@@ -430,6 +446,7 @@ def build_zone_stream(state, patch_id: str) -> Iterator:
         is_running=lambda: _backbone_running(state),
         get_dets=(lambda: manager.zone_dets(patch_id)) if manager is not None else None,
         polygon=patch.get("polygon"),
+        hull_calib=hull_calib, calib_wh=calib_wh,
     )
 
 
@@ -543,14 +560,13 @@ def _camera_zone_ctx(cfg, camera_id: str) -> dict | None:
     - ``polys``   projected floor-zone polygons, calibration px (outlines)
     - ``view``    the camera's calibration (metric foot→floor membership)
     - ``zones``   the metric ZoneRegistry (membership polygons, in metres)
-    - ``crops``   the zones' crop boxes, calibration px (the mask stencil)
+    - ``hulls``   the zones' extruded hulls, calibration px (the mask stencil)
     - ``calib_wh`` the calibration frame size (display scaling)
     """
     cal_path = _mode_calibration_path(cfg)
     if not cal_path.exists():
         return None
     try:
-        from backbone.detection.zone_scope import zone_crop_boxes
         rig = _load_rig_cached(str(cal_path.resolve()), cal_path.stat().st_mtime_ns)
         zpath = _zones_yaml_path(cfg)
         zones = _load_zones_cached(str(zpath), zpath.stat().st_mtime_ns)
@@ -558,9 +574,9 @@ def _camera_zone_ctx(cfg, camera_id: str) -> dict | None:
         if not polys or camera_id not in rig:
             return None
         w, h = rig[camera_id].image_size_wh
-        crops = [box for _z, box in zone_crop_boxes(rig, zones).get(camera_id, [])]
+        hulls = project_zone_hulls(rig, zones, camera_id)
         return {"polys": polys, "view": rig[camera_id], "zones": zones,
-                "crops": crops, "calib_wh": (int(w), int(h))}
+                "hulls": hulls, "calib_wh": (int(w), int(h))}
     except Exception:
         logger.warning("cam %s: floor-zone projection failed", camera_id, exc_info=True)
         return None

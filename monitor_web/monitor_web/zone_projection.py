@@ -160,22 +160,72 @@ def clip_to_zones_metric(dets: list, view, display_wh, zones,
     return kept
 
 
-def crop_box_stencil(shape_hw, crop_boxes, scale_xy) -> np.ndarray:
-    """Mask-clip stencil from the zones' CROP BOXES (z=0..2m projection union
-    rects, calibration px, scaled to the display frame).
+def project_zone_hulls(rig, zones, camera_id: str, *,
+                       height_m: float = 2.0) -> list:
+    """Per-zone EXTRUDED hulls in the camera's calibration frame: the convex
+    hull of the zone polygon projected at the floor (z=0) AND at ``height_m``.
 
-    The flat floor POLYGON is the wrong mask boundary: a pallet's mask rises
-    above its floor footprint (obliquely-seen zones lost their whole mask),
-    and a field-clipped polygon (edge-on zone) under-covers the metric zone
-    (measured 0% mask survival on genuinely in-zone objects). Every wire mask
-    was detected INSIDE a zone crop, so the crop-box union bounds every
-    legitimate mask while still confining rendering to the zones' visual
-    regions. Junk outside the zones is dropped by the metric clip upstream."""
-    m = np.zeros((int(shape_hw[0]), int(shape_hw[1])), dtype=np.uint8)
-    sx, sy = float(scale_xy[0]), float(scale_xy[1])
-    for (x0, y0, x1, y1) in crop_boxes:
-        m[int(y0 * sy):int(np.ceil(y1 * sy)), int(x0 * sx):int(np.ceil(x1 * sx))] = 255
-    return m
+    This is the mask-clip boundary. The flat floor polygon cuts the body off
+    a tall object (a mask rises above its floor footprint) and a field-
+    clipped projection under-covers an edge-on zone (0% mask survival on
+    genuinely in-zone objects); the zones' crop-box RECTS over-cover (their
+    union spans most of the frame — masks visibly outside the zones again).
+    The hull is tight laterally like the polygon but tall enough for the
+    objects standing in the zone. Same projection as ``zone_crop_boxes``
+    (pinhole-fallback, no field clip). Returns ``[(zone_id, name, hull)]``.
+    """
+    from backbone.detection.zone_scope import _project_world3
+    from backbone.shared.geometry import (
+        densify_polygon,
+        floor_to_pixel,
+        has_metric_camera_model,
+    )
+    if rig is None or camera_id not in rig:
+        return []
+    view = rig[camera_id]
+    out: list = []
+    for name in zones.names:
+        poly_m = densify_polygon(
+            np.asarray(zones[name].polygon, dtype=np.float64), segments_per_edge=8)
+        if has_metric_camera_model(view.K, view.R, view.t):
+            floor3 = np.hstack([poly_m, np.zeros((len(poly_m), 1))])
+            top3 = np.hstack([poly_m, np.full((len(poly_m), 1), float(height_m))])
+            uv = np.vstack([
+                _project_world3(floor3, view.K, view.D, view.R, view.t,
+                                view.image_size_wh),
+                _project_world3(top3, view.K, view.D, view.R, view.t,
+                                view.image_size_wh),
+            ])
+            uv = uv[~np.isnan(uv).any(axis=1)]
+        else:
+            # Mode 1 (H only): floor polygon + the same polygon shifted up by
+            # its own pixel height — the zone_crop_boxes stand-in.
+            base = floor_to_pixel(poly_m, view.H)
+            lift = base.copy()
+            lift[:, 1] -= (base[:, 1].max() - base[:, 1].min())
+            uv = np.vstack([base, lift])
+        if len(uv) < 3:
+            continue
+        # An edge zone's z=2m lift can explode via the pinhole fallback
+        # (measured a hull 3000x the crop rect). Drop only the numerically
+        # unhinged points (beyond 8x the frame), hull the rest, then take the
+        # EXACT convex intersection with the frame rectangle — the visible
+        # footprint stays correct however far off-frame the tops project
+        # (a tight margin filter here collapsed oblique cameras' hulls to
+        # floor-only, re-clipping tall objects' masks).
+        w, h = float(view.image_size_wh[0]), float(view.image_size_wh[1])
+        sane = uv[(np.abs(uv[:, 0]) < 8 * w) & (np.abs(uv[:, 1]) < 8 * h)]
+        if len(sane) < 3:
+            continue
+        hull = cv2.convexHull(sane.astype(np.float32))
+        frame_rect = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]],
+                              dtype=np.float32).reshape(-1, 1, 2)
+        _area, clipped = cv2.intersectConvexConvex(hull, frame_rect)
+        if clipped is None or len(clipped) < 3:
+            continue
+        out.append((zones.id_of(name) or name, name,
+                    clipped.reshape(-1, 2).astype(np.float64)))
+    return out
 
 
 def zone_of_foot_metric(view, display_wh, zones, foot_uv,
