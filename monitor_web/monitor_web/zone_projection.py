@@ -115,3 +115,64 @@ def zone_stencil(shape_hw, polys) -> np.ndarray:
         if len(poly) >= 3:
             cv2.fillPoly(m, [np.asarray(poly, dtype=np.int32)], 255)
     return m
+
+
+# Boundary tolerance for METRIC zone membership on the cam views. Measured on
+# the rig: genuine boundary cases (an object physically in the zone whose
+# per-camera foot projection lands just outside the polygon) miss by
+# 0.05-0.11 m; crop-margin junk sits 0.38 m+ out. 0.15 m splits them cleanly.
+_ZONE_TOL_M = 0.15
+
+
+def clip_to_zones_metric(dets: list, view, display_wh, zones,
+                         tol_m: float = _ZONE_TOL_M) -> list:
+    """Zone membership in METRES — the same undistort+H the metric engine
+    uses, so the cam view agrees with the fused zone state / COMMS card.
+
+    A per-camera PIXEL polygon test is boundary-fragile: calibration skew puts
+    the same physical object's foot inside one camera's projected polygon and
+    a few dozen px outside the other's (box shown on cam2, dropped on cam1).
+    Projecting the foot to the floor and testing against the metric zone
+    polygon (± ``tol_m``) is camera-invariant. Each kept det gets ``zone_id``
+    (nearest zone). No zones ⇒ nothing shown."""
+    if not dets or len(zones) == 0:
+        return []
+    from backbone.shared.geometry import pixel_to_floor, undistort_points
+    cw, ch = float(view.image_size_wh[0]), float(view.image_size_wh[1])
+    fw, fh = float(display_wh[0]), float(display_wh[1])
+    uv = np.array([[d.foot_uv[0] * cw / fw, d.foot_uv[1] * ch / fh]
+                   for d in dets], dtype=np.float64)
+    xy = pixel_to_floor(undistort_points(uv, view.K, view.D), view.H)
+    polys = [(zones.id_of(n) or n, np.asarray(zones[n].polygon, np.float32))
+             for n in zones.names]
+    kept: list = []
+    for d, (x, y) in zip(dets, xy, strict=True):
+        if not (np.isfinite(x) and np.isfinite(y)):
+            continue
+        best = None
+        for zid, poly in polys:
+            dist = cv2.pointPolygonTest(poly, (float(x), float(y)), True)
+            if best is None or dist > best[1]:
+                best = (zid, dist)
+        if best is not None and best[1] >= -float(tol_m):
+            d.zone_id = best[0]
+            kept.append(d)
+    return kept
+
+
+def crop_box_stencil(shape_hw, crop_boxes, scale_xy) -> np.ndarray:
+    """Mask-clip stencil from the zones' CROP BOXES (z=0..2m projection union
+    rects, calibration px, scaled to the display frame).
+
+    The flat floor POLYGON is the wrong mask boundary: a pallet's mask rises
+    above its floor footprint (obliquely-seen zones lost their whole mask),
+    and a field-clipped polygon (edge-on zone) under-covers the metric zone
+    (measured 0% mask survival on genuinely in-zone objects). Every wire mask
+    was detected INSIDE a zone crop, so the crop-box union bounds every
+    legitimate mask while still confining rendering to the zones' visual
+    regions. Junk outside the zones is dropped by the metric clip upstream."""
+    m = np.zeros((int(shape_hw[0]), int(shape_hw[1])), dtype=np.uint8)
+    sx, sy = float(scale_xy[0]), float(scale_xy[1])
+    for (x0, y0, x1, y1) in crop_boxes:
+        m[int(y0 * sy):int(np.ceil(y1 * sy)), int(x0 * sx):int(np.ceil(x1 * sx))] = 255
+    return m
