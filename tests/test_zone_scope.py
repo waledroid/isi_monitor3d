@@ -13,6 +13,7 @@ import yaml
 
 from backbone.core.types import Detection, Frame, FramePair
 from backbone.detection.zone_scope import (
+    _MAX_CROP_ASPECT,
     ZoneScopedDetector,
     zone_crop_boxes,
 )
@@ -179,6 +180,8 @@ def test_orchestrator_no_zones_means_no_object_detector(tmp_path) -> None:
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
             "detection": {"plugin": "yolo_onnx", "onnx_path": str(onnx_path),
                           "class_names": CLASS_NAMES,
+                          # static-batch stub: keep the crop count == cameras
+                          "zone_crop_max_aspect": 0,
                           "providers": ["CPUExecutionProvider"]},
             "homography": {"tracker": {"plugin": "bytetrack"},
                            "track_config": {"min_hits_to_confirm": 1}},
@@ -224,6 +227,8 @@ def test_orchestrator_zone_scope_detects_inside_zone(tmp_path) -> None:
                         "cam_b": {"source": {"name": "replay", "frames": []}}},
             "detection": {"plugin": "yolo_onnx", "onnx_path": str(onnx_path),
                           "class_names": CLASS_NAMES,
+                          # static-batch stub: keep the crop count == cameras
+                          "zone_crop_max_aspect": 0,
                           "providers": ["CPUExecutionProvider"]},
             "homography": {"tracker": {"plugin": "bytetrack"},
                            "track_config": {"min_hits_to_confirm": 1}},
@@ -302,3 +307,51 @@ def test_decode_masks_defaults_by_scope(tmp_path, monkeypatch) -> None:
         assert captured == {"z": True, "f": False}
     finally:
         sock.close()
+
+
+# ---- extreme-aspect crops auto-tile (no global SAHI needed) -----------------
+
+
+class _CountingDetector(_EchoDetector):
+    """Echo detector that also records the crop shapes it was fed."""
+
+    def __init__(self):
+        self.fed_shapes: list[tuple[int, int]] = []
+
+    def detect(self, pair: FramePair):
+        self.fed_shapes.extend(f.image.shape[:2] for f in pair.frames.values())
+        return super().detect(pair)
+
+
+def test_extreme_aspect_crop_is_square_tiled() -> None:
+    """An edge-on zone projects to a tall strip (1:3+); letterboxing the whole
+    strip into the square model input shrinks objects ~3x and the detector
+    goes blind. Without global SAHI, such a crop must be square-tiled — every
+    fed piece near-square — and the tiles must merge back to ONE detection in
+    frame pixels (the echo fills each tile, so tiles overlap-merge)."""
+    inner = _CountingDetector()
+    boxes = {"cam_b": [("Z1", (100, 0, 324, 720))]}         # 224x720 strip
+    det = ZoneScopedDetector(inner, boxes, {"cam_b": (1280, 720)})
+    out = det.detect(_pair({"cam_b": np.zeros((720, 1280, 3), np.uint8)}))
+    assert len(inner.fed_shapes) >= 2, "strip was not tiled"
+    for h, w in inner.fed_shapes:
+        assert max(h, w) <= _MAX_CROP_ASPECT * min(h, w), (
+            f"fed tile {w}x{h} still extreme-aspect")
+    dets = out["cam_b"]
+    assert dets, "tiled crop produced no detections"
+    for d in dets:                       # every tile det remaps INTO the zone box
+        assert d.camera_id == "cam_b"
+        x0, y0, x1, y1 = d.bbox_xyxy
+        assert 100.0 <= x0 <= x1 <= 324.0 and 0.0 <= y0 <= y1 <= 720.0
+    # together the tiles cover the whole strip (no part of the zone unseen)
+    assert min(d.bbox_xyxy[1] for d in dets) == 0.0
+    assert max(d.bbox_xyxy[3] for d in dets) == 720.0
+
+
+def test_near_square_crop_stays_untiled() -> None:
+    inner = _CountingDetector()
+    boxes = {"cam_a": [("Z1", (100, 200, 400, 500))]}       # square 300x300
+    det = ZoneScopedDetector(inner, boxes, {"cam_a": (1000, 1000)})
+    out = det.detect(_pair({"cam_a": np.zeros((1000, 1000, 3), np.uint8)}))
+    assert inner.fed_shapes == [(300, 300)]
+    assert len(out["cam_a"]) == 1

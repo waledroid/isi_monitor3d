@@ -78,6 +78,10 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
         det_cfg["input_size"] = (int(imgsz), int(imgsz))
     scope = str(det_cfg.pop("scope", "zones"))
     zone_imgsz = int(det_cfg.pop("zone_imgsz", 384) or 384)
+    # Extreme-aspect zone crops square-tile themselves (edge-on zones would
+    # otherwise letterbox their objects into invisibility); 0 disables.
+    from backbone.detection.zone_scope import _MAX_CROP_ASPECT
+    max_aspect = float(det_cfg.pop("zone_crop_max_aspect", _MAX_CROP_ASPECT))
     scope_is_zones = scope == "zones"
     if det_plugin in ("yolo_onnx_seg", "yolo_openvino_seg"):
         det_cfg.setdefault("decode_masks", scope_is_zones)
@@ -104,7 +108,8 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
         detector = ZoneScopedDetector(
             detector, boxes,
             {cid: rig[cid].image_size_wh for cid in rig.camera_ids},
-            sahi=sahi_cfg, enhance=enhance_cfg, batch_buckets=buckets)
+            sahi=sahi_cfg, enhance=enhance_cfg, batch_buckets=buckets,
+            max_crop_aspect=max_aspect)
         if sahi_cfg and sahi_cfg.get("enabled"):
             logger.info("isistream: SAHI tiling ON (tile=%s, overlap=%.2f)",
                         sahi_cfg.get("tile") or "model input",

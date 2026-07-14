@@ -56,6 +56,9 @@ logger = logging.getLogger(__name__)
 _SEP = "\x00"
 # Prefix for batch-padding frames (TensorRT bucketing) — never a real crop.
 _PAD = "__pad__"
+# A zone crop whose long side exceeds this multiple of its short side is
+# square-tiled even without global SAHI — see the aspect note in detect().
+_MAX_CROP_ASPECT = 2.0
 
 
 def _project_world3(world3, K, D, R, t, image_size_wh) -> np.ndarray:
@@ -168,7 +171,8 @@ class ZoneScopedDetector:
                  *,
                  sahi: dict | None = None,
                  enhance: dict | None = None,
-                 batch_buckets: tuple[int, ...] | None = None) -> None:
+                 batch_buckets: tuple[int, ...] | None = None,
+                 max_crop_aspect: float = _MAX_CROP_ASPECT) -> None:
         self._detector = detector
         self._boxes = boxes_by_camera
         self._calib_wh = {k: (int(v[0]), int(v[1]))
@@ -188,6 +192,10 @@ class ZoneScopedDetector:
             "tile_grid": int(enhance.get("tile_grid", 8)),
             "gamma": float(enhance.get("gamma", 1.0)),
         }
+        # Extreme-aspect crops square-tile themselves (see detect()); 0/None
+        # disables (hermetic tests with static-batch stub models need a
+        # stable batch; production dynamic exports don't care).
+        self._max_aspect = float(max_crop_aspect or 0.0)
         # TensorRT compiles ONE ENGINE PER INPUT SHAPE. A batch that changes
         # with the number of visible zones / motion-gated cameras / SAHI tiles
         # would trigger a multi-minute engine build at every new count. Pad the
@@ -218,8 +226,20 @@ class ZoneScopedDetector:
                     crop_img = enhance_bgr(crop_img, **self._enh_kwargs)
                 ch, cw = crop_img.shape[:2]
                 tile = self._tile or self._model_input_px()
-                rects = (tile_boxes(cw, ch, tile, self._overlap)
-                         if self._sahi_on else [(0, 0, cw, ch)])
+                if self._sahi_on:
+                    rects = tile_boxes(cw, ch, tile, self._overlap)
+                elif self._max_aspect and max(cw, ch) > self._max_aspect * min(cw, ch):
+                    # Extreme-aspect crop (an edge-on zone whose z-extruded
+                    # projection is a tall/wide strip): letterboxing the whole
+                    # strip into the square model input shrinks the objects
+                    # ~3x and the detector goes blind (measured: a palette at
+                    # 0.56 in a square crop scored 0.0 in the 1:3.2 strip).
+                    # Square-tile JUST this crop — the tiles ride the same
+                    # batched call and merge below. Not the global SAHI knob:
+                    # this is geometry-triggered, per crop, always on.
+                    rects = tile_boxes(cw, ch, min(cw, ch), self._overlap)
+                else:
+                    rects = [(0, 0, cw, ch)]
                 for t, (tx0, ty0, tx1, ty1) in enumerate(rects):
                     sid = f"{cam_id}{_SEP}{i}{_SEP}{t}"
                     crops[sid] = Frame(camera_id=sid, capture_ts=frame.capture_ts,
@@ -233,7 +253,9 @@ class ZoneScopedDetector:
         raw = self._detect_padded(pair, crops)
         # Tiled zones: merge each zone's tiles before remapping, so an object
         # split across two tiles becomes one detection with the union box.
-        if self._sahi_on:
+        # (Global SAHI tiles everything; extreme-aspect crops tile themselves —
+        # any sid with tile index > 0 means a merge pass is needed.)
+        if self._sahi_on or any(sid.rsplit(_SEP, 1)[1] != "0" for sid in raw):
             raw = self._merge_zone_tiles(raw, origin)
         for sid, dets in raw.items():
             cam_id, ox, oy = origin[sid]

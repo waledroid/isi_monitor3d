@@ -270,6 +270,10 @@ class Orchestrator:
         # 384) sizes the zone-scoped inference instead; needs a dynamic-export
         # model (a static one keeps its baked size, same rule as the slider).
         zone_imgsz = int(det_cfg.pop("zone_imgsz", 384) or 384)
+        # Extreme-aspect zone crops square-tile themselves (default 2.0; 0
+        # disables — hermetic tests with static-batch stub models need a
+        # stable batch size).
+        zone_crop_max_aspect = det_cfg.pop("zone_crop_max_aspect", None)
         if scope not in ("zones", "full_frame"):
             raise ValueError(f"detection.scope={scope!r}, expected 'zones' or 'full_frame'")
         if scope == "zones" and len(self._zones) == 0:
@@ -287,9 +291,13 @@ class Orchestrator:
                     zone_crop_boxes,
                 )
                 boxes = zone_crop_boxes(self._rig, self._zones)
+                zsd_kwargs = {}
+                if zone_crop_max_aspect is not None:
+                    zsd_kwargs["max_crop_aspect"] = float(zone_crop_max_aspect)
                 self._detector = ZoneScopedDetector(
                     self._detector, boxes,
-                    {cid: self._rig[cid].image_size_wh for cid in self._rig.camera_ids})
+                    {cid: self._rig[cid].image_size_wh for cid in self._rig.camera_ids},
+                    **zsd_kwargs)
 
         # Optional person-pose detector — reuses the SAME config keys the dashboard
         # overlay uses (`detection.pose_onnx_path` / `pose_confidence_threshold`), so
