@@ -46,8 +46,13 @@ function naturalSize(img, camId) {
   return (pt && pt.frameSize && pt.frameSize(camId)) || [0, 0];
 }
 
-function sourceToDisplay(img, su, sv, natW, natH) {
-  const dw = img.clientWidth, dh = img.clientHeight;
+// `box` is the overlay canvas's OWN layout box {w, h} — never the <img>'s.
+// The img's layout transiently collapses during view switches / expand
+// animations / src swaps; sizing or mapping against it shrank the canvas
+// backing store while its CSS box stayed panel-sized, and the browser
+// upscaled the raster into the giant blurry "Zone N" label artifact.
+function sourceToDisplay(box, su, sv, natW, natH) {
+  const dw = box.w, dh = box.h;
   const scale = Math.min(dw / natW, dh / natH);
   const renderedW = natW * scale, renderedH = natH * scale;
   const offsetX = (dw - renderedW) / 2;
@@ -55,7 +60,7 @@ function sourceToDisplay(img, su, sv, natW, natH) {
   return [su * scale + offsetX, sv * scale + offsetY];
 }
 
-function drawZones(ctx, img, camZones) {
+function drawZones(ctx, box, camZones) {
   if (!camZones || !camZones.imageSize || !Array.isArray(camZones.zones)) return;
   const [natW, natH] = camZones.imageSize;
   ctx.lineWidth = 2;
@@ -68,7 +73,7 @@ function drawZones(ctx, img, camZones) {
     ctx.beginPath();
     for (let i = 0; i < z.polygon.length; i++) {
       const [su, sv] = z.polygon[i];
-      const [dx, dy] = sourceToDisplay(img, su, sv, natW, natH);
+      const [dx, dy] = sourceToDisplay(box, su, sv, natW, natH);
       if (i === 0) ctx.moveTo(dx, dy); else ctx.lineTo(dx, dy);
     }
     ctx.closePath();
@@ -76,7 +81,7 @@ function drawZones(ctx, img, camZones) {
     ctx.stroke();
     // Label backdrop + text at the first vertex.
     const [su0, sv0] = z.polygon[0];
-    const [lx, ly] = sourceToDisplay(img, su0, sv0, natW, natH);
+    const [lx, ly] = sourceToDisplay(box, su0, sv0, natW, natH);
     const label = z.name || "";
     const tw = ctx.measureText(label).width;
     ctx.fillStyle = "rgba(0,0,0,0.55)";
@@ -107,7 +112,7 @@ function drawTrackLegend(ctx, camId) {
 // the drawn shape (its bounding rect is what gets cropped for detection); legacy
 // rect-only patches fall back to their box. Coords are source px at the size drawn
 // (frame_wh); rescale to the current natural size, then map to display.
-function drawZonePatches(ctx, img, camId) {
+function drawZonePatches(ctx, box, img, camId) {
   const ps = getPatches(camId);
   if (!ps.length) return;
   const [natW, natH] = naturalSize(img, camId);
@@ -130,7 +135,7 @@ function drawZonePatches(ctx, img, camId) {
     // ON the zone outline itself, not the floating bounding-box corner.
     let vx = 0, vy = 0, best = -Infinity;
     for (let i = 0; i < poly.length; i++) {
-      const [dx, dy] = sourceToDisplay(img, poly[i][0] * sx, poly[i][1] * sy, natW, natH);
+      const [dx, dy] = sourceToDisplay(box, poly[i][0] * sx, poly[i][1] * sy, natW, natH);
       if (i === 0) ctx.moveTo(dx, dy); else ctx.lineTo(dx, dy);
       if (dx - dy > best) { best = dx - dy; vx = dx; vy = dy; }
     }
@@ -154,7 +159,7 @@ function drawZonePatches(ctx, img, camId) {
 // floor into this one (server-computed, Mode-2 calibration). Finely dashed +
 // translucent so they read as "defined elsewhere"; labelled "(from cam_x)".
 // Ghost polygon coords are in the ghost camera's CALIBRATION frame (image_wh).
-function drawPatchGhosts(ctx, img, camId) {
+function drawPatchGhosts(ctx, box, img, camId) {
   const ghosts = getGhosts(camId);
   if (!ghosts.length) return;
   const [natW, natH] = naturalSize(img, camId);
@@ -171,7 +176,7 @@ function drawPatchGhosts(ctx, img, camId) {
     ctx.beginPath();
     let lx = 0, ly = 0;
     for (let i = 0; i < g.polygon.length; i++) {
-      const [dx, dy] = sourceToDisplay(img, g.polygon[i][0] * sx, g.polygon[i][1] * sy, natW, natH);
+      const [dx, dy] = sourceToDisplay(box, g.polygon[i][0] * sx, g.polygon[i][1] * sy, natW, natH);
       if (i === 0) { ctx.moveTo(dx, dy); lx = dx; ly = dy; } else ctx.lineTo(dx, dy);
     }
     ctx.closePath();
@@ -191,19 +196,27 @@ function drawPatchGhosts(ctx, img, camId) {
 
 function drawForCam(canvas, img, camId) {
   if (canvas.classList.contains("hidden")) return;
+  // Size the backing store from the CANVAS's own CSS box (pinned to 100% of
+  // the panel), never the <img>'s layout — see the sourceToDisplay note. A
+  // degenerate box (mid-transition, hidden ancestor) draws nothing rather
+  // than rendering labels tiny for the browser to blow up.
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (w < 40 || h < 40) return;
   const ctx = canvas.getContext("2d");
-  const w = img.clientWidth, h = img.clientHeight;
-  canvas.width = w; canvas.height = h;
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w; canvas.height = h;
+  }
   ctx.clearRect(0, 0, w, h);
+  const box = { w, h };
 
   // Projected FLOOR zones are deliberately NOT drawn on the cam views: floor
   // zones are auto-derived from the zone patches (floor_zone_sync), so the
   // projection duplicated every outline + name label right next to the patch
   // the operator drew. The patch polygons below are the single zone layer;
   // the floor geometry stays an engine-side concept (map + Backbone only).
-  // drawZones(ctx, img, cameraZones.get(camId));
-  drawZonePatches(ctx, img, camId);              // pixel-space red ROI watch boxes
-  drawPatchGhosts(ctx, img, camId);              // cross-camera ghost outlines (Mode 2)
+  // drawZones(ctx, box, cameraZones.get(camId));
+  drawZonePatches(ctx, box, img, camId);         // pixel-space red ROI watch boxes
+  drawPatchGhosts(ctx, box, img, camId);         // cross-camera ghost outlines (Mode 2)
   // Top-left per-track UDP readout disabled for now (to be surfaced elsewhere
   // later). Re-enable by uncommenting; drawTrackLegend() is kept intact below.
   // drawTrackLegend(ctx, camId);
