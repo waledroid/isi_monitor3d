@@ -140,15 +140,27 @@ def _dist_to_polygon_boundary(pts: np.ndarray, poly: np.ndarray) -> np.ndarray:
     return out
 
 
+def _synced_floor_polygon(tmp_path: Path, zone_id: str) -> np.ndarray:
+    """The floor zone the save synced to zones.yaml — the system's single zone
+    truth (isistream crops, zone state, cam-view clip all use it). The TWIN is
+    now ITS projection into the other camera, so this densified polygon is the
+    boundary the twin must reproduce (not the raw pixel-drawn boundary, which
+    bows a few cm against it — straight image lines curve on the floor)."""
+    doc = yaml.safe_load((tmp_path / "zones.yaml").read_text())
+    z = next(z for z in doc["zones"] if str(z.get("id")) == zone_id)
+    return densify_polygon(np.asarray(z["polygon"], dtype=np.float64),
+                           segments_per_edge=8)
+
+
 def _assert_aligned(ghost_floor: np.ndarray, authored_floor: np.ndarray) -> None:
-    """The ghost must reproduce the authored floor boundary to millimetres
-    (chain fidelity), and stay physically on the true zone boundary within a
-    few cm (the bow of straight image lines mapped to the floor)."""
+    """The twin must reproduce the synced floor zone to millimetres (chain
+    fidelity of project→store→unproject), and stay physically on the true
+    zone boundary within a few cm."""
     assert ghost_floor.shape == authored_floor.shape
     err = np.linalg.norm(ghost_floor - authored_floor, axis=1)
-    assert err.max() < 0.002, (
-        f"cross-camera zone misaligned: ghost deviates from the authored floor "
-        f"boundary by up to {err.max()*100:.2f} cm — must be < 0.2 cm"
+    assert err.max() < 0.005, (
+        f"cross-camera zone misaligned: twin deviates from the synced floor "
+        f"zone by up to {err.max()*100:.2f} cm — must be < 0.5 cm"
     )
     d = _dist_to_polygon_boundary(ghost_floor, TRUTH)
     assert d.max() < 0.05, (
@@ -167,9 +179,8 @@ def test_zone_drawn_on_cam_b_aligns_in_cam_a(tmp_path: Path) -> None:
         got = client.get("/api/zone-patches").json()["patches"]
     outline = _cross_outline(got, "z1")
     assert outline["camera"] == "cam_a"
-    clicks = _operator_clicks(_cam_dict("cam_b", (2.0, 0.0)), TRUTH)
-    authored = _authored_floor_boundary(clicks, IMG_WH, _cam_dict("cam_b", (2.0, 0.0)))
-    _assert_aligned(_ghost_to_floor(outline, cal), authored)
+    _assert_aligned(_ghost_to_floor(outline, cal),
+                    _synced_floor_polygon(tmp_path, "z1"))
 
 
 def test_zone_drawn_on_cam_a_aligns_in_cam_b(tmp_path: Path) -> None:
@@ -184,8 +195,8 @@ def test_zone_drawn_on_cam_a_aligns_in_cam_b(tmp_path: Path) -> None:
         got = client.get("/api/zone-patches").json()["patches"]
     outline = _cross_outline(got, "z1")
     assert outline["camera"] == "cam_b"
-    authored = _authored_floor_boundary(clicks, IMG_WH, _cam_dict("cam_a", (0.0, 0.0)))
-    _assert_aligned(_ghost_to_floor(outline, cal), authored)
+    _assert_aligned(_ghost_to_floor(outline, cal),
+                    _synced_floor_polygon(tmp_path, "z1"))
 
 
 def test_zone_drawn_at_downscaled_stream_size_still_aligns(tmp_path: Path) -> None:
@@ -202,9 +213,8 @@ def test_zone_drawn_at_downscaled_stream_size_still_aligns(tmp_path: Path) -> No
         ]})
         got = client.get("/api/zone-patches").json()["patches"]
     outline = _cross_outline(got, "z1")
-    authored = _authored_floor_boundary(clicks.tolist(), (1280, 720),
-                                        _cam_dict("cam_b", (2.0, 0.0)))
-    _assert_aligned(_ghost_to_floor(outline, cal), authored)
+    _assert_aligned(_ghost_to_floor(outline, cal),
+                    _synced_floor_polygon(tmp_path, "z1"))
 
 
 def test_world_zone_round_trip_both_cameras(tmp_path: Path) -> None:

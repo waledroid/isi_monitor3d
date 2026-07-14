@@ -105,3 +105,13 @@ def _dashed_line(image, p0, p1, color, thickness, dash, gap) -> None:
         b = tuple((p0 + unit * e).astype(int))
         cv2.line(image, a, b, color, thickness)
         s += step
+
+
+def zone_stencil(shape_hw, polys) -> np.ndarray:
+    """Rasterize zone polygons into a uint8 stencil (255 inside a zone) — the
+    mask-clip handed to the overlay so no mask pixel renders outside a zone."""
+    m = np.zeros((int(shape_hw[0]), int(shape_hw[1])), dtype=np.uint8)
+    for _zid, _name, poly in polys:
+        if len(poly) >= 3:
+            cv2.fillPoly(m, [np.asarray(poly, dtype=np.int32)], 255)
+    return m

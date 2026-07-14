@@ -477,6 +477,7 @@ def get_config(request: Request) -> JSONResponse:
         "inference_imgsz": det_raw.get("inference_imgsz", 1024),
         "show_nodes": bool(ui.get("show_nodes", True)),
         "show_masks": bool(ui.get("show_masks", True)),
+        "show_floor_zones": bool(ui.get("show_floor_zones", False)),
         "show_boxes": bool(ui.get("show_boxes", True)),
         "distance_line_opacity": float(ui.get("distance_line_opacity", 0.25)),
         "distance_line_color": str(ui.get("distance_line_color", "#ffffff")),

@@ -388,6 +388,7 @@ function wireUiPrefSync() {
   const hooks = [
     ["zm-model-show-masks", (e) => ({ show_masks: !!e.checked })],
     ["zm-model-show-boxes", (e) => ({ show_boxes: !!e.checked })],
+    ["zm-show-floor-zones", (e) => ({ show_floor_zones: !!e.checked })],
     ["zm-model-dist-opacity",
       (e) => ({ distance_line_opacity: Math.max(0.05, Math.min(1, parseFloat(e.value) || 0.25)) })],
     ["zm-model-dist-color", (e) => ({ distance_line_color: e.value || "#ffffff" })],
@@ -459,6 +460,8 @@ function fillModelSection(det, isis) {
   if (cbNodes) cbNodes.checked = det.show_nodes !== false;   // default true if undefined
   const cbMasks = el("zm-model-show-masks");
   if (cbMasks) cbMasks.checked = det.show_masks !== false;
+  const cbFz = el("zm-show-floor-zones");
+  if (cbFz) cbFz.checked = det.show_floor_zones === true;   // default OFF
   const cbBoxes = el("zm-model-show-boxes");
   if (cbBoxes) cbBoxes.checked = det.show_boxes !== false;
   const opEl = el("zm-model-dist-opacity");

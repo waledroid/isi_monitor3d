@@ -28,6 +28,7 @@ from ..detection_overlay import (
     boxes_enabled,
     distance_line_style,
     distances_enabled,
+    floor_zones_enabled,
     get_async_pose,
     masks_enabled,
     nodes_enabled,
@@ -47,6 +48,7 @@ from ..zone_projection import (
     draw_zone_outlines,
     project_zone_polygons,
     scale_polygons,
+    zone_stencil,
 )
 from .routes_calibrate import _mode_calibration_path
 from .routes_projection import _load_rig_cached
@@ -165,6 +167,7 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
     Zone-worker detections and distance lines are re-drawn on every frame too
     (cheap — the worker already ran the inference; we just draw its cached result)."""
     pose = dist_view = dets = None
+    _stencil_cache, _stencil_wh = None, None
     for image in frames:
         if is_running is not None and not is_running():
             # Backbone stopped → raw camera feed only. DROP the previous
@@ -185,14 +188,20 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
         dets = get_zone_dets(image) if get_zone_dets is not None else []
         # Zone-based: keep only detections whose foot lands inside a floor zone
         # (projected into this camera + scaled to the display frame), and draw
-        # the zone outlines below. Persons/skeletons are the deliberate global
-        # safety exception — never zone-clipped. No zones ⇒ no object boxes.
-        scaled_zones = None
+        # the zone outlines below. Masks are additionally STENCIL-clipped so a
+        # boundary-hugging mask never spills past the zone outline. Persons/
+        # skeletons are the deliberate global safety exception — never
+        # zone-clipped. No zones ⇒ no object boxes.
+        scaled_zones = stencil = None
         if zone_polys and zone_calib_wh:
             fh, fw = image.shape[:2]
             scaled_zones = scale_polygons(
                 zone_polys, fw / zone_calib_wh[0], fh / zone_calib_wh[1])
             dets = clip_to_zones(dets, scaled_zones)
+            if _stencil_wh != (fw, fh):     # zones are fixed per stream build
+                _stencil_cache = zone_stencil((fh, fw), scaled_zones)
+                _stencil_wh = (fw, fh)
+            stencil = _stencil_cache
         # show_occupancy stays False on the CAM views: the raw machine labels
         # ('palette_vide' / 'palette_carton_…') read as noise here — the human
         # summary lives in the COMMUNICATION zone cards. Zone panels + the MP4
@@ -202,7 +211,8 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
                                  show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
                                  show_boxes=boxes_enabled(cfg), pose_detector=pose,
                                  dist_view=dist_view, dist_max_m=person_pallet_max_m(cfg),
-                                 show_occupancy=False, dist_style=dist_style)
+                                 show_occupancy=False, dist_style=dist_style,
+                                 mask_clip=stencil)
         except Exception:
             # An overlay failure must NEVER kill the stream: the pump treats a
             # generator exception as terminal and the panel freezes until the
@@ -213,9 +223,11 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
                 logger.warning("cam %s: overlay failed — showing the raw frame "
                                "(throttled 30s)", camera_id, exc_info=True)
             out = image
-        # The floor-zone boundaries on top of the annotated frame — the operator
-        # sees exactly where each zone is and that boxes fall inside it.
-        if scaled_zones:
+        # The floor-zone boundaries on top of the annotated frame (Settings
+        # toggle, off by default — the operator's dashed zone patches remain
+        # the always-visible boundary). The CLIP above is not optional: a
+        # zone-based system never shows detections outside the zones.
+        if scaled_zones and floor_zones_enabled(cfg):
             draw_zone_outlines(out, scaled_zones)
         # No fused-track ring markers here (the '#id cls' amber/green circles
         # were retired as clutter, like the mirrored rings before them): every
@@ -339,11 +351,18 @@ def _to_crop(d, x0: int, y0: int, ch: int, cw: int):
 
 
 def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
-                      infer_size: int = 320, is_running=None, get_dets=None) -> Iterator:
+                      infer_size: int = 320, is_running=None, get_dets=None,
+                      polygon=None) -> Iterator:
     """Pure RENDERER for a zone panel — NO detection in the HTTP path. Crops each
     frame to the zone's bounding rect, draws the background worker's published
-    detections for this zone (translated to crop coords), then downsizes to the
-    panel display size. Backbone stopped → raw crop (the pre-START state)."""
+    detections for this zone (translated to crop coords, masks stencil-clipped
+    to the zone POLYGON so nothing renders outside the drawn boundary), then
+    downsizes to the panel display size. Backbone stopped → raw crop (the
+    pre-START state)."""
+    import numpy as np
+
+    from ..zone_worker import _scaled_polygon
+    _stencil, _stencil_key = None, None
     for image in frames:
         ih, iw = image.shape[:2]
         box = patch_pixel_box(rect, stored_wh, (iw, ih))
@@ -359,10 +378,22 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
             # 'palette_carton_…') are decision data, not display — they live
             # on in the COMMUNICATION cards and MQTT; the zone view stays
             # clean (same rule the CAM views already follow).
+            stencil = None
+            if polygon is not None:
+                if _stencil_key != (iw, ih, x0, y0, ch, cw):
+                    poly = _scaled_polygon({"polygon": polygon,
+                                            "frame_wh": stored_wh}, (iw, ih))
+                    if poly is not None:
+                        m = np.zeros((ch, cw), dtype=np.uint8)
+                        cv2.fillPoly(m, [np.asarray(
+                            poly - [x0, y0], dtype=np.int32)], 255)
+                        _stencil = m
+                    _stencil_key = (iw, ih, x0, y0, ch, cw)
+                stencil = _stencil
             crop = annotate_frame(crop, None, cam_id=camera_id, detections=dets,
                                   show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
                                   show_boxes=boxes_enabled(cfg), pose_detector=None,
-                                  show_occupancy=False)
+                                  show_occupancy=False, mask_clip=stencil)
         # Downscale to the panel display size (longest side = infer_size) for
         # bandwidth parity with the old fed-image stream.
         longest = max(ch, cw)
@@ -396,6 +427,7 @@ def build_zone_stream(state, patch_id: str) -> Iterator:
         infer_size=int(patch.get("infer_size") or 320),
         is_running=lambda: _backbone_running(state),
         get_dets=(lambda: manager.zone_dets(patch_id)) if manager is not None else None,
+        polygon=patch.get("polygon"),
     )
 
 

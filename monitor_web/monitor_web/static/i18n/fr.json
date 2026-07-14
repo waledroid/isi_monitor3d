@@ -142,5 +142,6 @@
   "group_accuracy": "Amélioration de précision (optionnel)",
   "group_pose": "Pose (squelettes)",
   "group_performance": "Performance",
-  "group_display": "Superpositions (appliqué instantanément)"
+  "group_display": "Superpositions (appliqué instantanément)",
+  "show_floor_zones": "Afficher les zones au sol (métrique)"
 }

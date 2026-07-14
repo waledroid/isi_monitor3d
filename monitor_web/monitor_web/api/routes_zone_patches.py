@@ -212,6 +212,36 @@ def _load_rig(cfg):
     return None
 
 
+def _calibration_sig(cfg) -> str:
+    """Identity of the ACTIVE calibration (path + mtime) — twins are projected
+    through it, so a change means every stored twin is stale."""
+    try:
+        from .routes_calibrate import _mode_calibration_path
+        p = _mode_calibration_path(cfg)
+        if p.exists():
+            return f"{p.resolve()}:{p.stat().st_mtime_ns}"
+    except Exception:
+        pass
+    return ""
+
+
+def ensure_twins_current(cfg) -> bool:
+    """Regenerate the twins iff the active calibration changed since they were
+    stored (calibration refined/switched outside the alignment endpoint —
+    e.g. an isical export — used to leave twins silently misplaced, so the
+    other camera's worker grouped against the wrong polygon and its sightings
+    never reached the zone card). Returns True when a regeneration ran."""
+    doc = dashboard_config.read_section(cfg, "zone_patches") or {}
+    if not (doc.get("patches") or []):
+        return False
+    sig = _calibration_sig(cfg)
+    if not sig or doc.get("calibration_sig") == sig:
+        return False
+    logger.info("zone-patches: calibration changed — regenerating twins")
+    regenerate_twins(cfg)          # no manager arg → caller finishes its reload
+    return True
+
+
 def _make_twin(patch: dict, rig) -> dict | None:
     """Derive the cross-camera twin of a patch: the ghost polygon (same floor
     region, other camera), clipped to that camera's frame, carrying the same
@@ -222,20 +252,79 @@ def _make_twin(patch: dict, rig) -> dict | None:
     import numpy as np
     gw, gh = ghost["image_wh"]
     poly = np.asarray(ghost["polygon"], dtype=np.float64)
+    return _twin_dict(patch, ghost["camera"], poly, (gw, gh))
+
+
+def _twin_dict(patch: dict, camera: str, poly, image_wh) -> dict | None:
+    """Assemble a twin patch from an other-camera pixel polygon: clip to the
+    frame, reject degenerate slivers (zone barely overlaps that view)."""
+    import numpy as np
+    gw, gh = int(image_wh[0]), int(image_wh[1])
+    poly = np.asarray(poly, dtype=np.float64)
     poly[:, 0] = np.clip(poly[:, 0], 0.0, gw - 1.0)
     poly[:, 1] = np.clip(poly[:, 1], 0.0, gh - 1.0)
-    # Degenerate after clipping (zone barely overlaps the other view) → no twin.
     if (poly.max(axis=0) - poly.min(axis=0)).min() < 8.0:
         return None
     return {
         "id": f"{patch['id']}{TWIN_SUFFIX}",
         "name": patch.get("name", ""),
-        "camera": ghost["camera"],
+        "camera": camera,
         "polygon": [[float(u), float(v)] for u, v in poly],
-        "frame_wh": [int(gw), int(gh)],
+        "frame_wh": [gw, gh],
         "color": patch.get("color"),
         "twin_of": patch["id"],
     }
+
+
+def _build_twins(user_patches: list[dict], rig, cfg) -> list[dict]:
+    """Twins for every operator patch, derived from the SYNCED FLOOR ZONES.
+
+    The twin polygon is the zones.yaml floor polygon projected into the other
+    camera — the exact same source and projection the cam view's dashed
+    outline and detection clip use (``zone_projection``), so the twin the
+    worker groups against can never disagree with what the operator sees.
+    (The old ``_patch_ghost`` round-trip re-derived the floor shape from the
+    base patch's pixels with ``undistort_points_checked``, which drops
+    edge-diverging samples — an edge-hugging patch lost most of its area and
+    its twin silently missed everything the other camera detected.)
+    Falls back to the ghost round-trip for a patch with no synced floor zone.
+    Call AFTER ``sync_floor_zones_from_patches``.
+    """
+    if rig is None or len(list(rig.camera_ids)) < 2:
+        return []
+    try:
+        from backbone.shared.zones import ZoneRegistry
+
+        from ..floor_zone_sync import _zones_yaml_path
+        from ..zone_projection import project_zone_polygons
+        zones = ZoneRegistry.load(_zones_yaml_path(cfg))
+        polys_by_cam = {
+            cam: {zid: poly for zid, _name, poly in
+                  project_zone_polygons(rig, zones, cam)}
+            for cam in rig.camera_ids
+        }
+    except Exception:
+        logger.warning("zone-patches: floor-zone twin projection failed — "
+                       "falling back to the ghost round-trip", exc_info=True)
+        polys_by_cam = {}
+    twins: list[dict] = []
+    cam_ids = list(rig.camera_ids)
+    for p in user_patches:
+        own = str(p.get("camera", ""))
+        other = next((c for c in cam_ids if c != own), None)
+        twin = None
+        if other is not None:
+            poly = (polys_by_cam.get(other) or {}).get(str(p.get("id")))
+            if poly is not None and len(poly) >= 3:
+                twin = _twin_dict(p, other, poly, rig[other].image_size_wh)
+        if twin is None:
+            try:
+                twin = _make_twin(p, rig)
+            except Exception:
+                twin = None
+        if twin is not None:
+            twins.append(twin)
+    return twins
 
 
 def regenerate_twins(cfg, zone_manager=None) -> int:
@@ -249,24 +338,19 @@ def regenerate_twins(cfg, zone_manager=None) -> int:
     """
     stored = load_patches(cfg)
     user_patches = [dict(p) for p in stored if not is_twin(p)]
-    out = list(user_patches)
-    n_twins = 0
     rig = _load_rig(cfg)
-    if rig is not None and len(list(rig.camera_ids)) >= 2:
-        for p in user_patches:
-            try:
-                twin = _make_twin(p, rig)
-            except Exception:
-                twin = None
-            if twin is not None:
-                out.append(twin)
-                n_twins += 1
-    dashboard_config.write_section(cfg, "zone_patches", {"patches": out})
+    # Floor zones FIRST — the twins are projected from them (see _build_twins).
     try:
         from ..floor_zone_sync import sync_floor_zones_from_patches
-        sync_floor_zones_from_patches(cfg, patches=out, rig=rig)
+        sync_floor_zones_from_patches(cfg, patches=user_patches, rig=rig)
     except Exception:
         logger.warning("regenerate_twins: floor-zone sync failed", exc_info=True)
+    twins = _build_twins(user_patches, rig, cfg)
+    n_twins = len(twins)
+    out = list(user_patches) + twins
+    dashboard_config.write_section(
+        cfg, "zone_patches",
+        {"patches": out, "calibration_sig": _calibration_sig(cfg)})
     if zone_manager is not None:
         try:
             zone_manager.reload()
@@ -415,27 +499,21 @@ def post_zone_patches(body: PatchesBody, request: Request) -> dict:
         from fastapi import HTTPException
         raise HTTPException(status_code=422,
                             detail=f"max {MAX_PATCHES} zones (excluding twins)")
-    stored = list(user_patches)
     rig = _load_rig(cfg)
-    if rig is not None and len(list(rig.camera_ids)) >= 2:
-        for p in user_patches:
-            try:
-                twin = _make_twin(p, rig)
-            except Exception:
-                twin = None
-            if twin is not None:
-                stored.append(twin)
-    doc = {"patches": stored}
+    # ORDER MATTERS: derive the Backbone's FLOOR zones from the drawings FIRST
+    # (one drawing → cards AND zone_state/proximity MQTT; applies at next
+    # START), because the twins are then projected FROM those floor zones —
+    # the single geometry the cam-view outline + detection clip also use.
+    try:
+        from ..floor_zone_sync import sync_floor_zones_from_patches
+        sync_floor_zones_from_patches(cfg, patches=user_patches, rig=rig)
+    except Exception:
+        logger.warning("zone-patches: floor-zone sync failed", exc_info=True)
+    stored = list(user_patches) + _build_twins(user_patches, rig, cfg)
+    doc = {"patches": stored, "calibration_sig": _calibration_sig(cfg)}
     dashboard_config.write_section(cfg, "zone_patches", doc)
     logger.info("zone-patches: saved %d ROI(s) (+%d twins)",
                 len(user_patches), len(stored) - len(user_patches))
-    # Derive the Backbone's FLOOR zones from the same drawings (one drawing →
-    # cards AND zone_state/proximity MQTT). Best-effort; applies at next START.
-    try:
-        from ..floor_zone_sync import sync_floor_zones_from_patches
-        sync_floor_zones_from_patches(cfg, patches=stored, rig=rig)
-    except Exception:
-        logger.warning("zone-patches: floor-zone sync failed", exc_info=True)
     # Sync the background detection workers to the new zone set (start/update/stop
     # per camera). getattr guard: apps built without the manager stay safe.
     mgr = getattr(request.app.state, "zone_manager", None)

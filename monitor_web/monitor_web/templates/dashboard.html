@@ -447,6 +447,10 @@
                 <input id="zm-model-show-boxes" type="checkbox" class="zm-checkbox" />
                 <span data-i18n="show_boxes">{{ t.show_boxes or 'Show bounding boxes' }}</span>
               </label>
+              <label class="zm-checkbox-row">
+                <input id="zm-show-floor-zones" type="checkbox" class="zm-checkbox" />
+                <span data-i18n="show_floor_zones">{{ t.show_floor_zones or 'Show floor zones (metric outline)' }}</span>
+              </label>
               <label class="zm-sub" for="zm-model-dist-opacity" data-i18n="dist_opacity">{{ t.dist_opacity or 'Distance line — opacity' }}</label>
               <input id="zm-model-dist-opacity" type="number" min="0.05" max="1" step="0.05" class="zm-input" />
               <label class="zm-sub" for="zm-model-dist-color" data-i18n="dist_color">{{ t.dist_color or 'Distance line — colour' }}</label>

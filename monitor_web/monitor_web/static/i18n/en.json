@@ -142,5 +142,6 @@
   "group_accuracy": "Accuracy boosters (optional)",
   "group_pose": "Pose (person skeletons)",
   "group_performance": "Performance",
-  "group_display": "Display overlays (applies instantly)"
+  "group_display": "Display overlays (applies instantly)",
+  "show_floor_zones": "Show floor zones (metric outline)"
 }

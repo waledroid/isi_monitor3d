@@ -8,6 +8,7 @@ isistream detects inside the zone's larger bounding-box crop.
 from types import SimpleNamespace
 
 import numpy as np
+
 from monitor_web.zone_projection import (
     clip_to_zones,
     draw_zone_outlines,

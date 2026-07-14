@@ -294,13 +294,17 @@ class ZoneDetectionWorker:
                     occupancy_content=od.occupancy_content,
                     occupancy_confidence=float(od.occupancy_confidence),
                 )
-                cx = (det.bbox_xyxy[0] + det.bbox_xyxy[2]) / 2.0
-                cy = (det.bbox_xyxy[1] + det.bbox_xyxy[3]) / 2.0
+                # Zone membership by FOOT point (ground contact), matching the
+                # metric definition of a floor zone and the cam view's
+                # clip_to_zones. Twin polygons are FLOOR projections — flat on
+                # the ground — so a tall object's bbox CENTRE floats above
+                # them and the old centre test silently missed it.
+                fx, fy = det.foot_uv
                 for zid, poly in polys.items():
                     if poly is None or len(poly) < 3:
                         continue
                     if cv2.pointPolygonTest(
-                            poly.astype(np.float32), (float(cx), float(cy)),
+                            poly.astype(np.float32), (float(fx), float(fy)),
                             False) >= 0:
                         per_zone[zid].append(det)
                 # dets outside every patch simply aren't shown — same as today.
@@ -383,6 +387,14 @@ class ZoneWorkerManager:
     def reload(self) -> None:
         """Sync workers to the CURRENT zone + camera config. Safe no-op on empty or
         missing config (tests / fresh installs spawn zero threads)."""
+        try:
+            # Self-heal: a calibration switched outside the alignment endpoint
+            # (isical export, mode change) leaves the stored twins projected
+            # through the OLD geometry — regenerate before distributing them.
+            from .api.routes_zone_patches import ensure_twins_current
+            ensure_twins_current(self._cfg)
+        except Exception:
+            logger.debug("zone manager: twin freshness check failed", exc_info=True)
         try:
             patches = load_patches(self._cfg)
         except Exception:

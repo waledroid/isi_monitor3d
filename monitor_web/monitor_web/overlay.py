@@ -67,7 +67,11 @@ _PALLET_CLASSES = {"palette", "pallet", "palette_vide"}
 
 
 def draw(image, det, show_nodes: bool = True, show_masks: bool = True,
-         show_boxes: bool = True) -> None:
+         show_boxes: bool = True, mask_clip=None) -> None:
+    """``mask_clip`` (optional uint8 stencil, 255 inside the zones) bounds the
+    mask fill: a zone-based system shows nothing outside the zone, and a mask
+    hugging the boundary must not spill past the dashed outline even though
+    the detection itself (foot inside) is legitimately kept."""
     color = _color_for(det.cls)   # per-class: palette=green, carton=light-red, polybag=light-blue
     # Segmentation mask underlay — only set by `yolo_onnx_seg` (or a future seg
     # plugin); detect detectors leave `det.mask = None` and this branch is skipped.
@@ -76,6 +80,8 @@ def draw(image, det, show_nodes: bool = True, show_masks: bool = True,
         # Blend the class colour only inside the mask. `addWeighted` is the
         # cheapest cv2 path; the boolean mask keeps the blend localised.
         if m.shape == image.shape[:2]:
+            if mask_clip is not None:
+                m = m & (mask_clip > 0)
             overlay = image.copy()
             overlay[m] = color
             cv2.addWeighted(overlay, 0.35, image, 0.65, 0, dst=image)
@@ -84,8 +90,12 @@ def draw(image, det, show_nodes: bool = True, show_masks: bool = True,
         # (never a bitmap) — fill it with the same translucent class colour.
         pts = np.asarray(det.mask_poly, dtype=np.int32).reshape(-1, 1, 2)
         if len(pts) >= 3:
+            region = np.zeros(image.shape[:2], dtype=np.uint8)
+            cv2.fillPoly(region, [pts], 255)
+            if mask_clip is not None:
+                cv2.bitwise_and(region, mask_clip, dst=region)
             overlay = image.copy()
-            cv2.fillPoly(overlay, [pts], color)
+            overlay[region > 0] = color
             cv2.addWeighted(overlay, 0.35, image, 0.65, 0, dst=image)
     x1, y1, x2, y2 = (int(v) for v in det.bbox_xyxy)
     # The bounding box is optional (Settings toggle) — with a seg model the mask +
@@ -296,7 +306,8 @@ def annotate_frame(image, detector, cam_id: str = "cam",
                    show_nodes: bool = True, show_masks: bool = True,
                    show_boxes: bool = True, pose_detector=None,
                    dist_view=None, dist_max_m: float = 6.0,
-                   show_occupancy: bool = False, detections=None, dist_style=None):
+                   show_occupancy: bool = False, detections=None, dist_style=None,
+                   mask_clip=None):
     """Run detection on one BGR frame and draw masks (seg only) + boxes + foot
     nodes in place. When ``pose_detector`` is given, also run person-pose and draw
     skeletons + foot nodes. When ``dist_view`` (a calibrated camera) is given, draw
@@ -339,7 +350,8 @@ def annotate_frame(image, detector, cam_id: str = "cam",
             logger.warning("detection overlay: detect failed", exc_info=True)
             detections = []
     for det in detections:
-        draw(image, det, show_nodes=show_nodes, show_masks=show_masks, show_boxes=show_boxes)
+        draw(image, det, show_nodes=show_nodes, show_masks=show_masks,
+             show_boxes=show_boxes, mask_clip=mask_clip)
     poses = []
     if pose_detector is not None:
         try:
@@ -387,6 +399,14 @@ def masks_enabled(cfg) -> bool:
     """Dashboard preference: draw the seg mask overlay (only meaningful for
     seg detectors — detect detectors have no mask)."""
     return _ui_pref(cfg, "show_masks", True)
+
+
+def floor_zones_enabled(cfg) -> bool:
+    """Dashboard preference: draw the projected FLOOR-ZONE outlines on the cam
+    views. Off by default — the operator's dashed zone patches stay the always-
+    visible boundary; this adds the metric zone geometry on demand. Display
+    only: detections + masks stay zone-clipped regardless."""
+    return _ui_pref(cfg, "show_floor_zones", False)
 
 
 def occupancy_enabled(cfg) -> bool:
