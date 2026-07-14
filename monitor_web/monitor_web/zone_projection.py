@@ -176,3 +176,28 @@ def crop_box_stencil(shape_hw, crop_boxes, scale_xy) -> np.ndarray:
     for (x0, y0, x1, y1) in crop_boxes:
         m[int(y0 * sy):int(np.ceil(y1 * sy)), int(x0 * sx):int(np.ceil(x1 * sx))] = 255
     return m
+
+
+def zone_of_foot_metric(view, display_wh, zones, foot_uv,
+                        tol_m: float = _ZONE_TOL_M) -> str | None:
+    """Single-foot version of :func:`clip_to_zones_metric` — the ONE membership
+    rule (foot → floor via the camera's undistort+H → nearest zones.yaml
+    polygon ± ``tol_m``) shared by the cam views AND the zone worker, so a
+    detection can never be 'in the zone' on one surface and outside on
+    another. Returns the zone id, or ``None``."""
+    from backbone.shared.geometry import pixel_to_floor, undistort_points
+    cw, ch = float(view.image_size_wh[0]), float(view.image_size_wh[1])
+    fw, fh = float(display_wh[0]), float(display_wh[1])
+    uv = np.array([[foot_uv[0] * cw / fw, foot_uv[1] * ch / fh]], dtype=np.float64)
+    xy = pixel_to_floor(undistort_points(uv, view.K, view.D), view.H)[0]
+    if not (np.isfinite(xy[0]) and np.isfinite(xy[1])):
+        return None
+    best = None
+    for name in zones.names:
+        poly = np.asarray(zones[name].polygon, np.float32)
+        dist = cv2.pointPolygonTest(poly, (float(xy[0]), float(xy[1])), True)
+        if best is None or dist > best[1]:
+            best = (zones.id_of(name) or name, dist)
+    if best is not None and best[1] >= -float(tol_m):
+        return best[0]
+    return None

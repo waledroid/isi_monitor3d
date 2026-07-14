@@ -457,3 +457,42 @@ def test_to_crop_handles_wire_observation_dets():
     assert c.foot_uv == (70.0, 130.0)
     assert c.mask_poly[0] == [20.0, 30.0]
     assert c.occupancy_state == "full"
+
+
+# ---- metric membership: ONE rule for worker + cam views ---------------------
+
+
+def test_metric_membership_groups_outside_pixel_polygon():
+    """A det metrically in the zone but whose pixel foot misses the drawn
+    polygon (per-camera projection skew — the base zone stayed empty while its
+    twin populated) is grouped once the metric rule is available."""
+    patches = [_patch("zp_z1", 0, 0, 60, 60)]        # small drawn polygon
+    det = _obs_det(bbox=(200.0, 100.0, 240.0, 140.0))  # foot far OUTSIDE it
+    w, _ = _worker(patches, bus=_FakeBus(_obs_msg(dets=[det], frame_wh=(320, 240))))
+    w._metric_membership = lambda frame_wh: (lambda foot: "zp_z1")
+    w._snapshot_from_bus(np.zeros((240, 320, 3), np.uint8), patches)
+    assert len(w.snapshot()["zones"]["zp_z1"]) == 1
+
+
+def test_metric_membership_maps_zone_id_to_twin_key():
+    """The metric rule returns the FLOOR-ZONE id (= base patch id); a camera
+    holding only the TWIN must group under the twin's key."""
+    patches = [{"id": "zp_z1__twin", "name": "Z1", "camera": "cam_a",
+                "polygon": [[0, 0], [60, 0], [60, 60], [0, 60]],
+                "rect": [0, 0, 60, 60], "frame_wh": [320, 240],
+                "twin_of": "zp_z1"}]
+    det = _obs_det(bbox=(200.0, 100.0, 240.0, 140.0))
+    w, _ = _worker(patches, bus=_FakeBus(_obs_msg(dets=[det], frame_wh=(320, 240))))
+    w._metric_membership = lambda frame_wh: (lambda foot: "zp_z1")
+    w._snapshot_from_bus(np.zeros((240, 320, 3), np.uint8), patches)
+    assert len(w.snapshot()["zones"]["zp_z1__twin"]) == 1
+
+
+def test_metric_membership_none_keeps_pixel_fallback():
+    """Uncalibrated: the pixel foot-in-polygon fallback still groups."""
+    patches = [_patch("zp_z1", 30, 30, 160, 160)]
+    det = _obs_det(bbox=(60.0, 60.0, 120.0, 120.0))   # foot (90,120) inside
+    w, _ = _worker(patches, bus=_FakeBus(_obs_msg(dets=[det], frame_wh=(320, 240))))
+    w._metric_membership = lambda frame_wh: None
+    w._snapshot_from_bus(np.zeros((240, 320, 3), np.uint8), patches)
+    assert len(w.snapshot()["zones"]["zp_z1"]) == 1

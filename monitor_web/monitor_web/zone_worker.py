@@ -34,6 +34,7 @@ import cv2
 import numpy as np
 import yaml
 
+from .api.routes_zone_patches import TWIN_SUFFIX as _TWIN_SUFFIX
 from .api.routes_zone_patches import load_patches
 from .camera_hub import get_hub
 from .yaml_cache import load_yaml_cached
@@ -245,6 +246,29 @@ class ZoneDetectionWorker:
             if stream is not None:
                 hub.release(stream)
 
+    def _metric_membership(self, frame_wh):
+        """``fn(foot_uv) -> zone_id | None`` via the shared metric rule
+        (zone_projection.zone_of_foot_metric), or ``None`` when uncalibrated /
+        no floor zones. Rig + registry loads are (path, mtime)-cached."""
+        try:
+            from .api.routes_video import _load_zones_cached
+            from .api.routes_zone_patches import _load_rig
+            from .floor_zone_sync import _zones_yaml_path
+            from .zone_projection import zone_of_foot_metric
+            rig = _load_rig(self._cfg)
+            if rig is None or self.camera_id not in rig:
+                return None
+            zpath = _zones_yaml_path(self._cfg)
+            zones = _load_zones_cached(str(zpath), zpath.stat().st_mtime_ns)
+            if len(zones) == 0:
+                return None
+            view = rig[self.camera_id]
+            return lambda foot: zone_of_foot_metric(view, frame_wh, zones, foot)
+        except Exception:
+            logger.debug("zone worker[%s]: metric membership unavailable",
+                         self.camera_id, exc_info=True)
+            return None
+
     def _snapshot_from_bus(self, frame, patches: list[dict]) -> None:
         """Render the wire's per-camera observations into per-zone snapshots.
 
@@ -259,6 +283,12 @@ class ZoneDetectionWorker:
         per_zone: dict[str, list] = {str(p.get("id")): [] for p in patches}
         statuses = {zid: "ok" for zid in per_zone}
         polys = {str(p.get("id")): _scaled_polygon(p, (iw, ih)) for p in patches}
+        # ONE membership rule everywhere: metric foot-in-floor-zone (± tol),
+        # the same test the cam views use — a pixel-polygon test dropped
+        # metrically-in-zone objects whose per-camera foot missed the drawn
+        # polygon by a few dozen px, so the base zone stayed empty while its
+        # twin populated. None ⇒ uncalibrated: pixel polygons as fallback.
+        membership = self._metric_membership((iw, ih))
 
 
         bus = self._bus_getter() if self._bus_getter is not None else None
@@ -294,20 +324,28 @@ class ZoneDetectionWorker:
                     occupancy_content=od.occupancy_content,
                     occupancy_confidence=float(od.occupancy_confidence),
                 )
-                # Zone membership by FOOT point (ground contact), matching the
-                # metric definition of a floor zone and the cam view's
-                # clip_to_zones. Twin polygons are FLOOR projections — flat on
-                # the ground — so a tall object's bbox CENTRE floats above
-                # them and the old centre test silently missed it.
                 fx, fy = det.foot_uv
-                for zid, poly in polys.items():
-                    if poly is None or len(poly) < 3:
-                        continue
-                    if cv2.pointPolygonTest(
-                            poly.astype(np.float32), (float(fx), float(fy)),
-                            False) >= 0:
-                        per_zone[zid].append(det)
-                # dets outside every patch simply aren't shown — same as today.
+                if membership is not None:
+                    zid = membership((fx, fy))
+                    if zid is not None:
+                        # A floor-zone id keys the BASE patch; this camera may
+                        # hold the TWIN instead (same zone, other camera).
+                        key = (zid if zid in per_zone
+                               else f"{zid}{_TWIN_SUFFIX}")
+                        if key in per_zone:
+                            per_zone[key].append(det)
+                else:
+                    # Uncalibrated fallback: FOOT inside the drawn/twin pixel
+                    # polygon (ground contact — a tall object's bbox centre
+                    # floats above a flat floor-projected twin polygon).
+                    for zid, poly in polys.items():
+                        if poly is None or len(poly) < 3:
+                            continue
+                        if cv2.pointPolygonTest(
+                                poly.astype(np.float32), (float(fx), float(fy)),
+                                False) >= 0:
+                            per_zone[zid].append(det)
+                # dets outside every zone simply aren't shown — same as today.
         resolved = self._resolve_overlaps(per_zone, polys)
 
         # People: the producer's pose rides the observations echo — the wire is
