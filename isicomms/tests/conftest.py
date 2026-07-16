@@ -23,8 +23,8 @@ from backbone.comms.schemas import (
 )
 from fastapi.testclient import TestClient
 
-from isi_gateway.app import create_app
-from isi_gateway.config import Settings
+from isicomms.app import create_app
+from isicomms.config import Settings
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,7 @@ def _no_real_broker(monkeypatch):
     network thread — tests inject data via ``update_from_message`` directly, so
     a real loop would only add a multi-second teardown join on the dead broker."""
     monkeypatch.setattr(
-        "isi_gateway.mqtt_subscriber.mqtt.Client",
+        "isicomms.mqtt_subscriber.mqtt.Client",
         lambda *a, **k: MagicMock(),   # ignore the CallbackAPIVersion arg; unspec'd mock
     )
     yield

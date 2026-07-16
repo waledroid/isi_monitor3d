@@ -2,7 +2,7 @@
 
 How the ISI Monitor 3D system scales from one camera rig to a whole warehouse:
 many **Backbone** nodes (one per PC) publish metric metadata to a central **MQTT
-broker**, an **isi-gateway** aggregates it, and AGVs/WMS poll a single REST API.
+broker**, an **isicomms** aggregates it, and AGVs/WMS poll a single REST API.
 
 This document is the **field-level technical reference** — the comms module
 internals, the full message-field contract, the broker, the gateway, the identity
@@ -22,7 +22,7 @@ topology, `docs/architecture-distributed.md`.
         ┌────────────────────────────────────────────────┐
         │  CENTRAL SERVER (e.g. 192.168.2.39)             │
         │   • Mosquitto broker      :1883  (TLS :8883)     │  routes isiMonitor3D/#
-        │   • isi-gateway REST API  :8080  (HTTPS :443)    │  caches per node_id
+        │   • isicomms REST API  :8080  (HTTPS :443)    │  caches per node_id
         └────────────────────────────────────────────────┘
                    ▲  GET /v1/nodes /v1/tracks /v1/zones /v1/passings …
             AGVs / WMS poll here (HTTP only)
@@ -33,7 +33,7 @@ never crosses the MQTT fabric — only extracted metadata does.
 
 The broker and gateway live together on **one central host that is deliberately
 *not* a warehouse PC** — a dedicated server, a small NUC, or a cloud VM, running
-nothing but Mosquitto and isi-gateway. A warehouse PC runs **only a Backbone**; it
+nothing but Mosquitto and isicomms. A warehouse PC runs **only a Backbone**; it
 never hosts the hub. The only address that has to be reachable on the LAN is the
 central host's IP (`192.168.2.39` above) — every PC publishes to it and every AGV
 polls it. (You *may* co-locate everything on one box for a pilot, but a camera
@@ -386,7 +386,7 @@ node list to maintain — it simply *appears*.
 
 ---
 
-## 6. The gateway — `isi_gateway/`
+## 6. The gateway — `isicomms/`
 
 A small FastAPI service that turns the MQTT firehose into a poll-able API.
 
@@ -410,7 +410,7 @@ flips `alive → stale` in `/v1/nodes`. (Observed live: a stopped node goes stal
 ### REST endpoints (`api/routes_*.py`)
 
 All resource routes mount under the **`/v1`** prefix (`API_VERSION` in
-`isi_gateway/config.py`) **and** at the bare path as back-compat aliases, so
+`isicomms/config.py`) **and** at the bare path as back-compat aliases, so
 `/v1/nodes` and `/nodes` hit the same handler. `/healthz` stays unversioned (and
 also answers under `/v1`). Adding a future `/v2` is one extra include per router.
 
@@ -483,7 +483,7 @@ docker compose -p on-prem -f deploy/onprem/docker-compose.yml up -d
 docker compose -p on-prem -f deploy/onprem/docker-compose.yml ps     # both Up
 curl http://<server-ip>:8080/healthz                                 # {"ok":true}
 ```
-→ Mosquitto on `<server-ip>:1883`, isi-gateway on `<server-ip>:8080`, both
+→ Mosquitto on `<server-ip>:1883`, isicomms on `<server-ip>:8080`, both
 `restart: unless-stopped`.
 
 ### Step 2 — each warehouse PC (its own Backbone)
@@ -589,9 +589,9 @@ How the principles above hold up under load and failure:
 | Fan-out + heartbeat | `backbone/comms/{publisher,diagnostics_publisher}.py` |
 | Publish orchestration | `backbone/runtime/orchestrator.py` |
 | Zone transitions / snapshots (producers) | `backbone/shared/{zone_transitions,snapshot_writer}.py` |
-| Gateway subscriber + cache | `isi_gateway/isi_gateway/mqtt_subscriber.py` |
-| Gateway REST routes | `isi_gateway/isi_gateway/api/routes_*.py` |
-| Gateway config / auth | `isi_gateway/isi_gateway/{config,api/auth}.py` |
+| Gateway subscriber + cache | `isicomms/isicomms/mqtt_subscriber.py` |
+| Gateway REST routes | `isicomms/isicomms/api/routes_*.py` |
+| Gateway config / auth | `isicomms/isicomms/{config,api/auth}.py` |
 | Deploy profiles | `deploy/{onprem,cloud}/` |
 | Topology overview | `docs/architecture-distributed.md` |
 
@@ -600,7 +600,7 @@ How the principles above hold up under load and failure:
 - Node side: `tests/test_metadata_schemas.py`, `test_udp_sink.py`,
   `test_mqtt_sink.py`, `test_publisher.py`, `test_diagnostics_publisher.py`,
   `test_zone_transitions.py`, `test_snapshot_writer.py`.
-- Gateway: `isi_gateway/tests/` (subscriber, every route, import discipline).
+- Gateway: `isicomms/tests/` (subscriber, every route, import discipline).
 - All MQTT unit tests mock paho. The real paho/broker wire was validated with a
   live two-node replay smoke against a containerized Mosquitto + gateway (it
   surfaced the retained-config-on-connect race fixed in `mqtt_sink.py`).

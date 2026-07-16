@@ -11,8 +11,8 @@ import sys
 
 from fastapi.testclient import TestClient
 
-from isi_gateway.app import create_app
-from isi_gateway.config import Settings
+from isicomms.app import create_app
+from isicomms.config import Settings
 
 
 def test_backbone_runtime_not_imported_after_create_app():

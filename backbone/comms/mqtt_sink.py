@@ -362,7 +362,7 @@ class MqttSink(MetadataSink):
         packet is handed to a still-running network loop and actually goes out
         on the wire (or is cleanly abandoned against a dead broker) before the
         loop thread is torn down. This mirrors
-        ``isi_gateway.mqtt_subscriber.MqttSubscriber.stop``.
+        ``isicomms.mqtt_subscriber.MqttSubscriber.stop``.
         """
         if self._closed:
             return

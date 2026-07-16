@@ -16,7 +16,7 @@
 This RFC describes how a single warehouse-vision PC scales to an entire
 warehouse. Each PC runs a **Backbone** that converts its camera feeds into
 **metric, identity-stable metadata** and *publishes* it to a central **MQTT
-broker**. A central **isi-gateway** subscribes to all PCs, aggregates their state,
+broker**. A central **isicomms** subscribes to all PCs, aggregates their state,
 and serves a single **polling REST API** that AGVs and the WMS consume. The design
 is deliberately decoupled, outbound-only, and self-describing: adding a PC
 requires **no change to the server**. This document explains the design top-down,
@@ -86,7 +86,7 @@ publish once; a single aggregator serves everyone.
  │ cam_a ├─RTSP─►┌─────────────────────────────┐           │isiMonitor3D/#                 │   GET  │
  └───────┘       │ Backbone  node_id = cold_3  │── publish ┘          ▼                    │        │
   (Mode 1:       │  vision → metric metadata   │           ┌────────────────────┐         │        │
-   1 camera)     └─────────────────────────────┘           │  isi-gateway :8080 │◄────────┴────────┘
+   1 camera)     └─────────────────────────────┘           │  isicomms :8080 │◄────────┴────────┘
                                                            │  cache per node_id │ /v1/nodes /v1/tracks
         MQTT over the LAN (intranet, plaintext)            │  REST polling API  │ /v1/zones /v1/passings
         — outbound only from the PCs                       └────────────────────┘
@@ -108,7 +108,7 @@ AGVs never speak MQTT and never know how many PCs exist — they poll one URL.
 The broker and the gateway live together on **one central machine that is
 deliberately *not* one of the warehouse PCs**. That central machine can be a
 dedicated server, a small NUC, or a cloud VM — its only job is to run Mosquitto
-and isi-gateway. A warehouse PC runs **only a Backbone**; it is never the hub.
+and isicomms. A warehouse PC runs **only a Backbone**; it is never the hub.
 
 For a tiny pilot you *may* co-locate everything on one box, but in production the
 central server is its own host. Either way, the only thing the warehouse PCs and
@@ -128,7 +128,7 @@ the AGVs need is that the central server's **IP is reachable on the LAN**.
             ▼                             │   │                          │
  ┌──────────────────────────────┐         ├──►│   192.168.2.39           │   ┌────────────┐
  │ PC-2   192.168.2.42          │── MQTT ─┘   │  Mosquitto      :1883    │   │ AGV-1, AGV-2│
- │ Backbone  node_id = dock_1   │ :1883       │  isi-gateway    :8080    │◄──│  (DHCP)     │
+ │ Backbone  node_id = dock_1   │ :1883       │  isicomms    :8080    │◄──│  (DHCP)     │
  └──────────────────────────────┘             └──────────────────────────┘   │  poll :8080 │
                                                                               └────────────┘
    cameras attach to their PC only;             a separate host — NOT          AGVs poll
@@ -150,7 +150,7 @@ part of this stack.
 | Container | Image | Port(s) | Role |
 |---|---|---|---|
 | `mosquitto` | `eclipse-mosquitto:2` | 1883 (TLS 8883) | the MQTT broker; **persistence on** so retained `config` adverts survive a restart |
-| `gateway` | `isi-gateway` (custom, ≈300 MB, `python:3.10-slim`) | 8080 (HTTPS 443 via Caddy, cloud) | subscribes to the broker, caches per node, serves the REST API |
+| `gateway` | `isicomms` (custom, ≈300 MB, `python:3.10-slim`) | 8080 (HTTPS 443 via Caddy, cloud) | subscribes to the broker, caches per node, serves the REST API |
 
 Two profiles ship under `deploy/`:
 
@@ -177,7 +177,7 @@ detection model, and identity space.
 ### Layer 1 — The hub: broker + gateway
 The central server runs exactly two services:
 - **Mosquitto** — the message router (the post office).
-- **isi-gateway** — the subscriber + cache + REST API (the front desk).
+- **isicomms** — the subscriber + cache + REST API (the front desk).
 
 ### Layer 2 — The transport: MQTT pub/sub
 Chosen because it is **lightweight, broker-mediated, and decoupled**: publishers
@@ -645,7 +645,7 @@ Validation was done at three levels. **All green.**
 | `test_udp_sink` / `test_mqtt_sink` | 10 / 28 | topic templates (incl. the `zone/` folder, all 6 per-zone topics), retain-config, retained QoS-1 zone state, broker-down-safe, TLS kwargs, shutdown order |
 | `test_publisher` / `test_diagnostics_publisher` | 15 / 14 | per-sink isolation (incl. `publish_zone_state`); heartbeat content |
 | `test_zone_transitions` / `test_zone_state` / `test_snapshot_writer` | 16 / 12 / 6 | passing detection; zone-contents change/refresh/explicit-empty; **6 zones per node each independently monitored**; URL-only image refs |
-| `isi_gateway/tests` | 82 | subscriber cache (incl. per-zone state, **all 6 zones of a node served enriched**), every REST route (incl. `/v1/zones` enrichment + `/v1/zones/{name}`), liveness, **import discipline**, **`/v1` prefix + bare aliases** (`test_app_versioning`), **version-aware topic parse + `topic_version`** (subscriber tests) |
+| `isicomms/tests` | 82 | subscriber cache (incl. per-zone state, **all 6 zones of a node served enriched**), every REST route (incl. `/v1/zones` enrichment + `/v1/zones/{name}`), liveness, **import discipline**, **`/v1` prefix + bare aliases** (`test_app_versioning`), **version-aware topic parse + `topic_version`** (subscriber tests) |
 | Backbone full suite | **519** | no regression across the pipeline |
 | monitor_web (dashboard consumer) | **278** | the operator UI consumes the contract |
 
@@ -762,4 +762,4 @@ Feedback sought on:
 
 *References: `docs/mqtt-architecture.md` (field-level reference),
 `docs/architecture-distributed.md` (topology), `deploy/README.md` (profiles),
-`isi_gateway/README.md` (gateway API).*
+`isicomms/README.md` (gateway API).*

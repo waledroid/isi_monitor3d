@@ -34,12 +34,12 @@ ISI_GATEWAY_MQTT_PORT=1883 \
 python -m isi_gateway
 ```
 
-All settings (see `isi_gateway/config.py`) use the `ISI_GATEWAY_` prefix.
+All settings (see `isicomms/config.py`) use the `ISI_GATEWAY_` prefix.
 
 ## API endpoints
 
 All resource routes are mounted under the **`/v1`** prefix (`API_VERSION` in
-`isi_gateway/config.py`) and **also** at the bare path as back-compat aliases, so
+`isicomms/config.py`) and **also** at the bare path as back-compat aliases, so
 `/v1/nodes` and `/nodes` serve the same handler. `/healthz` is available both
 un-prefixed and under `/v1`.
 
@@ -80,7 +80,7 @@ docker compose -f deploy/cloud/docker-compose.yml up -d --build
 # MQTTS on :8883, HTTPS API on :443
 ```
 
-The gateway image (`isi_gateway/Dockerfile`) builds from the repo root because it
+The gateway image (`isicomms/Dockerfile`) builds from the repo root because it
 needs the backbone package for `backbone.comms.schemas` + `backbone.shared.zones`
 (base deps only — no CUDA/OpenCV/GStreamer). Each warehouse-PC Backbone points its
 mqtt sink at this broker (`host: <server>`, `prefix: isiMonitor3D/v1/<node_id>`); the gateway

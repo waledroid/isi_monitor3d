@@ -23,7 +23,7 @@ areas and pull the global picture from that one API.
                 └──────────────────┬───────────────────┘
                                    ▼
                 ┌──────────────────────────────────────┐
-                │   isi-gateway  (FastAPI, :8080)       │
+                │   isicomms  (FastAPI, :8080)       │
                 │   per-node cache keyed by node_id      │
                 │   GET /tracks /nodes /zones /passings  │  ◄── AGVs / WMS poll
                 │       /diagnostics /config /healthz     │
@@ -95,9 +95,9 @@ metadata:
   diagnostics: { enabled: true, interval_sec: 5.0, rms_gate_px: 2.0 }
 ```
 
-## Central server (`isi-gateway`)
+## Central server (`isicomms`)
 
-Aggregates all nodes and serves the polling API — see `isi_gateway/README.md` for
+Aggregates all nodes and serves the polling API — see `isicomms/README.md` for
 the endpoint table and `deploy/README.md` for deployment profiles:
 
 - `deploy/onprem/docker-compose.yml` — LAN / trusted-network stack (plaintext, :1883)

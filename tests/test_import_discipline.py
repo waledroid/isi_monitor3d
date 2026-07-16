@@ -1,6 +1,6 @@
 """Lean-image import discipline for the consumer-side backbone surface.
 
-The isi-gateway Docker image is deliberately lean — no CUDA / OpenCV /
+The isicomms (gateway) Docker image is deliberately lean — no CUDA / OpenCV /
 GStreamer / calibration stack. All it needs from the backbone is
 ``backbone.comms.schemas`` and ``backbone.shared.zones.Zone``. This test pins
 that those imports succeed *without* ``cv2`` or ``calibration`` importable, so a

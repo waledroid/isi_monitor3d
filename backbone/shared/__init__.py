@@ -10,7 +10,7 @@ __all__ = ["CameraRig", "LatencyMeter", "elapsed_ms", "now"]
 
 def __getattr__(name):
     # Lazy import: ``CameraRig`` pulls in ``calibration`` (and transitively the
-    # heavy geometry stack), which the lean isi-gateway image deliberately omits.
+    # heavy geometry stack), which the lean isicomms (gateway) image deliberately omits.
     # PEP 562 keeps ``from backbone.shared import CameraRig`` working while letting
     # the light ``backbone.shared.zones`` submodule import without that cost.
     if name == "CameraRig":

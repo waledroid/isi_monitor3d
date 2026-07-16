@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from isi_gateway.config import API_VERSION
+from isicomms.config import API_VERSION
 
 _RESOURCE_PATHS = [
     "/nodes",
@@ -43,8 +43,8 @@ def test_healthz_unprefixed():
     """/healthz stays available un-prefixed."""
     from fastapi.testclient import TestClient
 
-    from isi_gateway.app import create_app
-    from isi_gateway.config import Settings
+    from isicomms.app import create_app
+    from isicomms.config import Settings
 
     app = create_app(Settings(mqtt_port=1884))
     with TestClient(app) as c:
@@ -54,8 +54,8 @@ def test_healthz_unprefixed():
 def test_healthz_also_under_v1():
     from fastapi.testclient import TestClient
 
-    from isi_gateway.app import create_app
-    from isi_gateway.config import Settings
+    from isicomms.app import create_app
+    from isicomms.config import Settings
 
     app = create_app(Settings(mqtt_port=1884))
     with TestClient(app) as c:

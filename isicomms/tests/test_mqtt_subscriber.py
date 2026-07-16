@@ -7,7 +7,7 @@ import time
 import pytest
 from backbone.comms.schemas import ImageRefMessage
 
-from isi_gateway.mqtt_subscriber import MqttSubscriber
+from isicomms.mqtt_subscriber import MqttSubscriber
 from tests.conftest import (
     make_config,
     make_diagnostics,
@@ -178,7 +178,7 @@ def test_update_from_message_default_topic_version(sub):
 
 def test_tls_with_ca_cert_calls_tls_set_with_ca_certs():
     """tls=True + ca_cert → client.tls_set(ca_certs=<path>) called in start()."""
-    from isi_gateway.mqtt_subscriber import MqttSubscriber
+    from isicomms.mqtt_subscriber import MqttSubscriber
     s = MqttSubscriber("127.0.0.1", 8883, "isiMonitor3D", tls=True, ca_cert="/c/ca.crt")
     s.start()
     client = s._client
@@ -189,7 +189,7 @@ def test_tls_with_ca_cert_calls_tls_set_with_ca_certs():
 
 def test_tls_insecure_calls_tls_insecure_set():
     """tls=True + tls_insecure=True → client.tls_insecure_set(True) called in start()."""
-    from isi_gateway.mqtt_subscriber import MqttSubscriber
+    from isicomms.mqtt_subscriber import MqttSubscriber
     s = MqttSubscriber(
         "127.0.0.1", 8883, "isiMonitor3D",
         tls=True, ca_cert="/c/ca.crt", tls_insecure=True,
@@ -203,7 +203,7 @@ def test_tls_insecure_calls_tls_insecure_set():
 
 def test_tls_false_skips_tls_set_and_tls_insecure_set():
     """tls=False → neither tls_set nor tls_insecure_set is called in start()."""
-    from isi_gateway.mqtt_subscriber import MqttSubscriber
+    from isicomms.mqtt_subscriber import MqttSubscriber
     s = MqttSubscriber("127.0.0.1", 1884, "isiMonitor3D", tls=False, tls_insecure=True)
     s.start()
     client = s._client
@@ -214,7 +214,7 @@ def test_tls_false_skips_tls_set_and_tls_insecure_set():
 
 def test_tls_no_ca_cert_uses_system_cas():
     """tls=True with default ca_cert=None → tls_set(ca_certs=None) for system CAs."""
-    from isi_gateway.mqtt_subscriber import MqttSubscriber
+    from isicomms.mqtt_subscriber import MqttSubscriber
     s = MqttSubscriber("127.0.0.1", 8883, "isiMonitor3D", tls=True)
     s.start()
     client = s._client

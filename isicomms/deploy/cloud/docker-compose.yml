@@ -24,8 +24,8 @@ services:
 
   gateway:
     build:
-      context: ../..                     # repo root — the image needs backbone/
-      dockerfile: isi_gateway/Dockerfile
+      context: ../../..                  # repo root — the image needs backbone/
+      dockerfile: isicomms/Dockerfile
     restart: unless-stopped
     env_file: .env
     environment:

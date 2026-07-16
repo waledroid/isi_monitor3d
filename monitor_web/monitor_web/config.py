@@ -97,13 +97,13 @@ class Settings(BaseSettings):
         description="YAML store for dashboard UI preferences (mp4 selection, etc.).",
     )
 
-    # isi-gateway integration — cross-warehouse node status.
+    # isicomms gateway integration — cross-warehouse node status.
     # Set MONITOR_WEB_GATEWAY_URL (e.g. http://gateway-host:8080) to enable the
     # "Warehouse nodes" sidebar panel.  When unset the panel shows a muted hint.
     gateway_url: str | None = Field(
         default=None,
         description=(
-            "Base URL of the isi-gateway (e.g. http://gateway-host:8080). "
+            "Base URL of the isicomms gateway (e.g. http://gateway-host:8080). "
             "When set, GET /api/gateway/nodes proxies the gateway's /nodes endpoint "
             "so the dashboard shows the cross-warehouse node list."
         ),

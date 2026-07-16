@@ -1,4 +1,4 @@
-"""Uvicorn entry point — ``python -m isi_gateway``."""
+"""Uvicorn entry point — ``python -m isicomms``."""
 
 from __future__ import annotations
 
