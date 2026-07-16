@@ -23,7 +23,7 @@ body{background:var(--bg);color:var(--text);
   background-image:radial-gradient(ellipse at 20% -10%,rgba(79,195,247,.07),transparent 55%),
                    radial-gradient(ellipse at 90% 110%,rgba(46,213,115,.05),transparent 50%);
   background-attachment:fixed}
-header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:24px}
 h1{font-size:17px;font-weight:600;letter-spacing:.4px}
 h1 b{color:var(--accent)}
 .dot{width:10px;height:10px;border-radius:50%;background:var(--bad);display:inline-block}
@@ -33,10 +33,10 @@ h1 b{color:var(--accent)}
 #tok{margin-left:auto;background:var(--glass);border:1px solid var(--border);
   color:var(--text);border-radius:8px;padding:6px 10px;font-size:12px;width:210px}
 #tok::placeholder{color:var(--muted)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:26px}
 @media(max-width:1100px){.grid{grid-template-columns:1fr}}
 .card{background:var(--glass);border:1px solid var(--border);border-radius:14px;
-  box-shadow:var(--shadow);padding:12px 14px;backdrop-filter:blur(10px)}
+  box-shadow:var(--shadow);padding:16px 18px;backdrop-filter:blur(10px)}
 .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;
   color:var(--accent);margin-bottom:8px;display:flex;align-items:center;gap:8px}
 .card h2 .n{color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none}
@@ -166,6 +166,8 @@ function renderTail(d){
   $("n-tail").textContent="last "+d.count;
   if($("pause").checked)return;
   const feed=$("feed");
+  if(feed.querySelector("pre"))return; // a row is expanded — hold the feed
+                                       // still until it is collapsed
   feed.innerHTML=(d.messages||[]).slice().reverse().map((m,i)=>
     '<div class="msg" data-i="'+i+'"><span class="t">'+hhmmss(m.ts)+
     '</span> <span class="topic">'+esc(m.topic)+"</span> "+
