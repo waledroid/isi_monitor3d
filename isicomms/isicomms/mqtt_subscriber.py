@@ -104,6 +104,11 @@ class MqttSubscriber:
         # Raw tail for the /ui probe: EVERY arriving message (topic + payload,
         # malformed included — that is the point of a probe), newest last.
         self._recent: deque = deque(maxlen=max(1, int(recent_buffer)))
+        # Latest message per topic — the /ui schema tree. Unlike the ring, a
+        # topic seen once (retained config adverts) stays visible forever.
+        # Safety-capped; in practice the topic set is small and bounded.
+        self._latest_by_topic: dict[str, dict] = {}
+        self._topics_cap = 1000
 
         self._client: mqtt.Client | None = None
         self._started = False
@@ -200,12 +205,19 @@ class MqttSubscriber:
     ) -> None:
         topic: str = m.topic
         with self._lock:
-            self._recent.append({
+            entry = {
                 "ts": time.time(),
                 "topic": topic,
                 "payload": m.payload.decode("utf-8", errors="replace"),
                 "bytes": len(m.payload),
-            })
+            }
+            self._recent.append(entry)
+            known = self._latest_by_topic.get(topic)
+            if known is None and len(self._latest_by_topic) >= self._topics_cap:
+                oldest = min(self._latest_by_topic, key=lambda t: self._latest_by_topic[t]["ts"])
+                del self._latest_by_topic[oldest]
+            self._latest_by_topic[topic] = {
+                **entry, "count": (known["count"] + 1) if known else 1}
         parsed = self._parse_topic(topic)
         if parsed is None:
             with self._lock:
@@ -326,6 +338,11 @@ class MqttSubscriber:
         if node is None:
             return False
         return (now - node.last_seen) <= stale_after
+
+    def topics(self) -> dict[str, dict]:
+        """Latest message per topic (+ per-topic count) — the schema tree."""
+        with self._lock:
+            return {t: dict(v) for t, v in self._latest_by_topic.items()}
 
     def recent(self, limit: int = 100) -> list[dict]:
         """The last ``limit`` raw messages (topic/ts/payload), newest last."""

@@ -97,3 +97,26 @@ def test_ui_shell_is_tokenless_html():
         assert r.headers["content-type"].startswith("text/html")
         for probe in ("/nodes", "/zones", "/recent", "isicomms"):
             assert probe in r.text
+
+
+def test_topics_map_latest_and_count():
+    sub = MqttSubscriber(host="unused", port=1883, base="isiMonitor3D", recent_buffer=3)
+    for i in range(5):                           # ring holds 3; topics map holds all
+        sub._on_message(None, None, _msg("a/b", json.dumps({"i": i}).encode()))
+    sub._on_message(None, None, _msg("a/c", b"{}"))
+    topics = sub.topics()
+    assert set(topics) == {"a/b", "a/c"}
+    assert topics["a/b"]["count"] == 5           # counts every arrival
+    assert json.loads(topics["a/b"]["payload"]) == {"i": 4}   # latest wins
+    # a topic pushed out of the RING still lives in the tree map
+    assert all(m["topic"] != "a/b" or json.loads(m["payload"])["i"] >= 2
+               for m in sub.recent(10))
+
+
+def test_recent_endpoint_includes_topics():
+    with _client() as c:
+        sub = c.app.state.subscriber
+        sub._on_message(None, None, _msg("x/y", b"{}"))
+        body = c.get("/recent").json()
+        assert "x/y" in body["topics"]
+        assert body["topics"]["x/y"]["count"] == 1

@@ -33,6 +33,7 @@ async def recent(request: Request,
     messages = sub.recent(limit)
     return JSONResponse({
         "messages": messages,
+        "topics": sub.topics(),
         "stats": sub.stats(),
         "count": len(messages),
     })
