@@ -1,9 +1,9 @@
-# Build context for isi_gateway/Dockerfile. The gateway image only needs
-# pyproject.toml, README.md, backbone/ and isi_gateway/ — allowlist those and
+# Build context for isicomms/Dockerfile. The gateway image only needs
+# pyproject.toml, README.md, backbone/ and isicomms/ — allowlist those and
 # exclude everything else so the context stays tiny (the repo carries ~47GB
 # under trainer/ + ~2GB under archive/ that must never enter the build).
 *
 !pyproject.toml
 !README.md
 !backbone
-!isi_gateway
+!isicomms
