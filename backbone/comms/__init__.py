@@ -2,7 +2,11 @@
 
 Importing this package auto-registers the ``udp`` and ``mqtt``
 ``MetadataSink`` plugins. After ``import backbone.comms``,
-``metadata_sink_registry`` includes both ``"udp"`` and ``"mqtt"``.
+``metadata_sink_registry`` includes ``"udp"`` — and ``"mqtt"`` when paho-mqtt
+is installed. The mqtt import is DEFENSIVE: the light consumer surface
+(``schemas`` + ``zones``, e.g. a lean isicomms image or an exported module
+using only the wire contract) must import without the ``mqtt`` extra; a
+config that names the ``mqtt`` sink still fails loudly at registry lookup.
 
 Public API:
     * ``Publisher`` — fan-out from the pipeline to any number of sinks.
@@ -14,9 +18,14 @@ Public API:
     * ``parse_envelope`` — discriminating parser for consumer code.
 """
 
-from . import mqtt_sink as _mqtt_sink  # noqa: F401  — registers "mqtt"
 from . import udp_sink as _udp_sink  # noqa: F401  — registers "udp"
-from .mqtt_sink import MqttSink
+
+try:  # optional extra: paho-mqtt (see docstring)
+    from . import mqtt_sink as _mqtt_sink  # noqa: F401  — registers "mqtt"
+    from .mqtt_sink import MqttSink
+except ImportError:  # pragma: no cover — exercised by the wheel light-surface test
+    MqttSink = None  # type: ignore[assignment,misc]
+
 from .publisher import Publisher
 from .schemas import (
     SCHEMA_VERSION,
