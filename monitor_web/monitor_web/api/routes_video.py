@@ -288,11 +288,9 @@ def _draw_unified_tracks(frame, bounds, bus) -> None:
                     0.5, color, 1, cv2.LINE_AA)
 
 
-def _warp_detect_iter(frames: Iterator, cfg, camera_id: str, cam, M, out_wh, do_detect: bool,
+def _warp_detect_iter(frames: Iterator, cfg, camera_id: str, cam, M, out_wh,
                       is_running=None, bus=None, mode2: bool = False) -> Iterator:
     """Warp each frame to the bird's-eye floor view (M = S·H) at the auto-fit
-    output size ``out_wh`` (``do_detect`` is accepted for signature stability
-    but no longer runs inference — ONE perception; see below). It draws ON THE
     RECTIFIED frame and draw boxes, so detection continues over the warped view.
     Detector re-fetched per frame (cached) so a model swap applies live; falls
     back to the plain warp if no model is resolvable.
@@ -355,7 +353,7 @@ def _to_crop(d, x0: int, y0: int, ch: int, cw: int):
 
 
 def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
-                      infer_size: int = 320, is_running=None, get_dets=None,
+                      display_px: int = 320, is_running=None, get_dets=None,
                       polygon=None, hull_calib=None, calib_wh=None) -> Iterator:
     """Pure RENDERER for a zone panel — NO detection in the HTTP path. Crops each
     frame to the zone's bounding rect, draws the background worker's published
@@ -402,11 +400,11 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
                                   show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
                                   show_boxes=boxes_enabled(cfg), pose_detector=None,
                                   show_occupancy=False, mask_clip=stencil)
-        # Downscale to the panel display size (longest side = infer_size) for
+        # Downscale to the panel display size (longest side = display_px) for
         # bandwidth parity with the old fed-image stream.
         longest = max(ch, cw)
-        if longest > infer_size and longest > 0:
-            s = infer_size / float(longest)
+        if longest > display_px and longest > 0:
+            s = display_px / float(longest)
             crop = cv2.resize(crop, (max(1, round(cw * s)), max(1, round(ch * s))),
                               interpolation=cv2.INTER_AREA)
         yield crop
@@ -442,7 +440,6 @@ def build_zone_stream(state, patch_id: str) -> Iterator:
     frames = _frame_iter(camera_id, src_cfg)   # source-paced; no display cap
     return _zone_render_iter(
         frames, cfg, camera_id, rect, patch.get("frame_wh"),
-        infer_size=int(patch.get("infer_size") or 320),
         is_running=lambda: _backbone_running(state),
         get_dets=(lambda: manager.zone_dets(patch_id)) if manager is not None else None,
         polygon=patch.get("polygon"),
@@ -616,7 +613,7 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         mode2 = len(cameras) >= 2
         # Cap before the (expensive) warp+detect; raw passthrough below stays smooth.
         frames = _warp_detect_iter(frames,
-                                   cfg, camera_id, warp_cam, M, out_wh, do_detect=detect,
+                                   cfg, camera_id, warp_cam, M, out_wh,
                                    is_running=is_running,
                                    bus=getattr(state, "bus", None), mode2=mode2)
     elif detect:

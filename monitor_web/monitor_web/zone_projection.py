@@ -9,8 +9,9 @@ pixel-space ``zone_patches``, which the cam view no longer needs).
 
 isistream detects inside each zone's bounding-box CROP (a rectangle a bit larger
 than the polygon), so its observations can carry objects in the rectangular
-margin outside the zone shape. Clipping the display to the projected polygon is
-what enforces "no detections outside the zone".
+margin outside the zone shape. The METRIC membership test (clip_to_zones_metric
+/ zone_of_foot_metric, foot → floor → zones.yaml polygon ± tolerance) is what
+enforces "no detections outside the zone" — identically on every surface.
 """
 
 from __future__ import annotations
@@ -55,29 +56,6 @@ def scale_polygons(polys: list, sx: float, sy: float) -> list:
     """Scale calibration-frame polygons into another frame (e.g. the display)."""
     s = np.array([sx, sy], dtype=np.float64)
     return [(zid, name, poly * s) for zid, name, poly in polys]
-
-
-def zone_of_point(pt, polys) -> str | None:
-    """The id of the first zone whose polygon contains ``pt`` (or ``None``)."""
-    for zid, _name, poly in polys:
-        if len(poly) >= 3 and cv2.pointPolygonTest(
-                poly.astype(np.float32), (float(pt[0]), float(pt[1])), False) >= 0:
-            return zid
-    return None
-
-
-def clip_to_zones(dets: list, polys: list) -> list:
-    """Keep only detections whose FOOT point falls inside a zone polygon — a
-    zone-based cam view shows nothing outside the zones. The foot point is the
-    object's ground contact, so membership matches the metric floor zone. Each
-    surviving det is tagged with ``zone_id``. No zones ⇒ nothing shown."""
-    kept: list = []
-    for d in dets:
-        zid = zone_of_point(d.foot_uv, polys)
-        if zid is not None:
-            d.zone_id = zid
-            kept.append(d)
-    return kept
 
 
 def draw_zone_outlines(image: np.ndarray, polys: list, *, color=(0, 220, 255),

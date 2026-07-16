@@ -4,7 +4,7 @@
 // zone-state MQTT topics, `in_zone` subscriptions) — distinct from the
 // per-camera pixel zone-patches (zone_patch.js). Because they are stored in
 // floor metres, every zone automatically renders in BOTH camera views
-// (camera_zones.js + live_overlay.js) and on the 3D map, regardless of which
+// (server-drawn on the cam views) and on the 3D map, regardless of which
 // camera it was drawn from.
 //
 // Flow: Settings ▸ Zones ▸ "+ Draw floor zone on camera" → pick cam_a/cam_b
@@ -85,7 +85,7 @@ async function persist() {
       body: JSON.stringify({ cameras, zones }),
     });
     if (!post.ok) throw new Error(await post.text());
-    // Refresh every consumer: per-cam projections (camera_zones listens for
+    // Refresh every consumer: per-cam projections (server-side listeners for
     // config:saved), the 3D map's zone prisms, and the WS video subscriptions.
     document.dispatchEvent(new CustomEvent("config:saved"));
     window.__floor_map?.reloadZones?.();

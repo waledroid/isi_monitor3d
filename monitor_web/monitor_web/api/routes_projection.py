@@ -2,7 +2,7 @@
 
 Two POST endpoints back the dashboard's "draw zones on the camera image" UX
 (``draw_mode.js``) and the persistent zone overlay rendered on top of every
-CAM tab (``camera_zones.js``). Both go through the Backbone's own
+CAM tab (server-drawn overlays). Both go through the Backbone's own
 :mod:`backbone.shared.geometry` helpers + :class:`backbone.shared.camera_rig.CameraRig`
 so the math is identical to the production homography pipeline — no JS
 duplication of OpenCV.

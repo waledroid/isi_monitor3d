@@ -702,22 +702,6 @@ body.cam-drawing #cam_a-wrap, body.cam-drawing #cam_b-wrap {
   display: block;
 }
 .panel-zone.expanded .zone-patch-img { width: 100%; height: 100%; }
-/* Per-zone detection model picker, overlaid top-left on the patch. */
-.zone-model-select {
-  position: absolute;
-  top: 6px; left: 6px;
-  max-width: 65%;
-  font-size: 10px;
-  padding: 2px 5px;
-  color: #e2e8f0;
-  background: rgba(11, 14, 23, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 6px;
-  opacity: 0.65;
-  z-index: 3;
-}
-.zone-model-select:hover { opacity: 1; }
-
 .status-content .status-row {
   display: flex;
   justify-content: space-between;
@@ -1308,34 +1292,7 @@ button.btn-stop:hover {
   cursor: pointer;
   border-radius: 6px;
   min-width: 0;
-}
-
-/* SAHI toggle — checkbox + label text, vertically centred */
-.czr-sahi-toggle {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.czr-sahi-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  line-height: 1;
-}
-.czr-sahi-toggle input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--start-blue, #4f63ff);
-  cursor: pointer;
-}
-
-/* ── Info bar: monospace chips showing slice + polygon coords ── */
+}/* ── Info bar: monospace chips showing slice + polygon coords ── */
 .czr-info-bar {
   display: flex;
   flex-wrap: wrap;

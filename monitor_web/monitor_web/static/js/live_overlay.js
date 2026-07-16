@@ -1,13 +1,8 @@
-// Bbox overlay on the live camera <img> elements.
-//
-// The MJPEG <img> renders the raw frame; this canvas, layered on top, draws
-// (a) a small per-camera Track2D legend, and (b) the world-zone polygons
-// projected onto the camera's pixel space (S17). The projection uses the
-// camera's calibration via /api/project/floor-to-pixel; pixel coords come
-// back in source-frame coordinates, which we then map to displayed pixels
-// using the `object-fit: cover` formula.
+// Zone-patch overlay on the live camera <img> elements: the operator's dashed
+// ROI polygons + their cross-camera ghost outlines, mapped from source-frame
+// pixels to displayed pixels (object-fit: contain formula). Detections, masks
+// and floor-zone outlines are drawn SERVER-side into the frames themselves.
 
-import * as cameraZones from "/static/js/camera_zones.js";
 import { renderActiveCamPreview } from "/static/js/draw_mode.js";
 import { getGhosts, getPatches } from "/static/js/zone_patch.js";
 
@@ -15,22 +10,6 @@ const OVERLAYS = [
   { camId: "cam_a", canvasId: "cam_a-overlay", imgId: "cam_a-img" },
   { camId: "cam_b", canvasId: "cam_b-overlay", imgId: "cam_b-img" },
 ];
-
-function colorForClass(cls) {
-  switch (cls) {
-    case "person":   return "#ffd54f";
-    case "forklift": return "#ff7043";
-    case "pallet":   return "#4fc3f7";
-    default:         return "#ffffff";
-  }
-}
-
-function colorForZone(zone) {
-  const k = zone.kind || zone.type || "palette";
-  if (k === "danger")  return "#fca5a5";   // light red
-  if (k === "etagere") return "#86efac";   // light green
-  return "#9aa5b1";                         // palette — neutral
-}
 
 // Map source-frame pixel (u, v) → displayed pixel for an <img> rendered with
 // object-fit: contain. Image is scaled by min(displayW/natW, displayH/natH) and
@@ -58,54 +37,6 @@ function sourceToDisplay(box, su, sv, natW, natH) {
   const offsetX = (dw - renderedW) / 2;
   const offsetY = (dh - renderedH) / 2;
   return [su * scale + offsetX, sv * scale + offsetY];
-}
-
-function drawZones(ctx, box, camZones) {
-  if (!camZones || !camZones.imageSize || !Array.isArray(camZones.zones)) return;
-  const [natW, natH] = camZones.imageSize;
-  ctx.lineWidth = 2;
-  ctx.font = "11px monospace";
-  for (const z of camZones.zones) {
-    if (!Array.isArray(z.polygon) || z.polygon.length < 3) continue;
-    const color = colorForZone(z);
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color + "33";   // ~20% alpha
-    ctx.beginPath();
-    for (let i = 0; i < z.polygon.length; i++) {
-      const [su, sv] = z.polygon[i];
-      const [dx, dy] = sourceToDisplay(box, su, sv, natW, natH);
-      if (i === 0) ctx.moveTo(dx, dy); else ctx.lineTo(dx, dy);
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    // Label backdrop + text at the first vertex.
-    const [su0, sv0] = z.polygon[0];
-    const [lx, ly] = sourceToDisplay(box, su0, sv0, natW, natH);
-    const label = z.name || "";
-    const tw = ctx.measureText(label).width;
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fillRect(lx + 4, ly - 16, tw + 8, 14);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(label, lx + 8, ly - 5);
-  }
-}
-
-function drawTrackLegend(ctx, camId) {
-  ctx.fillStyle = "rgba(255,255,255,0.7)";
-  ctx.font = "12px monospace";
-  let row = 16;
-  for (const tr of window.__tracks.byId2D.values()) {
-    if (!tr.cameras_seeing || !tr.cameras_seeing.includes(camId)) continue;
-    ctx.fillStyle = colorForClass(tr.cls);
-    ctx.fillRect(8, row - 12, 12, 12);
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.fillText(
-      `#${tr.track_id} ${tr.cls} @ (${tr.xy_m[0].toFixed(2)}, ${tr.xy_m[1].toFixed(2)}) m`,
-      26, row,
-    );
-    row += 16;
-  }
 }
 
 // Pixel-space zone-patch ROIs — bold red POLYGONS (no calibration). The polygon is
@@ -209,17 +140,10 @@ function drawForCam(canvas, img, camId) {
   ctx.clearRect(0, 0, w, h);
   const box = { w, h };
 
-  // Projected FLOOR zones are deliberately NOT drawn on the cam views: floor
-  // zones are auto-derived from the zone patches (floor_zone_sync), so the
-  // projection duplicated every outline + name label right next to the patch
-  // the operator drew. The patch polygons below are the single zone layer;
-  // the floor geometry stays an engine-side concept (map + Backbone only).
-  // drawZones(ctx, box, cameraZones.get(camId));
+  // Server-side floor-zone outlines are the Settings 'Show floor zones'
+  // toggle (routes_video); this canvas draws only the operator's patch layer.
   drawZonePatches(ctx, box, img, camId);         // pixel-space red ROI watch boxes
   drawPatchGhosts(ctx, box, img, camId);         // cross-camera ghost outlines (Mode 2)
-  // Top-left per-track UDP readout disabled for now (to be surfaced elsewhere
-  // later). Re-enable by uncommenting; drawTrackLegend() is kept intact below.
-  // drawTrackLegend(ctx, camId);
   renderActiveCamPreview(camId);                 // keep calibration dots over the live frame
 }
 
