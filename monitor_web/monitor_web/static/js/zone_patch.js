@@ -143,18 +143,26 @@ function renderPanels() {
   // current zone set (a deleted/re-ordered zone must not keep streaming).
   if (VWS) panelStreamIds.forEach((id) => VWS.detach(id));
   panelStreamIds = [];
-  const slots = [
-    { body: "zone-1-body", badge: "zone-1-badge", fallback: "ZONE 1" },
-    { body: "zone-2-body", badge: "zone-2-badge", fallback: "ZONE 2" },
-    { body: "zone-3-body", badge: "zone-3-badge", fallback: "ZONE 3" },
-  ];
+  // Six slots (MAX_PATCHES). Slots 1-3 are always visible (empty ⇒ the
+  // "+ Add zone" placeholder); slots 4-6 appear only while a zone occupies
+  // them, and the grid flips to 3x2 beyond three zones.
+  const slots = Array.from({ length: MAX_PATCHES }, (_, i) => ({
+    body: `zone-${i + 1}-body`, badge: `zone-${i + 1}-badge`,
+    fallback: `ZONE ${i + 1}`,
+  }));
   const own = userPatches();   // twins never occupy ZONE panels
+  const container = document.getElementById("zones-container");
+  if (container) {
+    container.classList.toggle("zones-grid-6", own.length > 3);
+    container.classList.toggle("zones-grid-3", own.length <= 3);
+  }
   slots.forEach((slot, i) => {
     const body = document.getElementById(slot.body);
     const badge = document.getElementById(slot.badge);
     if (!body) return;
     const panel = body.closest(".panel");          // for the synced (light-green) state
     const p = own[i];
+    if (panel && i >= 3) panel.style.display = p ? "" : "none";
     if (!p) {
       body.innerHTML =
         '<button type="button" class="zone-add" title="Draw a new zone on the camera">' +

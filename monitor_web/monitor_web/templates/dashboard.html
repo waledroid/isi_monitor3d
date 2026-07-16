@@ -182,61 +182,31 @@
 
   <div id="zones-container" class="zones-grid zones-grid-3" x-data
        :class="{ 'tall-hidden': $store.bigPanel.tallPanel === 'big',
-                 'has-tall-zone': ['zone1','zone2','zone3'].includes($store.bigPanel.tallPanel) }">
+                 'has-tall-zone': ['zone1','zone2','zone3','zone4','zone5','zone6'].includes($store.bigPanel.tallPanel) }">
+    {# Six zone panel slots (MAX_PATCHES). Slots 4-6 start hidden; zone_patch.js
+       shows a slot when a zone occupies it and flips the grid to zones-grid-6
+       (3x2) beyond three zones. #}
+    {% for n in range(1, 7) %}
     <section class="panel panel-zone"
-             :class="{ tall: $store.bigPanel.tallPanel === 'zone1',
-                       'tall-hidden': ['zone2','zone3'].includes($store.bigPanel.tallPanel) }">
-      <div class="panel-body zone-placeholder" id="zone-1-body">
+             {% if n > 3 %}style="display: none"{% endif %}
+             :class="{ tall: $store.bigPanel.tallPanel === 'zone{{ n }}',
+                       'tall-hidden': [{% for m in range(1, 7) if m != n %}'zone{{ m }}'{{ ", " if not loop.last }}{% endfor %}].includes($store.bigPanel.tallPanel) }">
+      <div class="panel-body zone-placeholder" id="zone-{{ n }}-body">
         <div class="zone-empty">
           <span data-i18n="no_zone">{{ t.no_zone or 'Aucune zone définie' }}</span>
         </div>
       </div>
       <!-- <> tall toggle: this zone fills the LEFT COLUMN (big panel + other zones hide). -->
       <button class="glass-btn btn-icon panel-expand-btn" aria-label="Expand zone"
-              :title="$store.bigPanel.tallPanel === 'zone1' ? 'Collapse' : 'Expand (full column)'"
-              :aria-pressed="$store.bigPanel.tallPanel === 'zone1'"
-              @click="$store.bigPanel.toggleTall('zone1')">
+              :title="$store.bigPanel.tallPanel === 'zone{{ n }}' ? 'Collapse' : 'Expand (full column)'"
+              :aria-pressed="$store.bigPanel.tallPanel === 'zone{{ n }}'"
+              @click="$store.bigPanel.toggleTall('zone{{ n }}')">
         <svg class="icon-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
         <svg class="icon-collapse" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
       </button>
-      <div class="panel-badge zone-badge" id="zone-1-badge">ZONE 1</div>
+      <div class="panel-badge zone-badge" id="zone-{{ n }}-badge">ZONE {{ n }}</div>
     </section>
-
-    <section class="panel panel-zone"
-             :class="{ tall: $store.bigPanel.tallPanel === 'zone2',
-                       'tall-hidden': ['zone1','zone3'].includes($store.bigPanel.tallPanel) }">
-      <div class="panel-body zone-placeholder" id="zone-2-body">
-        <div class="zone-empty">
-          <span data-i18n="no_zone">{{ t.no_zone or 'Aucune zone définie' }}</span>
-        </div>
-      </div>
-      <button class="glass-btn btn-icon panel-expand-btn" aria-label="Expand zone"
-              :title="$store.bigPanel.tallPanel === 'zone2' ? 'Collapse' : 'Expand (full column)'"
-              :aria-pressed="$store.bigPanel.tallPanel === 'zone2'"
-              @click="$store.bigPanel.toggleTall('zone2')">
-        <svg class="icon-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
-        <svg class="icon-collapse" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
-      </button>
-      <div class="panel-badge zone-badge" id="zone-2-badge">ZONE 2</div>
-    </section>
-
-    <section class="panel panel-zone"
-             :class="{ tall: $store.bigPanel.tallPanel === 'zone3',
-                       'tall-hidden': ['zone1','zone2'].includes($store.bigPanel.tallPanel) }">
-      <div class="panel-body zone-placeholder" id="zone-3-body">
-        <div class="zone-empty">
-          <span data-i18n="no_zone">{{ t.no_zone or 'Aucune zone définie' }}</span>
-        </div>
-      </div>
-      <button class="glass-btn btn-icon panel-expand-btn" aria-label="Expand zone"
-              :title="$store.bigPanel.tallPanel === 'zone3' ? 'Collapse' : 'Expand (full column)'"
-              :aria-pressed="$store.bigPanel.tallPanel === 'zone3'"
-              @click="$store.bigPanel.toggleTall('zone3')">
-        <svg class="icon-expand" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>
-        <svg class="icon-collapse" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4"/><path d="m19 8-4 4 4 4"/></svg>
-      </button>
-      <div class="panel-badge zone-badge" id="zone-3-badge">ZONE 3</div>
-    </section>
+    {% endfor %}
   </div>
   </div>
 
