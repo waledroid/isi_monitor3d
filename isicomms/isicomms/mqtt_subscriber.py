@@ -86,6 +86,7 @@ class MqttSubscriber:
         username: str | None = None,
         password: str | None = None,
         passings_buffer: int = 200,
+        recent_buffer: int = 300,
     ) -> None:
         self._host = host
         self._port = port
@@ -100,6 +101,9 @@ class MqttSubscriber:
         self._nodes: dict[str, NodeState] = {}
         self._lock = threading.Lock()
         self._stats = _Stats()
+        # Raw tail for the /ui probe: EVERY arriving message (topic + payload,
+        # malformed included — that is the point of a probe), newest last.
+        self._recent: deque = deque(maxlen=max(1, int(recent_buffer)))
 
         self._client: mqtt.Client | None = None
         self._started = False
@@ -195,6 +199,13 @@ class MqttSubscriber:
         m: mqtt.MQTTMessage,
     ) -> None:
         topic: str = m.topic
+        with self._lock:
+            self._recent.append({
+                "ts": time.time(),
+                "topic": topic,
+                "payload": m.payload.decode("utf-8", errors="replace"),
+                "bytes": len(m.payload),
+            })
         parsed = self._parse_topic(topic)
         if parsed is None:
             with self._lock:
@@ -315,6 +326,12 @@ class MqttSubscriber:
         if node is None:
             return False
         return (now - node.last_seen) <= stale_after
+
+    def recent(self, limit: int = 100) -> list[dict]:
+        """The last ``limit`` raw messages (topic/ts/payload), newest last."""
+        with self._lock:
+            msgs = list(self._recent)
+        return msgs[-max(1, int(limit)):]
 
     def stats(self) -> dict[str, int]:
         """Return a copy of the ingestion counters."""

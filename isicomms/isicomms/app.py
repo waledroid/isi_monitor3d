@@ -14,6 +14,7 @@ from .api import (
     routes_nodes,
     routes_passings,
     routes_tracks,
+    routes_ui,
     routes_zones,
 )
 from .config import API_VERSION, Settings
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         username=cfg.mqtt_username,
         password=cfg.mqtt_password,
         passings_buffer=cfg.passings_buffer,
+        recent_buffer=cfg.recent_buffer,
     )
 
     @asynccontextmanager
@@ -77,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         routes_passings.router,
         routes_zones.router,
         routes_config.router,
+        routes_ui.router,          # /recent — the raw tail + ingest counters
     )
     version_prefix = f"/{API_VERSION}"
     for r in _resource_routers:
@@ -86,5 +89,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # /healthz stays available un-prefixed (and also under /v1).
     app.include_router(routes_health.router)
     app.include_router(routes_health.router, prefix=version_prefix)
+
+    # The probe page (/ui) — token-free SHELL, bare path only; its JS calls
+    # the token-protected data endpoints above.
+    app.include_router(routes_ui.page_router)
 
     return app

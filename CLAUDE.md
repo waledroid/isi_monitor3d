@@ -34,7 +34,8 @@ self-contained copy-portable folder via `scripts/export_module.sh <module>
 <dest>` — see `docs/REUSE.md` for the detachability map, recipes, and the two
 wire contracts. The shared core travels as a wheel built at export time;
 isicomms' REST/MQTT surface and `ISI_GATEWAY_*` env prefix are frozen
-interface.
+interface. isicomms serves a live probe UI at `:8080/ui` (tables + raw MQTT
+tail, token-aware) and Swagger at `/docs`.
 
 ## Commands
 

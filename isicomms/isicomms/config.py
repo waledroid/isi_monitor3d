@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     # Aggregation tunables.
     node_stale_after_s: float = 15.0
     passings_buffer: int = 200
+    # Raw-message ring buffer behind /recent and the /ui probe tail.
+    recent_buffer: int = 300
 
     # Optional bearer-token auth (None = open).
     api_token: str | None = Field(

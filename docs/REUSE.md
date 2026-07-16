@@ -28,7 +28,9 @@ The single source of truth stays in `backbone/`.
   contract between the metric engine and its consumers. isistream publishes
   `DetectionSetMessage`s to the engine; the engine publishes tracks/zone
   state/observations on the bus.
-- **isicomms (MQTT in, REST out)** — any producer publishing the versioned
+- **isicomms (MQTT in, REST out)** — a live probe UI ships at
+  ``http://<host>:8080/ui`` (nodes / zones / tracks / passings + a raw MQTT
+  tail; Swagger at ``/docs``) — any producer publishing the versioned
   MQTT JSON messages (SCHEMA_VERSION 6: zone_state, tracks, passings,
   diagnostics, config) feeds the gateway; consumers poll `GET /nodes`,
   `/zones`, … with a Bearer token. Ports, paths, and the `ISI_GATEWAY_*` env
