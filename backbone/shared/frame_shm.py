@@ -58,6 +58,12 @@ def _layout(w: int, h: int, c: int) -> tuple[int, int, int]:
 class FrameShmWriter:
     """Publish the latest frame for one camera. Single writer per camera."""
 
+    # Every N writes, verify the bus file still exists (self-heal): another
+    # instance's shutdown unlink — or an operator rm — otherwise leaves this
+    # writer publishing into a nameless inode forever while readers see
+    # 'absent' and the camera hub falls back to a duplicate RTSP session.
+    _RECHECK_EVERY = 128
+
     def __init__(self, camera_id: str, directory: str | None = None) -> None:
         self._path = shm_path(camera_id, directory)
         self._camera_id = camera_id
@@ -65,10 +71,18 @@ class FrameShmWriter:
         self._dims: tuple[int, int, int] | None = None
         self._latest = 0
         self._seq = 0
+        self._ino: int | None = None
+        self._writes = 0
 
     def write(self, image: np.ndarray, capture_ts: float) -> None:
         h, w = image.shape[:2]
         c = 1 if image.ndim == 2 else image.shape[2]
+        self._writes += 1
+        if (self._mm is not None and self._writes % self._RECHECK_EVERY == 0
+                and not os.path.exists(self._path)):
+            logger.warning("frame bus: %s vanished under us — recreating",
+                           self._path)
+            self.close()
         if self._mm is None or self._dims != (w, h, c):
             self._create(w, h, c)
         assert self._mm is not None
@@ -95,10 +109,17 @@ class FrameShmWriter:
 
     def unlink(self) -> None:
         """Remove the bus file (on deliberate shutdown, so readers see
-        'absent' instantly instead of waiting out the staleness window)."""
+        'absent' instantly instead of waiting out the staleness window).
+
+        INODE-GUARDED: only unlink while the path still refers to the file
+        THIS writer created. An overlapping restart (old instance's cleanup
+        racing the new instance's startup) otherwise deletes the successor's
+        live bus — the successor keeps writing a nameless inode and every
+        reader sees 'absent' until the next resolution change."""
         self.close()
         try:
-            os.unlink(self._path)
+            if self._ino is not None and os.stat(self._path).st_ino == self._ino:
+                os.unlink(self._path)
         except OSError:
             pass
 
@@ -111,6 +132,7 @@ class FrameShmWriter:
         try:
             os.ftruncate(fd, total)
             self._mm = mmap.mmap(fd, total)
+            self._ino = os.fstat(fd).st_ino
         finally:
             os.close(fd)
         self._dims = (w, h, c)

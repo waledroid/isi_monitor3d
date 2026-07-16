@@ -79,6 +79,7 @@ def main() -> None:
     # next keyframe naturally (relay clients gate on keyframes anyway).
     video_passthrough = bool(isis_cfg.get("video_passthrough", True))
     relays: dict = {}
+    bus_writers: dict = {}   # cam_id → FrameShmWriter (guarded main-thread unlink)
 
     def pump(cam_id: str, src_cfg_full: dict, *, feed_detect: bool = True,
              feed_bus: bool = True) -> None:
@@ -98,6 +99,8 @@ def main() -> None:
         # one ingest, one decode, DeepStream-style fan-out.
         from backbone.shared.frame_shm import FrameShmWriter
         bus_writer = FrameShmWriter(cam_id) if feed_bus else None
+        if bus_writer is not None:
+            bus_writers[cam_id] = bus_writer
         # Bitstream tap: DISPLAY pump only (feed_bus), rtsp plugin only (raw
         # sources — v4l2/replay — have no compressed bitstream to tee). The
         # NalRelay is created lazily on the first tapped AU because the codec
@@ -216,11 +219,14 @@ def main() -> None:
         # Unlink the frame bus from the MAIN thread — the daemon pumps never
         # reach their own cleanup on interpreter exit, and readers should see
         # 'absent' instantly instead of waiting out the staleness window.
-        from backbone.shared.frame_shm import shm_path
-        for cam_id in cfg["cameras"]:
+        # Through the WRITER's inode-guarded unlink, never a raw os.unlink:
+        # an overlapping restart otherwise deletes the SUCCESSOR instance's
+        # live bus and its readers see 'absent' forever (the double-RTSP
+        # fallback observed on the rig).
+        for writer in bus_writers.values():
             try:
-                os.unlink(shm_path(cam_id))
-            except OSError:
+                writer.unlink()
+            except Exception:
                 pass
         # Same deal for the NAL relays: close from the MAIN thread so the
         # unix-socket paths are unlinked on deliberate shutdown.

@@ -355,3 +355,26 @@ def test_near_square_crop_stays_untiled() -> None:
     out = det.detect(_pair({"cam_a": np.zeros((1000, 1000, 3), np.uint8)}))
     assert inner.fed_shapes == [(300, 300)]
     assert len(out["cam_a"]) == 1
+
+
+def test_tiled_masks_keep_their_tile_offset() -> None:
+    """A tiled crop's masks must anchor at each TILE's frame position — the
+    remap used to overwrite the tile offset with the zone-crop origin,
+    displacing every tiled mask by up to the crop height (the 'boxes but no
+    masks' bug: masks landed outside the stencil and vanished)."""
+    inner = _CountingDetector()
+    boxes = {"cam_b": [("Z1", (100, 0, 324, 720))]}         # 224x720 strip → tiles
+    det = ZoneScopedDetector(inner, boxes, {"cam_b": (1280, 720)})
+    out = det.detect(_pair({"cam_b": np.zeros((720, 1280, 3), np.uint8)}))
+    dets = out["cam_b"]
+    assert len(dets) >= 2, "strip did not tile"
+    for d in dets:
+        # The echo mask fills its tile, so the mask's frame anchor must equal
+        # the det's own bbox origin (its tile position), NOT (100, 0).
+        assert d.mask is not None
+        assert d.mask_offset_xy == (int(d.bbox_xyxy[0]), int(d.bbox_xyxy[1])), (
+            f"mask anchored at {d.mask_offset_xy}, tile at "
+            f"({d.bbox_xyxy[0]:.0f},{d.bbox_xyxy[1]:.0f})")
+    # sanity: at least one tile is NOT at the crop origin, so the assertion
+    # actually distinguishes composed offsets from the overwrite bug.
+    assert any(d.mask_offset_xy != (100, 0) for d in dets)

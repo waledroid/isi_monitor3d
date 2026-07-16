@@ -274,8 +274,13 @@ class ZoneScopedDetector:
                     # Keep the mask CROP-RELATIVE + record the crop origin —
                     # tiny memory, and downstream (occupancy area, the wire's
                     # mask→polygon) handles the offset. Never allocate a
-                    # full-frame canvas per detection.
-                    d.mask_offset_xy = (ox, oy)
+                    # full-frame canvas per detection. COMPOSE with any tile
+                    # offset already on the det (shift_detection stored the
+                    # mask's tile position within the zone crop) — overwriting
+                    # it anchored every tiled mask at the crop origin, up to a
+                    # crop-height away from the object ('boxes but no masks').
+                    tx, ty = getattr(d, "mask_offset_xy", None) or (0, 0)
+                    d.mask_offset_xy = (ox + tx, oy + ty)
                 out[cam_id].append(d)
         return out
 

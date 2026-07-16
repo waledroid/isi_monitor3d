@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 
 import numpy as np
@@ -127,3 +128,58 @@ def test_peek_ts_is_cheap_and_matches_latest(tmp_path):
     assert r.peek_ts() == ts + 0.04
     w.close()
     r.close()
+
+
+# ---- overlapping-restart unlink race ----------------------------------------
+
+
+def test_old_writers_unlink_spares_the_successors_bus(tmp_path, monkeypatch):
+    """An old instance's shutdown unlink must NOT remove the file a NEW
+    instance already (re)created — the successor would keep publishing into a
+    nameless inode while every reader sees 'absent' (the double-RTSP
+    fallback observed on the rig)."""
+    monkeypatch.setenv("ISI3D_SHM_DIR", str(tmp_path))
+    img = np.zeros((8, 8, 3), dtype=np.uint8)
+    old = FrameShmWriter("cam_x")
+    old.write(img, time.time())
+    # Successor starts: recreates the path (new inode via unlink+create is not
+    # guaranteed — simulate the racy case where the path was removed and the
+    # successor made a genuinely new file).
+    os.unlink(shm_path("cam_x"))
+    new = FrameShmWriter("cam_x")
+    ts2 = time.time()
+    new.write(img, ts2)
+    old.unlink()                    # old instance's late cleanup fires
+    assert os.path.exists(shm_path("cam_x")), \
+        "old writer's unlink deleted the successor's live bus"
+    r = FrameShmReader("cam_x", max_age_s=1e9)
+    got = r.latest()
+    assert got is not None and got[1] == ts2
+
+
+def test_writer_self_heals_after_external_unlink(tmp_path, monkeypatch):
+    """If the bus file vanishes (racing cleanup, operator rm), the writer
+    recreates it within _RECHECK_EVERY writes instead of publishing into a
+    nameless inode forever."""
+    monkeypatch.setenv("ISI3D_SHM_DIR", str(tmp_path))
+    img = np.zeros((8, 8, 3), dtype=np.uint8)
+    w = FrameShmWriter("cam_y")
+    w.write(img, time.time())
+    os.unlink(shm_path("cam_y"))
+    last = 0.0
+    for _ in range(FrameShmWriter._RECHECK_EVERY + 1):
+        last = time.time()
+        w.write(img, last)
+    assert os.path.exists(shm_path("cam_y")), "writer never recreated the bus"
+    got = FrameShmReader("cam_y", max_age_s=1e9).latest()
+    assert got is not None and got[1] == last
+
+
+def test_unlink_still_removes_own_file(tmp_path, monkeypatch):
+    """The normal shutdown path keeps its behavior: the owner's unlink removes
+    the bus so readers see 'absent' instantly."""
+    monkeypatch.setenv("ISI3D_SHM_DIR", str(tmp_path))
+    w = FrameShmWriter("cam_z")
+    w.write(np.zeros((8, 8, 3), dtype=np.uint8), time.time())
+    w.unlink()
+    assert not os.path.exists(shm_path("cam_z"))
