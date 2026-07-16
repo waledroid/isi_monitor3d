@@ -20,7 +20,7 @@ services:
       - ./passwd:/mosquitto/config/passwd:ro
       - mosquitto_data:/mosquitto/data
     ports:
-      - "8883:8883"        # MQTTS (TLS)
+      - "${ISICOMMS_MQTTS_PORT:-8883}:8883"   # MQTTS (TLS, host port overridable)
 
   gateway:
     build:
@@ -52,7 +52,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     ports:
-      - "443:443"          # HTTPS (API for AGVs / WMS)
+      - "${ISICOMMS_HTTPS_PORT:-443}:443"     # HTTPS (API + /ui, host port overridable)
     depends_on:
       - gateway
 

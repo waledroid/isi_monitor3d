@@ -1,6 +1,14 @@
 # On-prem (LAN) profile — plaintext, anonymous, trusted network.
-# Run:  docker compose -f deploy/onprem/docker-compose.yml up -d --build
-# Broker on :1883, polling API on http://<host>:8080.
+# Run:  docker compose -f docker-compose.yml up -d --build
+# Broker on :1883, polling API + probe UI on http://<host>:8080/ui.
+#
+# HOST PORTS are overridable — either inline:
+#   ISICOMMS_GATEWAY_PORT=9090 ISICOMMS_MQTT_PORT=11883 docker compose up -d
+# or via a .env file next to this compose file:
+#   ISICOMMS_GATEWAY_PORT=9090
+#   ISICOMMS_MQTT_PORT=11883
+# (Container-internal ports stay 8080/1883; only the host side moves. If
+# monitor_web's gateway proxy is configured, update its gateway_url to match.)
 #
 # Each warehouse-PC Backbone points its mqtt sink at this broker
 # (host = this server, prefix = isiMonitor3D/v1/<node_id>); the gateway aggregates them.
@@ -17,7 +25,7 @@ services:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto_data:/mosquitto/data
     ports:
-      - "1883:1883"        # MQTT plaintext
+      - "${ISICOMMS_MQTT_PORT:-1883}:1883"      # MQTT plaintext (host port overridable)
 
   gateway:
     build:
@@ -31,7 +39,7 @@ services:
       # ISI_GATEWAY_API_TOKEN: "change-me"     # require Bearer auth on the API
       # ISI_GATEWAY_MQTT_TLS: "true"           # + _MQTT_USERNAME / _MQTT_PASSWORD
     ports:
-      - "8080:8080"        # polling REST API (AGVs / WMS pull here)
+      - "${ISICOMMS_GATEWAY_PORT:-8080}:8080"   # REST API + /ui (host port overridable)
     depends_on:
       - mosquitto
 
