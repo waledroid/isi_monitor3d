@@ -19,7 +19,8 @@ UI_HTML = r"""<!doctype html>
 *{box-sizing:border-box;margin:0}
 html{scrollbar-color:rgba(255,255,255,.15) transparent}
 body{background:var(--bg);color:var(--text);
-  font:14px/1.45 "Segoe UI",system-ui,sans-serif;padding:18px 22px;min-height:100vh;
+  font:14px/1.45 "Segoe UI",system-ui,sans-serif;padding:24px 56px;min-height:100vh;
+  max-width:1900px;margin:0 auto;
   background-image:radial-gradient(ellipse at 20% -10%,rgba(79,195,247,.07),transparent 55%),
                    radial-gradient(ellipse at 90% 110%,rgba(46,213,115,.05),transparent 50%);
   background-attachment:fixed}
