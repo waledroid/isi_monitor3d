@@ -27,9 +27,12 @@ carrying their crop origin in ``Detection.mask_offset_xy`` — mask area
 consumers are offset-agnostic and the observations publisher polygonizes
 them into frame coordinates for the wire.
 
-Overlapping zones: a detection inside two overlapping crops is reported twice
-(one per zone crop). Zones are physically disjoint in every deployment so no
-dedup pass is spent on it; if that changes, dedupe here — not downstream.
+Overlapping CROPS: zones are physically disjoint, but their crops are NOT —
+the z=0..2m extrusion makes neighbouring zones' crop rects overlap heavily,
+so one physical object is detected once per crop (per-crop NMS cannot see
+across crops; the cam view drew two boxes on one palette). ``detect()``
+therefore dedups each camera's remapped detections: same class + the
+tile-merge same-object test, highest confidence wins.
 """
 
 from __future__ import annotations
@@ -98,6 +101,23 @@ def _project_world3(world3, K, D, R, t, image_size_wh) -> np.ndarray:
                                    np.asarray(D, dtype=np.float64))
         out[near] = duv.reshape(-1, 2)
     return out
+
+
+def _dedup_across_crops(dets: list[Detection]) -> list[Detection]:
+    """One detection per physical object per camera: drop same-class
+    duplicates from overlapping zone crops (see the module docstring),
+    keeping the highest-confidence one — its box/mask/zone tag ride along."""
+    if len(dets) < 2:
+        return dets
+    from backbone.detection.tiling import _same_object
+    order = sorted(dets, key=lambda d: -float(d.confidence))
+    kept: list[Detection] = []
+    for d in order:
+        if any(str(k.cls) == str(d.cls)
+               and _same_object(k.bbox_xyxy, d.bbox_xyxy, 0.5) for k in kept):
+            continue
+        kept.append(d)
+    return kept
 
 
 def zone_crop_boxes(
@@ -282,6 +302,8 @@ class ZoneScopedDetector:
                     tx, ty = getattr(d, "mask_offset_xy", None) or (0, 0)
                     d.mask_offset_xy = (ox + tx, oy + ty)
                 out[cam_id].append(d)
+        for cam_id, dets in out.items():
+            out[cam_id] = _dedup_across_crops(dets)
         return out
 
     # ---- internals ----

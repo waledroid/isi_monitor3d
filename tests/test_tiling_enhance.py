@@ -92,7 +92,10 @@ def _pair(n_px=400):
 
 
 def _boxes(n):
-    return {"cam_a": [(f"Z{i}", (0, 0, 100, 100)) for i in range(n)]}
+    # Spatially DISJOINT crops: identical boxes would (correctly) collapse to
+    # one detection under the cross-crop dedup, and these tests are about
+    # batching/padding, not dedup.
+    return {"cam_a": [(f"Z{i}", (i * 110, 0, i * 110 + 100, 100)) for i in range(n)]}
 
 
 def test_batch_is_padded_to_a_bucket_and_padding_never_leaks():

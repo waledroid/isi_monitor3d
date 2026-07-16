@@ -378,3 +378,28 @@ def test_tiled_masks_keep_their_tile_offset() -> None:
     # sanity: at least one tile is NOT at the crop origin, so the assertion
     # actually distinguishes composed offsets from the overwrite bug.
     assert any(d.mask_offset_xy != (100, 0) for d in dets)
+
+
+def test_same_object_in_two_overlapping_crops_reported_once() -> None:
+    """Two zones' CROPS overlap heavily (the z=0..2m extrusion), so one
+    physical object is detected once per crop — per-crop NMS can't see across
+    crops, and the cam view drew TWO boxes on one palette. zone_scope dedups
+    across a camera's crops after the remap: same class + same-object test,
+    highest confidence wins."""
+    inner = _EchoDetector()
+    boxes = {"cam_a": [("Z2", (100, 200, 400, 500)),
+                       ("Z3", (150, 250, 450, 550))]}     # heavily overlapping
+    det = ZoneScopedDetector(inner, boxes, {"cam_a": (1000, 1000)})
+    out = det.detect(_pair({"cam_a": np.zeros((1000, 1000, 3), np.uint8)}))
+    assert len(out["cam_a"]) == 1, (
+        f"one object in two overlapping crops must dedup to one detection, "
+        f"got {[d.bbox_xyxy for d in out['cam_a']]}")
+
+
+def test_distinct_objects_in_separate_zones_both_survive() -> None:
+    inner = _EchoDetector()
+    boxes = {"cam_a": [("Z1", (50, 50, 200, 200)),
+                       ("Z2", (600, 600, 800, 800))]}     # disjoint crops
+    det = ZoneScopedDetector(inner, boxes, {"cam_a": (1000, 1000)})
+    out = det.detect(_pair({"cam_a": np.zeros((1000, 1000, 3), np.uint8)}))
+    assert len(out["cam_a"]) == 2
