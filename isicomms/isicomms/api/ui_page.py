@@ -8,7 +8,7 @@ UI_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>isicomms · live probe</title>
+<title>isicomms</title>
 <style>
 :root{
   --bg:#07080c; --text:#fff; --muted:#94a3b8;
@@ -26,8 +26,10 @@ body{background:var(--bg);color:var(--text);
 header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:24px}
 h1{font-size:17px;font-weight:600;letter-spacing:.4px}
 h1 b{color:var(--accent)}
-.dot{width:10px;height:10px;border-radius:50%;background:var(--bad);display:inline-block}
+.dot{width:11px;height:11px;border-radius:50%;background:var(--bad);
+  display:inline-block;margin-left:4px;flex:0 0 auto}
 .dot.ok{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.dot.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}
 .stats{color:var(--muted);font-size:12px}
 .stats b{color:var(--text)}
 #tok{margin-left:auto;background:var(--glass);border:1px solid var(--border);
@@ -78,12 +80,13 @@ label.pause{font-size:12px;color:var(--muted);margin-left:auto;font-weight:400;
 </head>
 <body>
 <header>
-  <span id="health" class="dot" title="gateway health"></span>
-  <h1><b>isicomms</b> · live probe</h1>
+  <h1><b>isicomms</b></h1>
   <span class="stats">received <b id="s-rx">–</b> ·
     dropped <b id="s-drop">–</b> · <span id="s-note" class="mut"></span></span>
   <input id="tok" type="password" placeholder="API token (if required)"
          autocomplete="off">
+  <span id="health" class="dot"
+        title="green: backbone data flowing · amber: connected, nothing coming · red: gateway down"></span>
 </header>
 
 <div class="layout">
@@ -260,7 +263,8 @@ async function tick(){
   const [h,nodes,zones,tracks,pass,tail]=await Promise.all([
     j("/healthz"),j("/nodes"),j("/zones"),j("/tracks"),
     j("/passings?limit=20"),j("/recent?limit=80")]);
-  $("health").className="dot"+(h&&h.ok?" ok":"");
+  const alive=!!(nodes&&(nodes.nodes||[]).some(n=>n.status==="alive"));
+  $("health").className="dot"+(h&&h.ok?(alive?" ok":" warn"):"");
   renderNodes(nodes);renderZones(zones);renderTracks(tracks);
   renderPassings(pass);renderTail(tail);
   if(tail&&tail.topics)renderTree(tail.topics);
