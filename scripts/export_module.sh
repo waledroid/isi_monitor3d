@@ -127,11 +127,16 @@ EOF
 
 isigen)
   rsync -a --exclude ".venv*" --exclude "__pycache__" --exclude "runs/" \
+        --exclude "*.safetensors" --exclude "*.ckpt" \
         "$REPO/trainer/isiGen/" "$DEST/"
   ;;
 
 isidet)
+  # Code + configs only: datasets, trained runs, and checkpoint weights are
+  # project-specific artifacts (and GBs) — a detached trainer starts clean.
   rsync -a --exclude "__pycache__" --exclude "runs/" --exclude "mytest_*" \
+        --exclude "data/" --exclude "logs/" --exclude "models/" \
+        --exclude "*.pt" --exclude "*.onnx" \
         "$REPO/trainer/isidet/" "$DEST/"
   ;;
 
