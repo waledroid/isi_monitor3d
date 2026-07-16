@@ -26,6 +26,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Backbone v1 is feature-complete.** What remains is on-site validation with a real Hikvision rig (calibrate via `calibrate-all` for Mode 2 or `calibrate single-cam` for Mode 1, swap the synthetic stub ONNX for a trained `yolo11n.onnx`, verify the KPIs end-to-end), Isitec-specific training that produces the production `.onnx`, and the deferred S5.5 pose-mode extension. The Jetson Orin NX port is out of v1 scope and requires no code changes — the `.onnx` and Python are portable, only the conda env's `onnxruntime` variant differs.
 
+## Module reuse
+
+Every module app (isical, isistream, isiGen, isidet, **isicomms** = the MQTT
+broker + gateway unit, formerly `isi_gateway/` + `deploy/`) exports to a
+self-contained copy-portable folder via `scripts/export_module.sh <module>
+<dest>` — see `docs/REUSE.md` for the detachability map, recipes, and the two
+wire contracts. The shared core travels as a wheel built at export time;
+isicomms' REST/MQTT surface and `ISI_GATEWAY_*` env prefix are frozen
+interface.
+
 ## Commands
 
 ```bash

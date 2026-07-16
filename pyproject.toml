@@ -47,6 +47,11 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["backbone*", "calibration*", "isistream*"]
 
+[tool.setuptools.package-data]
+# The Multical venv bootstrap must ship in the wheel so a pip-installed
+# calibration/ (e.g. an exported isical folder) can still create .venv-multical.
+calibration = ["setup_multical.sh"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
