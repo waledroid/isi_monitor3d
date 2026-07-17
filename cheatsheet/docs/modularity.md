@@ -52,15 +52,15 @@ Shared core travels as a **wheel** built at export time — nothing vendored:
 scripts/export_module.sh <isical|isistream|isigen|isidet|isicomms> <dest-dir> [onprem|cloud]
 ```
 
-### Detachability map
+### How to launch each module
 
-| Module | Coupling | Export | Launch |
-|---|---|---|---|
-| **isiGen** | none | folder copy | `./launch.sh` → :8200 |
-| **isidet** | none | folder copy + `isi-train.yml` | `conda env create` → train scripts |
-| **isical** | `calibration/` + backbone shared (in wheel) | source + wheel + `setup_multical.sh` | `./launch.sh` → :8300 |
-| **isistream** | inside the wheel by design | launcher + wheel (no source copy) | GStreamer → `./launch.sh --config config.yaml` |
-| **isicomms** | light backbone surface only | compose stack + wheels + `Dockerfile.portable` | `docker compose up -d` |
+| Module | In this repo (dev) | From an exported copy |
+|---|---|---|
+| **isical** (calibration studio, :8300) | `conda activate monitor3d && python -m isical` | `cd isical-portable && ./launch.sh` |
+| **isistream** (perception producer) | dashboard **START** (or `python -m isistream --config config/backbone.yaml`) | `cd isistream-portable && cp config.example.yaml config.yaml` → fill cameras/model → `./launch.sh --config config.yaml` — needs system GStreamer |
+| **isiGen** (synthetic-data studio, :8200) | `cd trainer/isiGen && ./launch.sh` | same — `./launch.sh` (plain copy) |
+| **isidet** (trainer) | `conda activate isi-train && cd trainer/isidet && python scripts/run_train.py --config configs/train_pallet.yaml` | same, after `conda env create -f isi-train.yml` |
+| **isicomms** (broker + gateway, :1883/:8080 + `/ui`) | `docker compose -p on-prem -f isicomms/deploy/onprem/docker-compose.yml up -d` (or bare: `python -m isicomms`) | `cd isicomms-portable && docker compose up -d` (cloud: `./gen-certs.sh` → `.env` first) |
 
 !!! note
     isistream is only reusable as wheel+launcher. Wheels never committed; re-run the exporter to refresh.
