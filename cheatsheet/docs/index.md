@@ -6,37 +6,7 @@
 
 **HOW** — Direction-1 split: two processes joined by a UDP loopback contract.
 
-```mermaid
-flowchart TD
-  subgraph cams[Cameras]
-    direction LR
-    A[cam_a RTSP H.264]
-    B[cam_b RTSP H.265]
-  end
-  subgraph isistream[isistream — perception producer]
-    direction LR
-    CAP[capture + decode] --> ZS[zone-scoped detect seg + global pose]
-  end
-  subgraph engine[backbone.runtime — metric engine, no CUDA]
-    direction LR
-    SY[FrameSynchronizer] --> HG[homography: foot→floor → fusion → ByteTrack-in-m]
-    HG --> TR[triangulation Mode 2, subscription-driven]
-    HG --> PB[Publisher fan-out]
-    TR --> PB
-  end
-  subgraph consumers[Consumers]
-    direction LR
-    MW[monitor_web dashboard :8000]
-    GW[isicomms broker+gateway :1883/:8080]
-    AGV[AGV / WMS pollers]
-  end
-  A & B --> CAP
-  ZS -- "DetectionSetMessage UDP :9010" --> SY
-  CAP -- "/dev/shm frame bus" --> MW
-  PB -- "UDP/JSON tracks + observations" --> MW
-  PB -- "MQTT isiMonitor3D/v1/<node>/..." --> GW
-  GW -- "REST /nodes /zones /tracks + /ui" --> AGV
-```
+![Direction-1 topology](img/topology.png){ .topo }
 
 ## The four apps
 

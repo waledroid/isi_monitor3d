@@ -241,3 +241,13 @@ body {
 
 /* content width: cheat sheets like room for tables */
 .md-grid { max-width: 68rem; }
+
+/* The topology illustration: centered, capped, glass-framed. */
+.md-typeset img.topo {
+  display: block;
+  margin: 0 auto;
+  max-width: 780px;
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
