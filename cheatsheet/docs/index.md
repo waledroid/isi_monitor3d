@@ -1,27 +1,31 @@
 # ISI **Monitor 3D** — the system in one page
 
-**WHY** — Isitec's industrial-vision cahier des charges (`docs/specs/`): a warehouse needs to know *what* is *where*, in **metres**, with **stable identity**, in **real time** — for safety (person↔forklift proximity), pallet/rack state (empty/full), and PLC/WMS/AGV integration. No cloud, systemd-supervised, deterministic restart.
+**WHY** — know *what* is *where*, in metres, stable identity, real time (Isitec cahier des charges). No cloud, systemd-supervised.
 
-**WHAT** — a Python backbone that turns 1–2 RTSP cameras into metric, identity-stable metadata: `Track2D` (always, from homography) and `Track3D` (on-demand, from triangulation), published as versioned JSON over **UDP** (local consumers) and **MQTT** (the multi-node fabric). Modules (Sécurité, Palettes, Dashboard, PLC gateway) are separate processes consuming only the wire contract.
+**WHAT** — 1–2 RTSP cameras → `Track2D` (always) + `Track3D` (on-demand), versioned JSON over UDP + MQTT.
 
-**HOW** — the Direction-1 split: perception and metric math are **two processes** joined by a UDP loopback contract.
+**HOW** — Direction-1 split: two processes joined by a UDP loopback contract.
 
 ```mermaid
-flowchart LR
+flowchart TD
   subgraph cams[Cameras]
+    direction LR
     A[cam_a RTSP H.264]
     B[cam_b RTSP H.265]
   end
   subgraph isistream[isistream — perception producer]
+    direction LR
     CAP[capture + decode] --> ZS[zone-scoped detect seg + global pose]
   end
   subgraph engine[backbone.runtime — metric engine, no CUDA]
+    direction LR
     SY[FrameSynchronizer] --> HG[homography: foot→floor → fusion → ByteTrack-in-m]
     HG --> TR[triangulation Mode 2, subscription-driven]
     HG --> PB[Publisher fan-out]
     TR --> PB
   end
   subgraph consumers[Consumers]
+    direction LR
     MW[monitor_web dashboard :8000]
     GW[isicomms broker+gateway :1883/:8080]
     AGV[AGV / WMS pollers]
@@ -36,41 +40,41 @@ flowchart LR
 
 ## The four apps
 
-| App | Process | Role | Port |
+| App | Launch | Role | Port |
 |---|---|---|---|
-| **isistream** | `python -m isistream --config config/backbone.yaml` | Owns ALL pixels: RTSP capture, decode, `/dev/shm` frame bus, zone-scoped seg detection + pose → `DetectionSetMessage` per camera per tick | → UDP :9010 |
-| **backbone** (metric engine) | `python -m backbone.runtime --config config/backbone.yaml` | Pure math, ~190 MB RSS, no CUDA: sync → homography → tracking → triangulation → publish | UDP out :50001 |
-| **monitor_web** | `python -m monitor_web` (alias `3d`) | Operator dashboard: Pixi floor map, live cams over one `/ws/video` socket, Settings, START/STOP spawns both processes above | :8000 |
-| **isicomms** | `docker compose up -d` / `python -m isicomms` | Mosquitto broker + gateway: MQTT in → polling REST out + `/ui` probe | :1883 / :8080 |
+| **isistream** | `python -m isistream --config config/backbone.yaml` | all pixels: capture, decode, `/dev/shm` bus, detect + pose | → :9010 |
+| **backbone** | `python -m backbone.runtime --config config/backbone.yaml` | metric engine, no CUDA, ~190 MB | UDP :50001 |
+| **monitor_web** | `python -m monitor_web` (alias `3d`) | dashboard; START/STOP spawns both above | :8000 |
+| **isicomms** | `docker compose up -d` / `python -m isicomms` | broker + gateway: MQTT in → REST + `/ui` | :1883 / :8080 |
 
-## KPIs (acceptance, Backbone v1)
+## KPIs
 
 | Indicator | Target | Status |
 |---|---|---|
-| End-to-end latency capture→publish (p95) | < 200 ms | measured p50 ≈ 77 ms / p95 ≈ 126 ms (points mode) |
-| Homography reprojection error | ≤ 2 px | synthetic e2e test green |
-| Triangulation reprojection gate (per view) | ≤ 5–8 px | gate implemented, on-rig pending |
-| Detection mAP@0.5 | ≥ 0.90 | trained on `pallet3_yolo_seg` |
-| Pallet empty/full precision / recall | ≥ 0.95 / ≥ 0.93 | occupancy fields on the wire |
+| Latency capture→publish p95 | < 200 ms | p50 77 / p95 126 ms |
+| Homography reprojection | ≤ 2 px | e2e green |
+| Triangulation gate per view | ≤ 5–8 px | on-rig pending |
+| mAP@0.5 | ≥ 0.90 | `pallet3_yolo_seg` |
+| Pallet empty/full P / R | ≥ 0.95 / 0.93 | on the wire |
 
-!!! note "Latency is honest"
-    Every latency number is measured against `frame.capture_ts` — the single capture-time clock propagated through every downstream message — never against `time.time()` at publish. `tools/latency_probe.py` is the instrument.
+!!! note
+    Latency is always vs `frame.capture_ts`, never publish time. Instrument: `tools/latency_probe.py`.
 
-## Operational modes
+## Modes
 
-| Mode | Cameras | Calibration | Output |
+| Mode | Cams | Calibration | Output |
 |---|---|---|---|
-| **1** `single_cam_homography` | 1 | `calibrate single-cam` (≥5 floor-point pairs) | `Track2D` only — triangulation stack never built |
-| **2** `dual_cam_homography_triangulation` | 2 | Multical joint BA (`calibrate-all` / `calibrate-2cam`) | `Track2D` always + `Track3D` for subscriptions |
+| **1** `single_cam_homography` | 1 | `calibrate single-cam` (≥5 floor points) | `Track2D` only |
+| **2** `dual_cam_homography_triangulation` | 2 | Multical joint BA | `Track2D` + `Track3D` |
 
-One camera dying in Mode 2 ⇒ **runtime degradation**, not failure: solo `FramePair`s after `degraded_emit_after_ms` (100 ms), `Track3D` halts cleanly, `track_id`s survive recovery (Mahalanobis matching).
+Camera dies in Mode 2 ⇒ degradation: solo pairs after 100 ms, `Track3D` halts, `track_id`s survive.
 
 ## Seven non-negotiables
 
-1. **One calibration, two queries** — one `calibration.json` (`K, D, R, t, H, P`) feeds homography *and* triangulation.
-2. **One identity space** — homography's ByteTrack owns `track_id`; triangulation never re-IDs.
-3. **Subscription, not polling** — `Track3D` computed only for rules in `config/subscriptions.yaml`.
-4. **Plugin where multiplicity is real** — exactly 5 ABC seams, pinned by a test. Concrete everywhere else.
-5. **Process boundaries are contractual** — zero module imports; `backbone/comms/schemas.py` is the only contract.
-6. **Fail honestly** — every geometric output is gated; bad input → no output or flagged, never silent-bad.
-7. **Industrial defaults** — systemd, no cloud, latency vs `capture_ts`.
+1. **One calibration, two queries** — `calibration.json` (`K, D, R, t, H, P`) feeds both methods.
+2. **One identity space** — ByteTrack owns `track_id`; triangulation never re-IDs.
+3. **Subscription, not polling** — `Track3D` per `config/subscriptions.yaml`.
+4. **5 plugin seams**, test-pinned — concrete everywhere else.
+5. **Contracts, not shared code** — `backbone/comms/schemas.py`.
+6. **Fail honestly** — gated outputs, never silent-bad.
+7. **Industrial defaults** — systemd, no cloud.

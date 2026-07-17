@@ -9,9 +9,7 @@ theme:
     scheme: slate
     primary: custom
     accent: custom
-  font:
-    text: Outfit
-    code: JetBrains Mono
+  font: false
   features:
     - navigation.sections
     - navigation.top

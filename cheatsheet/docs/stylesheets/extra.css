@@ -4,7 +4,21 @@
    and isicomms/isicomms/api/ui_page.py).
    ========================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@font-face {
+  font-family: 'Aptos';
+  src: url('../fonts/Aptos.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Aptos';
+  src: url('../fonts/Aptos-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+}
 
 :root {
   --bg: #07080c;
@@ -19,6 +33,10 @@
   --warn: #f5ab35;
   --card-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4),
                  inset 0 1px 1px 0 rgba(255, 255, 255, 0.08);
+
+  /* Aptos / Apple-style / Inter typography tokens */
+  --md-text-font-family: 'Aptos', -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --md-code-font-family: "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
 }
 
 /* ---- Material slate overrides: the base canvas ---- */
@@ -49,13 +67,33 @@
 
 body,
 .md-typeset {
-  font-family: "Outfit", -apple-system, BlinkMacSystemFont, "Segoe UI",
-               Roboto, Helvetica, Arial, sans-serif;
-  letter-spacing: -0.01em;
+  font-family: var(--md-text-font-family);
+  letter-spacing: 0.015em;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .md-typeset code, .md-typeset pre, .md-typeset kbd {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--md-code-font-family);
+}
+
+/* Overall element and block spacing for enhanced reading clarity */
+.md-typeset p, 
+.md-typeset ol, 
+.md-typeset ul {
+  margin-bottom: 1.6em;
+}
+
+.md-typeset li {
+  margin-bottom: 0.6em;
+}
+
+.md-typeset h1, 
+.md-typeset h2, 
+.md-typeset h3 {
+  margin-top: 2.2em;
+  margin-bottom: 1.1em;
 }
 
 /* ambient radial gradients — the studios' fixed backdrop */
@@ -112,20 +150,25 @@ body {
   border-radius: 14px;
   box-shadow: var(--card-shadow);
   overflow: hidden;
-  font-size: 0.72rem;
+  font-size: 0.76rem;
+  margin-top: 1.5em;
+  margin-bottom: 2.0em;
 }
 .md-typeset table:not([class]) th {
   background: rgba(0, 0, 0, 0.25);
   color: var(--muted);
-  font-weight: 500;
-  letter-spacing: 0.04em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  font-size: 0.62rem;
+  font-size: 0.66rem;
   border-bottom: 1px solid var(--glass-border);
+  padding: 12px 18px;
 }
 .md-typeset table:not([class]) td {
   border-top: 1px solid rgba(255, 255, 255, 0.05);
   vertical-align: top;
+  padding: 12px 18px;
+  line-height: 1.6;
 }
 .md-typeset table:not([class]) tr:hover td {
   background: rgba(255, 255, 255, 0.03);
@@ -152,7 +195,10 @@ body {
   border: 1px solid var(--glass-border);
   border-radius: 14px;
   box-shadow: var(--card-shadow);
-  font-size: 0.72rem;
+  font-size: 0.76rem;
+  margin-top: 1.5em;
+  margin-bottom: 2.0em;
+  padding: 14px 20px;
 }
 .md-typeset .admonition-title, .md-typeset summary {
   background: rgba(79, 195, 247, 0.08) !important;
@@ -163,13 +209,23 @@ body {
 .md-typeset .admonition.danger .admonition-title  { color: var(--bad);  background: rgba(255, 71, 87, 0.08) !important; }
 .md-typeset .admonition.success .admonition-title { color: var(--ok);   background: rgba(46, 213, 115, 0.08) !important; }
 
-/* ---- mermaid: keep diagrams on glass ---- */
+/* ---- mermaid: keep diagrams on glass, full content width ---- */
 .md-typeset .mermaid {
   background: var(--glass);
   border: 1px solid var(--glass-border);
   border-radius: 14px;
   box-shadow: var(--card-shadow);
   padding: 12px;
+  display: block;
+  width: 100%;
+}
+.md-typeset .mermaid svg,
+.md-typeset pre.mermaid svg {
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  font-size: 15px;
+  min-height: 200px;
 }
 
 /* ---- misc chrome ---- */
