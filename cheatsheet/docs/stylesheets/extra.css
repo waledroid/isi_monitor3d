@@ -246,8 +246,9 @@ body {
 .md-typeset img.topo {
   display: block;
   margin: 0 auto;
-  max-width: 780px;
-  width: 100%;
+  max-height: 560px;      /* portrait figure: cap by height, width follows */
+  width: auto;
+  max-width: 100%;
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
