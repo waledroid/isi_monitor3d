@@ -37,12 +37,7 @@ registry.names()                 # ['replay', 'rtsp']
 
 ## Process boundaries are contracts
 
-Zero module imports; schemas, never code.
-
-| Contract | Surface | Carries |
-|---|---|---|
-| **UDP/JSON wire** | `backbone/comms/schemas.py` (`SCHEMA_VERSION = 6`) | `DetectionSetMessage` in (:9010); tracks, zone state, passings, observations out |
-| **isicomms MQTT→REST** | topics `isiMonitor3D/v1/<node>/...`; REST `/nodes /zones /tracks /passings` + `/ui` | versioned MQTT JSON in; Bearer-token polling out. Ports + `ISI_GATEWAY_*` env = frozen |
+Zero imports across processes — versioned JSON schemas carry everything.
 
 ## Copy-portable module exports
 
@@ -56,11 +51,11 @@ scripts/export_module.sh <isical|isistream|isigen|isidet|isicomms> <dest-dir> [o
 
 | Module | In this repo (dev) | From an exported copy |
 |---|---|---|
-| **isical** (calibration studio, :8300) | `conda activate monitor3d && python -m isical` | `cd isical-portable && ./launch.sh` |
+| **isical** (calibration studio) | `conda activate monitor3d && python -m isical` | `cd isical-portable && ./launch.sh` |
 | **isistream** (perception producer) | dashboard **START** (or `python -m isistream --config config/backbone.yaml`) | `cd isistream-portable && cp config.example.yaml config.yaml` → fill cameras/model → `./launch.sh --config config.yaml` — needs system GStreamer |
-| **isiGen** (synthetic-data studio, :8200) | `cd trainer/isiGen && ./launch.sh` | same — `./launch.sh` (plain copy) |
+| **isiGen** (synthetic-data studio) | `cd trainer/isiGen && ./launch.sh` | same — `./launch.sh` (plain copy) |
 | **isidet** (trainer) | `conda activate isi-train && cd trainer/isidet && python scripts/run_train.py --config configs/train_pallet.yaml` | same, after `conda env create -f isi-train.yml` |
-| **isicomms** (broker + gateway, :1883/:8080 + `/ui`) | `docker compose -p on-prem -f isicomms/deploy/onprem/docker-compose.yml up -d` (or bare: `python -m isicomms`) | `cd isicomms-portable && docker compose up -d` (cloud: `./gen-certs.sh` → `.env` first) |
+| **isicomms** (broker + gateway) | `docker compose -p on-prem -f isicomms/deploy/onprem/docker-compose.yml up -d` (or bare: `python -m isicomms`) | `cd isicomms-portable && docker compose up -d` (cloud: `./gen-certs.sh` → `.env` first). Host ports: `ISICOMMS_GATEWAY_PORT`, `ISICOMMS_MQTT_PORT` |
 
 !!! note
     isistream is only reusable as wheel+launcher. Wheels never committed; re-run the exporter to refresh.

@@ -1,6 +1,6 @@
 # Datasets & training — isidet + isiGen
 
-**WHY** — the Backbone is inference-only; training lives in `trainer/isidet/` (`isi-train` conda env). Target: mAP@0.5 ≥ 0.90.
+**WHY** — the Backbone is inference-only; training lives in `trainer/isidet/` (`isi-train` conda env).
 
 **WHAT** — YOLO instance-segmentation datasets, 3 warehouse classes.
 
@@ -31,12 +31,7 @@ names: ['palette', 'carton', 'polybag']
 
 ## Training
 
-```bash
-conda activate isi-train        # never into monitor3d
-cd trainer/isidet
-python scripts/run_train.py --config configs/train_pallet.yaml        # yolo26l-seg @ 640
-python scripts/run_train.py --config configs/train_pallet3_seg.yaml   # yolo11m-seg @ 1024
-```
+Two configs for `scripts/run_train.py`: `configs/train_pallet.yaml` (yolo26l-seg @ 640) and `configs/train_pallet3_seg.yaml` (yolo11m-seg @ 1024).
 
 | Knob | Value | Why |
 |---|---|---|
@@ -62,7 +57,7 @@ Deploy: drop `.onnx` into `models/`, set `detection.onnx_path`, check with `tool
 
 ## isiGen — synthetic data (`trainer/isiGen/`, Studio :8200)
 
-**WHY** — 50–100 real photos per class isn't a dataset. **WHAT** — SDXL + depth-ControlNet → unlimited labeled synthetic images. **HOW** — 8-phase pipeline (scaffolds → captioning → LoRA → generation → masks → QA) → YOLO-seg export feeding isidet. Standalone: `./launch.sh`, `ISIGEN_*` env.
+**WHY** — 50–100 real photos per class isn't a dataset. **WHAT** — SDXL + depth-ControlNet → unlimited labeled synthetic images. **HOW** — 8-phase pipeline (scaffolds → captioning → LoRA → generation → masks → QA) → YOLO-seg export feeding isidet.
 
 !!! warning "WSL2"
     Heavy models swap-thrash the 12 GB VM → EIO/bus-error. Levers: smaller model, `batch_size`, `workers`.

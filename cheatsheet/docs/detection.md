@@ -1,6 +1,6 @@
 # Detection — zone-scoped pipeline & key functions
 
-**WHY** — objects only matter inside floor zones; a cropped far zone gets more model pixels. No zones ⇒ pose-only. Pose stays global.
+**WHY** — objects only matter inside floor zones; a cropped far zone gets more model pixels. No zones ⇒ pose-only.
 
 **WHAT** — `ZoneScopedDetector` (`backbone/detection/zone_scope.py`) wraps any `Detector` plugin; not a plugin seam.
 
@@ -36,12 +36,6 @@ flowchart TD
 | `project_zone_hulls(rig, zones, camera_id)` | `zone_projection.py` | draw z-extruded zone hull on cam view |
 
 ## Key mechanics
-
-!!! note "TRT batch bucketing"
-    One engine per input shape ⇒ pad the batch to the next bucket (duplicates discarded). Few engines, cached forever.
-
-!!! note "Masks stay crop-relative"
-    Mask + `mask_offset_xy`, never full-frame canvas; polygonized only at the wire (`ObservationDet.mask_poly`).
 
 !!! warning "Pose is different"
     `yolo_onnx_pose` runs global full-frame. Persons ride the wire as `cls="person"` + `keypoints_uv`; the dashboard renders skeletons with zero inference.

@@ -10,12 +10,12 @@
 
 ## The four apps
 
-| App | Launch | Role | Port |
-|---|---|---|---|
-| **isistream** | `python -m isistream --config config/backbone.yaml` | all pixels: capture, decode, `/dev/shm` bus, detect + pose | → :9010 |
-| **backbone** | `python -m backbone.runtime --config config/backbone.yaml` | metric engine, no CUDA, ~190 MB | UDP :50001 |
-| **monitor_web** | `python -m monitor_web` (alias `3d`) | dashboard; START/STOP spawns both above | :8000 |
-| **isicomms** | `docker compose up -d` / `python -m isicomms` | broker + gateway: MQTT in → REST + `/ui` | :1883 / :8080 |
+| App | Role | Port |
+|---|---|---|
+| **isistream** | all pixels: capture, decode, `/dev/shm` bus, detect + pose | → :9010 |
+| **backbone** | metric engine, no CUDA, ~190 MB | UDP :50001 |
+| **monitor_web** | dashboard; START/STOP spawns both above | :8000 |
+| **isicomms** | broker + gateway: MQTT in → REST out | :1883 / :8080 |
 
 ## KPIs
 
@@ -45,6 +45,6 @@ Camera dies in Mode 2 ⇒ degradation: solo pairs after 100 ms, `Track3D` halts,
 2. **One identity space** — ByteTrack owns `track_id`; triangulation never re-IDs.
 3. **Subscription, not polling** — `Track3D` per `config/subscriptions.yaml`.
 4. **5 plugin seams**, test-pinned — concrete everywhere else.
-5. **Contracts, not shared code** — `backbone/comms/schemas.py`.
+5. **Contracts, not shared code** — expand the schema, never share imports.
 6. **Fail honestly** — gated outputs, never silent-bad.
 7. **Industrial defaults** — systemd, no cloud.

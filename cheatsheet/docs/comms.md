@@ -53,20 +53,5 @@ WSL2 mirrored mode drops loopback UDP > ~1.5 KB. `UdpSink` slices JSON into `Fra
 | `GET /ui` | live probe page |
 | `GET /docs` | Swagger |
 
-## Launch
-
-```bash
-# full stack: broker :1883 + gateway :8080 + /ui
-cd isicomms/deploy/onprem && docker compose up -d
-# host ports only move:
-ISICOMMS_GATEWAY_PORT=9090 ISICOMMS_MQTT_PORT=11883 docker compose up -d
-
-# cloud stack (TLS + Caddy):
-cd isicomms/deploy/cloud && ./gen-certs.sh && docker compose up -d
-
-# gateway alone (needs a broker):
-python -m isicomms          # ISI_GATEWAY_* env
-```
-
 !!! note "Poll it"
     `curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/zones` — the whole AGV/WMS integration surface.
