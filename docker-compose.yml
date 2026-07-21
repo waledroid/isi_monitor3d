@@ -1,0 +1,110 @@
+# Full ISI Monitor 3D stack — `./up.sh` (or `docker compose up -d --build`).
+#
+#   app        GPU. monitor_web dashboard (:8000). Its START button spawns
+#              backbone.runtime + isistream inside this container — the
+#              /dev/shm frame bus, NAL sockets and 127.0.0.1 UDP hops
+#              (9010 producer→engine, 9001 engine→dashboard) stay internal.
+#   isical     GPU (optional). Calibration studio (:8300). Same image.
+#   mosquitto  MQTT broker (:1883) — reused from isicomms/deploy/onprem.
+#   gateway    isicomms REST aggregator (:8080) — existing isicomms/Dockerfile.
+#
+# app + isical run with `network_mode: host`: the RTSP cameras live on the
+# LAN, and backbone.yaml's 127.0.0.1 sink/ingest addresses (including the
+# mqtt sink at 127.0.0.1:1883 → mosquitto's published port) keep working
+# without touching the config the non-docker dev flow also uses.
+#
+# The repo is mounted at its OWN host path (${PWD}) so the absolute paths in
+# config/backbone.yaml (calibration, models, zones) resolve identically in
+# and out of containers. Code is BAKED at /opt/isi — the mount only supplies
+# config + models + calibration data, and receives Settings/zone-editor
+# writes (done as ${ISI_UID}, so files stay owned by you).
+#
+# Run compose from the repo root (up.sh does). On a site PC, check out /
+# export the data dir at any path and run from there.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.app
+    image: isi-monitor3d/app
+    restart: unless-stopped
+    network_mode: host
+    gpus: all
+    shm_size: "1gb"
+    user: "${ISI_UID:-1000}:${ISI_GID:-1000}"
+    volumes:
+      - ${PWD}:${PWD}
+    environment:
+      HOME: /tmp
+      # Point every monitor_web path at the mounted repo (baked defaults
+      # would land in the image's ephemeral /opt/isi).
+      MONITOR_WEB_PORT: ${MONITOR_WEB_PORT:-8000}
+      MONITOR_WEB_BACKBONE_CONFIG_PATH: ${PWD}/config/backbone.yaml
+      MONITOR_WEB_UI_SETTINGS_PATH: ${PWD}/config/monitor_web_ui.yaml
+      MONITOR_WEB_WAREHOUSE_MAP_PATH: ${PWD}/config/warehouse_map.yaml
+      MONITOR_WEB_DANGER_ZONES_OBJECT_PATH: ${PWD}/config/danger_zones_object.yaml
+      MONITOR_WEB_LINK_LINES_PATH: ${PWD}/config/link_lines.yaml
+      MONITOR_WEB_MEDIA_DIR: ${PWD}
+      MONITOR_WEB_GATEWAY_URL: http://127.0.0.1:${ISICOMMS_GATEWAY_PORT:-8080}
+      # TensorRT engine cache on the host mount — first build per shape takes
+      # minutes and must survive container recreation.
+      ISI3D_TRT_CACHE: ${PWD}/models/.trt_cache
+    depends_on:
+      - mosquitto
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/status', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+
+  isical:
+    image: isi-monitor3d/app
+    restart: unless-stopped
+    network_mode: host
+    gpus: all
+    user: "${ISI_UID:-1000}:${ISI_GID:-1000}"
+    volumes:
+      - ${PWD}:${PWD}
+    environment:
+      HOME: /tmp
+      ISICAL_PORT: ${ISICAL_PORT:-8300}
+      ISICAL_DATA_DIR: ${PWD}/isical/data
+      ISICAL_RUNS_DIR: ${PWD}/isical/runs
+      ISICAL_REPO_ROOT: ${PWD}
+      ISICAL_MODE2_CALIBRATION_PATH: ${PWD}/config/mode2/calibration.json
+      ISICAL_BACKBONE_CONFIG_PATH: ${PWD}/config/backbone.yaml
+    command: ["python", "-m", "isical"]
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./isicomms/deploy/onprem/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+    ports:
+      - "${ISICOMMS_MQTT_PORT:-1883}:1883"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: isicomms/Dockerfile
+    image: isi-monitor3d/gateway
+    restart: unless-stopped
+    environment:
+      ISI_GATEWAY_MQTT_HOST: mosquitto
+      ISI_GATEWAY_MQTT_PORT: 1883
+      ISI_GATEWAY_MQTT_BASE: isiMonitor3D
+      # ISI_GATEWAY_API_TOKEN: change-me   # uncomment to require Bearer auth
+    ports:
+      - "${ISICOMMS_GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      - mosquitto
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/nodes', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+
+volumes:
+  mosquitto_data:

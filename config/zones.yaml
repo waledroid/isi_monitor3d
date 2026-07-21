@@ -3,6 +3,7 @@ zones:
   name: Zone 1
   type: palette
   kind: palette
+  severity: info
   polygon:
   - - -4.704
     - -0.429
@@ -12,11 +13,11 @@ zones:
     - -0.199
   - - -4.643
     - -2.773
-  derived_from: zone_patch
 - id: zp_mrc2y24v
   name: Zone 2
   type: palette
   kind: palette
+  severity: info
   polygon:
   - - -0.807
     - 1.289
@@ -26,11 +27,11 @@ zones:
     - 0.765
   - - 0.198
     - 0.036
-  derived_from: zone_patch
 - id: zp_mrc2ypt4
   name: Zone 3
   type: palette
   kind: palette
+  severity: info
   polygon:
   - - 0.68
     - 1.475
@@ -40,4 +41,3 @@ zones:
     - 1.642
   - - 1.207
     - 0.845
-  derived_from: zone_patch

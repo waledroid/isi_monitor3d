@@ -1,0 +1,78 @@
+# Docker variant of the repo-root environment.yml (keep the two in sync).
+#
+# Deltas vs environment.yml, mirroring the LIVE monitor3d env (see CLAUDE.md):
+#   - conda `onnxruntime` is DROPPED — the live env replaced it with the pip
+#     `onnxruntime-gpu==1.23.2` wheel to gain TensorrtExecutionProvider
+#     (installed in docker/Dockerfile.app, together with tensorrt-cu12).
+#   - the CUDA runtime libraries the conda onnxruntime build used to pull in
+#     are therefore listed explicitly (cudnn + libcublas & friends), pinned to
+#     cuda-version=12.9 like the live env.
+#   - pydantic-settings added (monitor_web/isical/isicomms need it; on the dev
+#     box it arrived via `pip install -e monitor_web`, here we install our
+#     packages with --no-deps).
+#   - dev tooling (pytest, ruff) dropped — this is a runtime image.
+#   - the pip `--editable .` install moves to the Dockerfile (source is baked
+#     at /opt/isi).
+name: base
+channels:
+  - conda-forge
+  - nodefaults
+
+dependencies:
+  - python=3.10
+  - pip>=24
+
+  # Scientific stack.
+  - numpy>=1.26
+  - scipy>=1.11
+
+  # OpenCV — conda-forge headless build (GStreamer + FFmpeg compiled in).
+  - opencv=4.13.*=headless_py310*
+
+  # Video pipeline — GStreamer + PyGObject (PyGI), NOT gst-python (see
+  # environment.yml for the FFmpeg diamond-conflict rationale).
+  # gst-plugins-bad ships libgstnvcodec.so → nvh264dec/nvh265dec (NVDEC),
+  # which is what `decoder: nvdec` in backbone.yaml uses; the NVIDIA container
+  # runtime injects libcuda/libnvcuvid when NVIDIA_DRIVER_CAPABILITIES
+  # includes `video`.
+  - ffmpeg
+  - gstreamer>=1.22
+  - gst-plugins-base
+  - gst-plugins-good
+  - gst-plugins-bad
+  - gst-libav
+  - pygobject>=3.46
+
+  # Kalman filtering.
+  - filterpy>=1.4.5
+
+  # CUDA runtime libs for the pip onnxruntime-gpu / TensorRT wheels
+  # (matches the live env's conda package set on the RTX 5070, CUDA 12.9).
+  - cuda-version=12.9
+  - cudnn=9.*
+  - cuda-cudart
+  - cuda-nvrtc
+  - libcublas
+  - libcufft
+  - libcurand
+  - libcusparse
+  - libnvjitlink
+  - onnx>=1.20
+
+  # NOTE: openvino is deliberately NOT installed (unlike environment.yml).
+  # The image targets NVIDIA GPUs; the yolo_openvino plugin is a lazy import,
+  # so the runtime works without it. Re-add here if an Intel-only edge build
+  # is ever needed.
+
+  # Metadata schemas + web apps.
+  - pydantic>=2.6
+  - fastapi>=0.115
+  - uvicorn>=0.30
+  - jinja2>=3.1
+
+  # Configuration files.
+  - pyyaml>=6.0
+
+  - pip:
+      - paho-mqtt>=1.6,<3
+      - pydantic-settings>=2.0

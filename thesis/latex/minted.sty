@@ -1,0 +1,13 @@
+% Local stub for minted (loaded unconditionally by rho.cls).
+% minted requires -shell-escape + pygments, neither available/needed under
+% tectonic here, and this article contains no code listings. The stub keeps
+% the class's \usemintedstyle/\setminted/\theFancyVerbLine references valid.
+% Delete this file to restore real minted under a full TeX Live setup.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{minted}[2026/07/21 local no-op stub (no code listings in this article)]
+\RequirePackage{fancyvrb}% provides the FancyVerbLine counter the class restyles
+\newcommand{\usemintedstyle}[1]{}
+\providecommand{\setminted}[1]{}
+\providecommand{\inputminted}[2]{\texttt{[code listing omitted]}}
+\newenvironment{minted@stubenv}{}{}
+\endinput

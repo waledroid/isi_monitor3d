@@ -264,7 +264,7 @@ model_xml_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/detect/models/yo
 pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.onnx
 show_nodes: false
 show_masks: true
-show_boxes: true
+show_boxes: false
 mode2_calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
 alignment_refinement:
   pairs: []

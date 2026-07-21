@@ -68,3 +68,13 @@ config/*.yaml.bak
 .claude/worktrees/
 models/.trt_cache/
 config/local_backups/
+
+# thesis: heavy measurement byproducts stay out of git (the .md/.csv/log artifacts are tracked)
+thesis/measurements/G6_ablation/arm_*/
+thesis/measurements/G6_ablation/test_real/
+thesis/measurements/G6_ablation/runs/*/weights/
+# latex build renders (page-preview PNGs); the PDF and sources are tracked
+thesis/latex/p*.png
+thesis/latex/bg-*.png
+thesis/latex/intro-*.png
+thesis/latex/prog-*.png

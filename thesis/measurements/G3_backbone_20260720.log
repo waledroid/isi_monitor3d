@@ -1,0 +1,8 @@
+16:19:47 | backbone.runtime.orchestrator | INFO | orchestrator: 2 cameras configured → mode=dual_cam_homography_triangulation (ingest=points)
+16:19:47 | backbone.runtime | INFO | Backbone built (mode=dual_cam_homography_triangulation, sources=[]) — starting…
+16:19:47 | backbone.ingestion.points_in | INFO | points ingest: listening on 127.0.0.1:9010
+16:19:47 | backbone.comms.diagnostics_publisher | INFO | DiagnosticsPublisher: started (node_id='Sortie_Machine_4', interval=5.0s)
+16:19:47 | backbone.comms.mqtt_sink | INFO | MqttSink: connected to 127.0.0.1:1883
+16:20:10 | backbone.runtime.orchestrator | INFO | orchestrator: caught signal 15, shutting down
+16:20:10 | backbone.runtime.orchestrator | INFO | orchestrator: shutdown complete; 530 frames processed
+16:20:10 | backbone.runtime | INFO | Backbone stopped.

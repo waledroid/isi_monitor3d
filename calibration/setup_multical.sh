@@ -112,12 +112,17 @@ fi
 # the GUI deps as its `interactive` extra (matplotlib/qtpy/pyvista/pyvistaqt/colour/
 # qtawesome) — let pip resolve them. qtpy is only an abstraction, so add a real Qt
 # binding (PyQt5). Best-effort: calibration works without these; the viewer also
-# needs a display (WSLg/X / $DISPLAY).
-echo "[setup_multical] (optional) installing viewer deps via multical[interactive] + PyQt5"
-if "${VENV_DIR}/bin/pip" install "multical[interactive]==${MULTICAL_VERSION}" PyQt5 >/dev/null 2>&1; then
-    echo "[setup_multical]   3D viewer deps installed — use --vis / the 'vis' command (needs a display)"
+# needs a display (WSLg/X / $DISPLAY). Headless installs (the Docker image) skip
+# the ~1.1 GB Qt/VTK stack with MULTICAL_VIEWER=0.
+if [[ "${MULTICAL_VIEWER:-1}" == "0" ]]; then
+    echo "[setup_multical] (optional) viewer deps SKIPPED (MULTICAL_VIEWER=0); --vis/vis won't work."
 else
-    echo "[setup_multical]   viewer deps NOT installed; calibration still works, --vis/vis won't."
+    echo "[setup_multical] (optional) installing viewer deps via multical[interactive] + PyQt5"
+    if "${VENV_DIR}/bin/pip" install "multical[interactive]==${MULTICAL_VERSION}" PyQt5 >/dev/null 2>&1; then
+        echo "[setup_multical]   3D viewer deps installed — use --vis / the 'vis' command (needs a display)"
+    else
+        echo "[setup_multical]   viewer deps NOT installed; calibration still works, --vis/vis won't."
+    fi
 fi
 
 # The optional installs above (apriltags / interactive) can pull numpy>=2 or a second

@@ -1,0 +1,27 @@
+{
+  "trt_env": "1",
+  "imgsz": 320,
+  "n": 50,
+  "active_providers": [
+    "TensorrtExecutionProvider",
+    "CUDAExecutionProvider",
+    "CPUExecutionProvider"
+  ],
+  "build_s": 1.9,
+  "n_detections": 2,
+  "detect_ms": {
+    "mean": 10.69,
+    "median": 8.74,
+    "p95": 23.41
+  },
+  "infer_ms": {
+    "mean": 5.4,
+    "median": 4.55,
+    "p95": 9.16
+  },
+  "vram_mb": {
+    "baseline_before": 5131,
+    "peak_during": 5440,
+    "delta_peak": 309
+  }
+}
