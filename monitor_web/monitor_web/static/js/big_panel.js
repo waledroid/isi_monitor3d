@@ -69,6 +69,7 @@
       // ---- getters ----
       get badge() {
         if (this.isWarped) return strings().badge_rectified || "RECTIFIED";
+        if (this.view === "cam_a" || this.view === "cam_b") return "";
         return strings()[BADGE_KEY[this.view] || "live"] || BADGE_FALLBACK[this.view] || "LIVE";
       },
       // The active view is a camera that has a calibration — i.e. the

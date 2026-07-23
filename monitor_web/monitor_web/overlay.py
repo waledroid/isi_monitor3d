@@ -409,6 +409,15 @@ def floor_zones_enabled(cfg) -> bool:
     return _ui_pref(cfg, "show_floor_zones", False)
 
 
+def zone_fill_dim_enabled(cfg) -> bool:
+    """Dashboard preference: on the ZONE panels, darken the pixels the
+    producer's polygon fill blanks before inference (zone_crop_polygon_fill) —
+    shows the detector's true field of view. Slightly conservative: the
+    producer dilates the polygon ~0.3 m, so the dimmed band is a little wider
+    than what the detector actually loses. Off by default. Display only."""
+    return _ui_pref(cfg, "show_zone_fill", False)
+
+
 def occupancy_enabled(cfg) -> bool:
     """Dashboard preference: draw the pallet empty/full badge on the CAM overlay."""
     return _ui_pref(cfg, "show_occupancy", True)

@@ -247,7 +247,8 @@ function collectPayload() {
   // Detection quality: high = main stream, low = camera substream. Applied on
   // the fly (a save hot-restarts isistream ~4 s; the engine keeps running).
   payload.detect_substream = el("zm-detect-quality")?.value === "low";
-  payload.trt_enabled = el("zm-trt-enabled")?.checked ?? true;
+  // trt_enabled: UI toggle retired (native .engine models supersede it);
+  // the config default (true) governs .onnx paths, untouched by saves.
   // S16: distance lines — always send the field (empty list clears the file).
   payload.link_lines = collectLinkLines();
   // Communication — MQTT broker + node identity.
@@ -389,6 +390,7 @@ function wireUiPrefSync() {
     ["zm-model-show-masks", (e) => ({ show_masks: !!e.checked })],
     ["zm-model-show-boxes", (e) => ({ show_boxes: !!e.checked })],
     ["zm-show-floor-zones", (e) => ({ show_floor_zones: !!e.checked })],
+    ["zm-show-zone-fill", (e) => ({ show_zone_fill: !!e.checked })],
     ["zm-model-dist-opacity",
       (e) => ({ distance_line_opacity: Math.max(0.05, Math.min(1, parseFloat(e.value) || 0.25)) })],
     ["zm-model-dist-color", (e) => ({ distance_line_color: e.value || "#ffffff" })],
@@ -446,13 +448,7 @@ function fillModelSection(det, isis) {
     if (lowOpt) lowOpt.disabled = !isis.has_detect_source;
     if (!isis.has_detect_source) dq.value = "high";
   }
-  const trt = el("zm-trt-enabled");
-  if (trt) {
-    trt.checked = isis.trt_enabled !== false;
-    // Greyed out until the env's onnxruntime ships the TensorRT EP.
-    trt.disabled = !isis.trt_available;
-    trt.closest("label")?.classList.toggle("zm-disabled", !isis.trt_available);
-  }
+  // (TensorRT toggle retired — native .engine models supersede it.)
   selectModelOption("zm-model-pose-onnx", det.pose_onnx_path || "");
   set("zm-model-pose-conf", det.pose_confidence_threshold ?? 0.3);
   // NOTE: global Detection FPS removed — zones run at the fixed DEFAULT_DETECTION_FPS (10).
@@ -462,6 +458,8 @@ function fillModelSection(det, isis) {
   if (cbMasks) cbMasks.checked = det.show_masks !== false;
   const cbFz = el("zm-show-floor-zones");
   if (cbFz) cbFz.checked = det.show_floor_zones === true;   // default OFF
+  const cbZf = el("zm-show-zone-fill");
+  if (cbZf) cbZf.checked = det.show_zone_fill === true;     // default OFF
   const cbBoxes = el("zm-model-show-boxes");
   if (cbBoxes) cbBoxes.checked = det.show_boxes !== false;
   const opEl = el("zm-model-dist-opacity");

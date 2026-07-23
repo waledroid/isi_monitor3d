@@ -21,6 +21,9 @@ def _zone_entry(node_id: str, area: str, zspec, state) -> dict:
         "node_id": node_id,
         "area": area,
         "name": zspec.name,
+        # Stable topic-segment identity — lets the /ui schema tree (and any
+        # consumer) annotate id-keyed zone topics with the display name.
+        "zone_id": zspec.zone_id,
         "kind": zspec.kind,
         "type": zspec.type,
         "severity": zspec.severity,
@@ -50,7 +53,8 @@ async def zones(request: Request) -> JSONResponse:
             if key in seen:
                 continue
             seen.add(key)
-            state = node_state.zone_state_by_zone.get(zspec.name)
+            state = (node_state.zone_state_by_zone.get(zspec.zone_id)
+                     or node_state.zone_state_by_zone.get(zspec.name))
             result.append(_zone_entry(node_id, area, zspec, state))
 
     return JSONResponse({"zones": result, "count": len(result)})
@@ -68,7 +72,8 @@ async def zone_by_name(name: str, request: Request) -> JSONResponse:
         for zspec in node_state.config.zones:
             if zspec.name != name:
                 continue
-            state = node_state.zone_state_by_zone.get(name)
+            state = (node_state.zone_state_by_zone.get(zspec.zone_id)
+                     or node_state.zone_state_by_zone.get(name))
             entries.append(_zone_entry(node_id, node_state.config.area, zspec, state))
 
     if not entries:

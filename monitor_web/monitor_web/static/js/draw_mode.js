@@ -22,6 +22,30 @@
 //      possible. onDone receives [[u, v], ...] in source pixel coords.
 
 // Two opposite corners → axis-aligned rectangle as 4 world points (TL,TR,BR,BL).
+
+// Blocking zone-name entry: loops until the operator gives a non-empty name
+// unique among `taken` (case-insensitive), or cancels (returns null). The
+// suggestion prefills the field so Enter-through stays fast. Shared by the
+// camera zone patches (zone_patch.js) and the metric floor zones
+// (floor_zones.js) — one naming contract everywhere.
+export function promptZoneName(taken, suggestion, current) {
+  const lowered = taken
+    .filter((n) => n && n !== current)
+    .map((n) => String(n).trim().toLowerCase());
+  let val = suggestion || "";
+  for (;;) {
+    val = window.prompt("Zone name (required, must be unique):", val);
+    if (val === null) return null;             // cancelled
+    val = val.trim();
+    if (!val) continue;                        // empty -> ask again
+    if (lowered.includes(val.toLowerCase())) {
+      window.alert(`"${val}" is already used by another zone — pick a unique name.`);
+      continue;
+    }
+    return val;
+  }
+}
+
 export function rectFromCorners([x1, y1], [x2, y2]) {
   const xa = Math.min(x1, x2), xb = Math.max(x1, x2);
   const ya = Math.min(y1, y2), yb = Math.max(y1, y2);

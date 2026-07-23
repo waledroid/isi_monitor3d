@@ -45,7 +45,12 @@ _RFDETR_DEFAULT_CLASS_NAMES = ("palette", "carton", "polybag")
 
 
 def _onnx_output_names(onnx_path: Path) -> list[str]:
-    """The model's output tensor names (used to auto-select the plugin)."""
+    """The model's output tensor names (used to auto-select the plugin).
+    Native ``.engine`` files answer from their conversion sidecar."""
+    if str(onnx_path).endswith(".engine"):
+        from backbone.shared.trt_session import read_sidecar
+
+        return list((read_sidecar(onnx_path) or {}).get("outputs") or [])
     import onnx
 
     return [o.name for o in onnx.load(str(onnx_path)).graph.output]

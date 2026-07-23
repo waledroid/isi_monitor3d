@@ -14,6 +14,7 @@ from tests.conftest import (
     make_passing,
     make_track2d,
     make_track3d,
+    make_zone_state,
 )
 
 
@@ -221,3 +222,55 @@ def test_tls_no_ca_cert_uses_system_cas():
     client.tls_set.assert_called_once_with(ca_certs=None)
     client.tls_insecure_set.assert_not_called()
     s.stop()
+
+
+# ---- hygiene: stale-node eviction + id-keyed zone state (2026-07-22) ----
+
+
+def test_zone_state_keyed_by_stable_id_when_present(sub):
+    """A rename must overwrite the SAME entry (id key), never strand an
+    old-name orphan in the map."""
+    from backbone.comms.schemas import ZoneStateMessage
+    a = make_zone_state(zone="Old Name")
+    a = ZoneStateMessage(**{**a.model_dump(), "zone_id": "zp_1"})
+    b = make_zone_state(zone="New Name")
+    b = ZoneStateMessage(**{**b.model_dump(), "zone_id": "zp_1"})
+    sub.update_from_message("node_a", a)
+    sub.update_from_message("node_a", b)
+    zs = sub.snapshot_nodes()["node_a"].zone_state_by_zone
+    assert list(zs.keys()) == ["zp_1"]
+    assert zs["zp_1"].zone == "New Name"
+
+
+def test_zone_state_without_id_falls_back_to_name_key(sub):
+    """Legacy payloads (zone_id == '') keep working, keyed by name."""
+    sub.update_from_message("node_a", make_zone_state(zone="rack_a"))
+    zs = sub.snapshot_nodes()["node_a"].zone_state_by_zone
+    assert list(zs.keys()) == ["rack_a"]
+
+
+def test_stale_node_evicted_after_timeout(monkeypatch):
+    """A node silent beyond evict_after_s disappears from the store entirely
+    (display-staleness at 15 s is unchanged; eviction is the long timeout)."""
+    import isicomms.mqtt_subscriber as m
+    s = m.MqttSubscriber("127.0.0.1", 1884, "isiMonitor3D",
+                         node_evict_after_s=3600.0)
+    t0 = 1_000_000.0
+    monkeypatch.setattr(m.time, "time", lambda: t0)
+    s.update_from_message("dead_node", make_zone_state(zone="z", ts=t0))
+    monkeypatch.setattr(m.time, "time", lambda: t0 + 3601.0)
+    s.update_from_message("live_node", make_zone_state(zone="z", ts=t0 + 3601.0))
+    nodes = s.snapshot_nodes()
+    assert "live_node" in nodes and "dead_node" not in nodes
+
+
+def test_node_within_evict_window_is_kept(monkeypatch):
+    import isicomms.mqtt_subscriber as m
+    s = m.MqttSubscriber("127.0.0.1", 1884, "isiMonitor3D",
+                         node_evict_after_s=3600.0)
+    t0 = 1_000_000.0
+    monkeypatch.setattr(m.time, "time", lambda: t0)
+    s.update_from_message("node_a", make_zone_state(zone="z", ts=t0))
+    monkeypatch.setattr(m.time, "time", lambda: t0 + 100.0)
+    s.update_from_message("node_b", make_zone_state(zone="z", ts=t0 + 100.0))
+    assert set(s.snapshot_nodes()) == {"node_a", "node_b"}

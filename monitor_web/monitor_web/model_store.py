@@ -64,7 +64,7 @@ def list_trained_onnx() -> list[dict[str, object]]:
     for root in _MODEL_ROOTS:
         if not root.exists():
             continue
-        for p in root.glob("**/*.onnx"):
+        for p in (*root.glob("**/*.onnx"), *root.glob("**/*.engine")):
             rp = str(p.resolve())
             if p.is_file() and rp not in seen:
                 seen.add(rp)
@@ -112,11 +112,11 @@ def list_pose_onnx() -> list[dict[str, object]]:
     for root in _POSE_ROOTS:
         if not root.exists():
             continue
-        for p in root.glob("**/*.onnx"):
+        for p in (*root.glob("**/*.onnx"), *root.glob("**/*.engine")):
             _consider(p)
     for d in _POSE_FLAT_DIRS:
         if d.exists():
-            for p in d.glob("*.onnx"):
+            for p in (*d.glob("*.onnx"), *d.glob("*.engine")):
                 _consider(p)
     files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     out: list[dict[str, object]] = []

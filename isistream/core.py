@@ -8,7 +8,9 @@ The producer half of Direction 1. Per tick (paced at ``isistream.fps``):
 2. run the zone-scoped object detector on all cameras' crops in ONE batched
    call (the same ``ZoneScopedDetector`` the Backbone used in frames mode;
    no zones ⇒ no object detector — pose-only, identical policy);
-3. run the pose model every ``pose_every_n``-th tick (persons coast on the
+3. run the pose model every ``pose_every_n``-th tick, One-Euro-smoothing the
+   keypoints per camera/person before emission (``pose_smooth.py``; foot
+   points stay raw for the metric engine — persons coast on the
    metric engine's Kalman between ticks, exactly as before);
 4. emit one ``DetectionSetMessage`` per camera with a FRESH frame — explicit
    empty when nothing was detected (the heartbeat that distinguishes "empty
@@ -82,6 +84,9 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
     # otherwise letterbox their objects into invisibility); 0 disables.
     from backbone.detection.zone_scope import _MAX_CROP_ASPECT
     max_aspect = float(det_cfg.pop("zone_crop_max_aspect", _MAX_CROP_ASPECT))
+    crop_h = float(det_cfg.pop("zone_crop_height_m", 0.0) or 0.0)
+    zone_tol = float(det_cfg.pop("zone_membership_tol_m", 0.15))
+    fill_on = bool(det_cfg.pop("zone_crop_polygon_fill", True))
     scope_is_zones = scope == "zones"
     if det_plugin in ("yolo_onnx_seg", "yolo_openvino_seg"):
         det_cfg.setdefault("decode_masks", scope_is_zones)
@@ -93,8 +98,21 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
         det_cfg["input_size"] = (zone_imgsz, zone_imgsz)
     detector = detector_registry.create(det_plugin, **det_cfg)
     if scope_is_zones:
-        from backbone.detection.zone_scope import ZoneScopedDetector, zone_crop_boxes
-        boxes = zone_crop_boxes(rig, zones)
+        from backbone.detection.zone_scope import (
+            ZoneScopedDetector,
+            build_zone_membership_filter,
+            zone_crop_boxes,
+            zone_fill_polygons,
+        )
+        boxes = zone_crop_boxes(rig, zones, crop_height_m=crop_h)
+        # In-zone guarantee: a zone only reports objects metrically inside a
+        # zone polygon (±tol), however far the rectangular crop reaches.
+        zfilter = build_zone_membership_filter(rig, zones, tol_m=zone_tol)
+        # Polygon fill (default on): pixels outside the dilated zone polygon
+        # are blanked to gray before inference — the detector never sees the
+        # crop's off-zone corner triangles.
+        fill_polys = (zone_fill_polygons(rig, zones, crop_height_m=crop_h)
+                      if fill_on else None)
         # TensorRT compiles one engine per input shape. WITHOUT SAHI the batch
         # is deterministic (zones x cameras, at most a couple of values) and
         # its engines are already cached — padding would only force new builds
@@ -109,7 +127,8 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
             detector, boxes,
             {cid: rig[cid].image_size_wh for cid in rig.camera_ids},
             sahi=sahi_cfg, enhance=enhance_cfg, batch_buckets=buckets,
-            max_crop_aspect=max_aspect)
+            max_crop_aspect=max_aspect, zone_filter=zfilter,
+            fill_polys=fill_polys)
         if sahi_cfg and sahi_cfg.get("enabled"):
             logger.info("isistream: SAHI tiling ON (tile=%s, overlap=%.2f)",
                         sahi_cfg.get("tile") or "model input",
@@ -184,6 +203,7 @@ class IsistreamCore:
         pose_every_n: int = 1,
         producer_id: str = "isistream",
         motion_gate=None,
+        pose_smoother=None,
     ) -> None:
         self._camera_ids = list(camera_ids)
         self._frames = frame_provider
@@ -196,6 +216,7 @@ class IsistreamCore:
         self._producer_id = producer_id
 
         self._gate = motion_gate
+        self._smoother = pose_smoother   # One Euro keypoint smoothing (display)
         self._wire_obj: dict[str, tuple] = {}      # cam → cached object WireDetections
         self._wire_person: dict[str, tuple] = {}   # cam → cached person WireDetections
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -309,6 +330,10 @@ class IsistreamCore:
                 pair = FramePair(capture_ts=max(f.capture_ts for f in pose_cams.values()),
                                  frame_idx=self._tick_count, frames=pose_cams)
                 for cid, dets in self._pose.detect(pair).items():
+                    if self._smoother is not None:
+                        # keypoints only — foot_uv stays raw for the metric engine
+                        dets = self._smoother.smooth(
+                            cid, dets, pose_cams[cid].capture_ts)
                     self._wire_person[cid] = tuple(_to_wire(d) for d in dets)
             except Exception:
                 logger.debug("isistream: pose failed this tick", exc_info=True)
@@ -367,9 +392,21 @@ def build_isistream_core(
         from backbone.detection.zone_scope import zone_crop_boxes
         from isistream.motion_gate import MotionGate
         gate = MotionGate(
-            zone_crop_boxes(rig, zones) if len(zones) else {},
+            # Same crop height as the detector — the gate must watch exactly
+            # the pixels the detector will see.
+            zone_crop_boxes(
+                rig, zones,
+                crop_height_m=float(det.get("zone_crop_height_m", 0.0) or 0.0),
+            ) if len(zones) else {},
             {cid: rig[cid].image_size_wh for cid in rig.camera_ids},
             refresh_s=float(perception_cfg.get("motion_refresh_s", 2.0)))
+
+    smoother = None
+    if bool(det.get("pose_smoothing", True)):
+        from isistream.pose_smooth import PoseSmoother
+        smoother = PoseSmoother(
+            min_cutoff=float(det.get("pose_smooth_min_cutoff", 1.0)),
+            beta=float(det.get("pose_smooth_beta", 0.01)))
 
     return IsistreamCore(
         camera_ids=list(cfg["cameras"]),
@@ -383,4 +420,5 @@ def build_isistream_core(
         pose_every_n=int(det.get("pose_every_n", 1)),
         producer_id=producer_id,
         motion_gate=gate,
+        pose_smoother=smoother,
     )

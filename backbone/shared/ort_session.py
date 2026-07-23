@@ -136,13 +136,41 @@ def make_session_options(*, for_cuda: bool = False) -> ort.SessionOptions:
 
 
 def build_onnx_session(onnx_path, providers=None):
-    """Create an ORT ``InferenceSession`` with memory-safe defaults.
+    """Create an inference session with memory-safe defaults.
 
-    Attaches ``arena_extend_strategy=kSameAsRequested`` to the CUDA provider so
-    sessions don't over-reserve VRAM, and (for CUDA sessions) a small
-    non-spinning intra-op pool so resident models don't starve the RTSP decode
-    threads; CPU/other providers pass through unchanged.
+    Dispatches on the file suffix: a ``.engine`` path loads a prebuilt native
+    TensorRT engine (``backbone.shared.trt_session`` — seconds to deserialize,
+    no lazy TRT-EP build), anything else gets an ORT ``InferenceSession``.
+    Both expose the same three surfaces the detector plugins consume
+    (``get_inputs/get_outputs``, ``get_providers``, ``run``), so callers never
+    know which backend they got.
+
+    A ``.engine`` that refuses to load (wrong GPU / TRT version — engines are
+    per-machine artifacts) falls back to its sidecar-recorded source ``.onnx``
+    when that file exists, honouring the never-fail-to-start contract; without
+    a fallback the honest error propagates.
+
+    For ORT sessions: attaches ``arena_extend_strategy=kSameAsRequested`` to
+    the CUDA provider so sessions don't over-reserve VRAM, and (for CUDA
+    sessions) a small non-spinning intra-op pool so resident models don't
+    starve the RTSP decode threads; CPU/other providers pass through unchanged.
     """
+    if str(onnx_path).endswith(".engine"):
+        from backbone.shared.trt_session import TrtEngineSession, read_sidecar
+
+        try:
+            return TrtEngineSession(onnx_path)
+        except Exception as exc:
+            meta = read_sidecar(onnx_path) or {}
+            source = meta.get("source_onnx")
+            if source and Path(source).exists():
+                logger.warning(
+                    "engine %s unusable (%s) — falling back to its source "
+                    "onnx %s", Path(str(onnx_path)).name, exc, source)
+                onnx_path = source
+            else:
+                raise
+
     providers = list(providers) if providers else list(DEFAULT_PROVIDERS)
     for_cuda = "CUDAExecutionProvider" in providers
     return ort.InferenceSession(

@@ -201,8 +201,8 @@ def test_ghost_absent_without_calibration(app_cfg):
     app, _ = app_cfg
     with TestClient(app) as client:
         client.post("/api/zone-patches", json={"patches": [
-            {"id": "g3", "camera": "cam_a", "rect": [10, 10, 60, 60],
-             "frame_wh": [1000, 1000]},
+            {"id": "g3", "name": "ghostless", "camera": "cam_a",
+             "rect": [10, 10, 60, 60], "frame_wh": [1000, 1000]},
         ]})
         got = client.get("/api/zone-patches").json()["patches"][0]
     assert "ghost" not in got or got["ghost"] is None
@@ -315,3 +315,39 @@ def test_zone_patches_state_conflicting_pallet_reads_resolve_to_loaded(app_cfg):
     assert pals[0]["occupancy_state"] == "full"
     assert pals[0]["occupancy_content"] == ["carton"]
     assert data["states"]["z1"]["count"] == len(objs)
+
+
+# ---- compulsory + unique zone names (2026-07-22) ----
+
+
+def _roi(pid, name, x0=10):
+    return {"id": pid, "name": name, "camera": "cam_a",
+            "rect": [x0, 10, x0 + 90, 100], "frame_wh": [1920, 1080]}
+
+
+def test_post_rejects_empty_zone_name(app_cfg):
+    app, _ = app_cfg
+    with TestClient(app) as client:
+        res = client.post("/api/zone-patches",
+                          json={"patches": [_roi("z1", "  ")]})
+        assert res.status_code == 422
+        assert "name" in res.json()["detail"].lower()
+        assert client.get("/api/zone-patches").json()["patches"] == []
+
+
+def test_post_rejects_duplicate_zone_names_case_insensitive(app_cfg):
+    app, _ = app_cfg
+    with TestClient(app) as client:
+        res = client.post("/api/zone-patches", json={"patches": [
+            _roi("z1", "Dock A"), _roi("z2", "dock a", x0=200)]})
+        assert res.status_code == 422
+        assert "unique" in res.json()["detail"].lower()
+        assert client.get("/api/zone-patches").json()["patches"] == []
+
+
+def test_post_accepts_distinct_names(app_cfg):
+    app, _ = app_cfg
+    with TestClient(app) as client:
+        res = client.post("/api/zone-patches", json={"patches": [
+            _roi("z1", "Dock A"), _roi("z2", "Dock B", x0=200)]})
+        assert res.status_code == 200, res.text

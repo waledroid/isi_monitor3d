@@ -87,6 +87,7 @@ class MqttSubscriber:
         password: str | None = None,
         passings_buffer: int = 200,
         recent_buffer: int = 300,
+        node_evict_after_s: float = 86400.0,
     ) -> None:
         self._host = host
         self._port = port
@@ -97,6 +98,10 @@ class MqttSubscriber:
         self._username = username
         self._password = password
         self._passings_buffer = passings_buffer
+        # Nodes silent beyond this vanish from the store entirely (display
+        # staleness stays the short node_stale_after_s). A purged-retained
+        # dead node therefore ages out even without a gateway restart.
+        self._node_evict_after_s = float(node_evict_after_s)
 
         self._nodes: dict[str, NodeState] = {}
         self._lock = threading.Lock()
@@ -285,8 +290,17 @@ class MqttSubscriber:
                     passings=deque(maxlen=self._passings_buffer),
                 )
                 self._nodes[node_id] = node
-            node.last_seen = time.time()
+            now = time.time()
+            node.last_seen = now
             node.topic_version = topic_version
+
+            # Hygiene sweep: drop nodes silent beyond the eviction window
+            # (a dead node whose retained topics were purged never returns).
+            if self._node_evict_after_s > 0:
+                for nid in [n for n, s in self._nodes.items()
+                            if n != node_id
+                            and now - s.last_seen > self._node_evict_after_s]:
+                    del self._nodes[nid]
 
             if isinstance(msg, Track2DMessage):
                 node.last_track2d_by_id[msg.track_id] = msg
@@ -295,7 +309,10 @@ class MqttSubscriber:
             elif isinstance(msg, PassingEventMessage):
                 node.passings.append(msg)
             elif isinstance(msg, ZoneStateMessage):
-                node.zone_state_by_zone[msg.zone] = msg
+                # Key by the STABLE zone id when the payload carries one, so a
+                # rename overwrites the same entry instead of stranding an
+                # old-name orphan; legacy id-less payloads key by name.
+                node.zone_state_by_zone[msg.zone_id or msg.zone] = msg
             elif isinstance(msg, DiagnosticsMessage):
                 node.last_diagnostics = msg
             elif isinstance(msg, ConfigMessage):

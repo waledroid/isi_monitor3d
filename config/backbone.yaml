@@ -46,12 +46,12 @@ ingestion:
     degraded_emit_after_ms: 200.0
 detection:
   plugin: yolo_onnx_seg
-  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_03-07-2026_15-09-28/weights/best.fp16.onnx
+  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26l-seg_e200_640px_09-06-2026_00-24-57/weights/best.fp16.onnx
   class_names:
   - palette
   - carton
   - polybag
-  confidence_threshold: 0.15
+  confidence_threshold: 0.1
   pose_confidence_threshold: 0.5
   iou_threshold: 0.45
   inference_imgsz: 640
@@ -68,7 +68,7 @@ detection:
     overlap: 0.2
   enhance:
     enabled: false
-    gamma: 0.2
+    gamma: 0.75
 homography:
   cross_cam_fusion:
     match_distance_m:

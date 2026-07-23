@@ -55,6 +55,10 @@ class Detection:
     # the mask (if any) spans the full frame. Mask AREA consumers
     # (pallet_occupancy._load_area) are offset-agnostic by construction.
     mask_offset_xy: tuple[int, int] | None = None
+    # Zone-scoped detection: the source crop's window in FRAME pixels. Lets the
+    # cross-crop deduper recognize a box that was CUT OFF by its own crop edge
+    # (an offset partial view of an object another crop saw more fully).
+    crop_xyxy: tuple[float, float, float, float] | None = None
 
 
 @dataclass(slots=True)

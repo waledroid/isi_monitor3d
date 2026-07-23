@@ -137,7 +137,9 @@ class YoloOnnxDetector(Detector):
 
         self._active_providers = self._session.get_providers()
         if ("CUDAExecutionProvider" in self._providers
-                and "CUDAExecutionProvider" not in self._active_providers):
+                and "CUDAExecutionProvider" not in self._active_providers
+                # native .engine sessions ARE the GPU fast path
+                and "TensorrtEngineFile" not in self._active_providers):
             logger.warning(
                 "YoloOnnxDetector: CUDA was requested but the session fell back to %s — "
                 "inference will be SLOW. Check the onnxruntime-gpu build / CUDA libs.",

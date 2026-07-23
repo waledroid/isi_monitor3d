@@ -167,3 +167,76 @@ def test_deleting_one_patch_leaves_the_other_zone_id_intact(tmp_path) -> None:
     zones = yaml.safe_load((tmp_path / "zones.yaml").read_text())["zones"]
     assert [z["id"] for z in zones] == ["zp_keep"]
     assert [z["name"] for z in zones] == ["Zone 1"]   # never renumbered to renamed
+
+
+# ---- id-based ownership: the patch and its floor zone are one object ----
+
+
+def _seed_zones(tmp_path, zones):
+    (tmp_path / "zones.yaml").write_text(yaml.safe_dump({"zones": zones}))
+
+
+_SQUARE = [[766.67, 433.33], [900.0, 433.33], [900.0, 566.67], [766.67, 566.67]]
+
+
+def _patch(pid="zp_1", name="Zone 1"):
+    return {"id": pid, "name": name, "camera": "cam_a",
+            "polygon": [list(p) for p in _SQUARE], "frame_wh": [1000, 1000]}
+
+
+def test_rename_replaces_unmarked_entry_no_duplicate(tmp_path) -> None:
+    """A zones.yaml entry sharing the patch's id is OWNED by the patch even
+    without the derived_from marker (legacy writes): a rename must replace it,
+    never sit a second entry beside it."""
+    cfg, rig = _cfg(tmp_path), _rig(tmp_path)
+    _seed_zones(tmp_path, [{"id": "zp_1", "name": "Old Name", "type": "palette",
+                            "kind": "palette", "severity": "info",
+                            "polygon": [[0, 0], [1, 0], [1, 1]]}])
+    sync_floor_zones_from_patches(cfg, patches=[_patch(name="New Name")], rig=rig)
+    zones = yaml.safe_load((tmp_path / "zones.yaml").read_text())["zones"]
+    assert len(zones) == 1
+    assert zones[0]["id"] == "zp_1"
+    assert zones[0]["name"] == "New Name"
+
+
+def test_deleting_patch_deletes_unmarked_zp_entry(tmp_path) -> None:
+    """Patch-born entries (zp_ id) follow their patch to the grave; a
+    hand-authored zone (non-zp id) is never touched."""
+    cfg, rig = _cfg(tmp_path), _rig(tmp_path)
+    _seed_zones(tmp_path, [
+        {"id": "zp_gone", "name": "Deleted zone", "kind": "palette",
+         "polygon": [[0, 0], [1, 0], [1, 1]]},
+        {"id": "hand_dock", "name": "Hand-drawn dock", "kind": "danger",
+         "polygon": [[5, 5], [6, 5], [6, 6]]},
+    ])
+    sync_floor_zones_from_patches(cfg, patches=[], rig=rig)
+    zones = yaml.safe_load((tmp_path / "zones.yaml").read_text())["zones"]
+    assert [z["id"] for z in zones] == ["hand_dock"]
+
+
+def test_rename_preserves_kind_and_severity(tmp_path) -> None:
+    """The patch carries no kind/severity — those live on the floor zone and
+    must survive regeneration (a rename must not reset a danger zone)."""
+    cfg, rig = _cfg(tmp_path), _rig(tmp_path)
+    _seed_zones(tmp_path, [{"id": "zp_1", "name": "Danger A", "type": "danger",
+                            "kind": "danger", "severity": "critical",
+                            "polygon": [[0, 0], [1, 0], [1, 1]]}])
+    sync_floor_zones_from_patches(cfg, patches=[_patch(name="Danger A2")], rig=rig)
+    zones = yaml.safe_load((tmp_path / "zones.yaml").read_text())["zones"]
+    assert zones[0]["kind"] == "danger"
+    assert zones[0]["severity"] == "critical"
+    assert zones[0]["name"] == "Danger A2"
+
+
+def test_projection_failure_keeps_previous_entry_while_patch_lives(tmp_path) -> None:
+    """A patch whose camera is momentarily uncalibrated must NOT lose its
+    floor zone — the previous entry is retained until projection succeeds."""
+    cfg, rig = _cfg(tmp_path), _rig(tmp_path)
+    _seed_zones(tmp_path, [{"id": "zp_1", "name": "Zone 1", "kind": "palette",
+                            "polygon": [[0, 0], [1, 0], [1, 1]]}])
+    bad = _patch()
+    bad["camera"] = "cam_missing"      # not in the rig → projection skipped
+    sync_floor_zones_from_patches(cfg, patches=[bad], rig=rig)
+    zones = yaml.safe_load((tmp_path / "zones.yaml").read_text())["zones"]
+    assert [z["id"] for z in zones] == ["zp_1"]
+    assert zones[0]["name"] == "Zone 1"

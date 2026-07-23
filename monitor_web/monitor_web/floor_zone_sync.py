@@ -102,6 +102,19 @@ def sync_floor_zones_from_patches(cfg, patches: list[dict] | None = None,
         logger.info("floor_zone_sync: no calibration — zones.yaml left untouched")
         return 0
 
+    path = _zones_yaml_path(cfg)
+    try:
+        existing = yaml.safe_load(path.read_text()) or {} if path.exists() else {}
+    except (OSError, yaml.YAMLError):
+        existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+    existing_zones = [z for z in (existing.get("zones") or []) if isinstance(z, dict)]
+    # kind/type/severity live on the FLOOR zone (the patch carries none) —
+    # remember them per id so a rename/redraw never resets a danger zone.
+    prev_by_id = {str(z.get("id") or "").strip(): z
+                  for z in existing_zones if z.get("id")}
+
     derived: list[dict] = []
     used_names: set[str] = set()
     for p in user_patches:
@@ -128,27 +141,42 @@ def sync_floor_zones_from_patches(cfg, patches: list[dict] | None = None,
         # is what AGVs/WMS/MQTT key on. Legacy patches without an id fall back to
         # the loader's name-slug (still deterministic).
         pid = str(p.get("id") or "").strip()
+        prev = prev_by_id.get(pid, {})
         entry: dict = {}
         if pid:
             entry["id"] = pid
         entry.update({
             "name": name,
-            "type": "palette",
-            "kind": "palette",
+            "type": str(prev.get("type") or "palette"),
+            "kind": str(prev.get("kind") or "palette"),
+            "severity": str(prev.get("severity") or "info"),
             "polygon": floor,
             "derived_from": _MARKER,                 # ignored by the loader
         })
         derived.append(entry)
 
-    path = _zones_yaml_path(cfg)
-    try:
-        existing = yaml.safe_load(path.read_text()) or {} if path.exists() else {}
-    except (OSError, yaml.YAMLError):
-        existing = {}
-    if not isinstance(existing, dict):
-        existing = {}
-    manual = [z for z in (existing.get("zones") or [])
-              if isinstance(z, dict) and z.get("derived_from") != _MARKER]
+    # ---- reconcile: the patch and its floor zone are ONE object -------------
+    # Ownership is by ID, not by the derived_from marker (legacy writers left
+    # entries unmarked, which used to strand them forever: a rename then added
+    # a second entry beside the stale one, and a delete left an orphan).
+    #   - an entry whose id was re-projected this pass  → replaced above
+    #   - a patch-born entry (zp_ id) whose patch is gone → deleted with it
+    #   - a patch-born entry whose patch LIVES but failed projection
+    #     (uncalibrated camera, bad polygon) → kept until projection succeeds
+    #   - anything else (hand-authored, non-zp id)       → preserved untouched
+    current_ids = {str(p.get("id") or "").strip()
+                   for p in user_patches if p.get("id")}
+    projected_ids = {e["id"] for e in derived if "id" in e}
+
+    def _keep(z: dict) -> bool:
+        zid = str(z.get("id") or "").strip()
+        if zid in projected_ids:
+            return False
+        if zid.startswith("zp_"):
+            return zid in current_ids
+        return z.get("derived_from") != _MARKER
+
+    manual = [z for z in existing_zones if _keep(z)]
 
     payload = {"zones": manual + derived}
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -6,10 +6,11 @@ stays global (safety needs eyes everywhere). ``ZoneScopedDetector`` wraps any
 ``Detector`` plugin:
 
 1. **Build time** — every floor zone polygon (metres, ``zones.yaml``) is
-   projected into every camera through the calibration (distortion-aware,
-   at ``z = 0`` and ``z = crop_height_m`` so a loaded pallet's full height
-   fits) → one pixel crop box per (camera, zone), in CALIBRATION-frame
-   pixels. Zones a camera can't see produce no box.
+   projected into every camera through the calibration (distortion-aware) →
+   the tight rectangle around the projected polygon corners, one pixel crop
+   box per (camera, zone), in CALIBRATION-frame pixels. An optional
+   ``crop_height_m`` headroom additionally projects the polygon at that
+   height for sites with tall loads. Zones a camera can't see produce no box.
 2. **Per pair** — each visible zone is cropped from the (possibly
    ingest-downscaled) frame, all crops ride ONE batched ``detect()`` call on
    the wrapped detector (mixed sizes are letterboxed per-crop, so a small far
@@ -27,12 +28,13 @@ carrying their crop origin in ``Detection.mask_offset_xy`` — mask area
 consumers are offset-agnostic and the observations publisher polygonizes
 them into frame coordinates for the wire.
 
-Overlapping CROPS: zones are physically disjoint, but their crops are NOT —
-the z=0..2m extrusion makes neighbouring zones' crop rects overlap heavily,
-so one physical object is detected once per crop (per-crop NMS cannot see
+Overlapping CROPS: zones are physically disjoint, but their crops (with
+margin, or with a nonzero ``crop_height_m``) can still overlap, so one
+physical object may be detected once per crop (per-crop NMS cannot see
 across crops; the cam view drew two boxes on one palette). ``detect()``
-therefore dedups each camera's remapped detections: same class + the
-tile-merge same-object test, highest confidence wins.
+therefore MERGES each camera's overlapping same-class detections into one
+(union bbox + union mask, max confidence) and drops object detections whose
+metric foot lies outside every zone polygon (``zone_filter``).
 """
 
 from __future__ import annotations
@@ -62,6 +64,13 @@ _PAD = "__pad__"
 # A zone crop whose long side exceeds this multiple of its short side is
 # square-tiled even without global SAHI — see the aspect note in detect().
 _MAX_CROP_ASPECT = 2.0
+# Polygon fill: crop pixels outside the projected zone polygon (dilated by
+# this many metres, converted at the zone's local pixel scale) are blanked to
+# neutral gray before inference, so the detector can't see off-zone objects
+# the rectangular crop necessarily includes. The dilation keeps an object
+# straddling the zone boundary whole.
+_FILL_DILATE_M = 0.30
+_FILL_GRAY = 114  # YOLO letterbox gray
 
 
 def _project_world3(world3, K, D, R, t, image_size_wh) -> np.ndarray:
@@ -103,42 +112,183 @@ def _project_world3(world3, K, D, R, t, image_size_wh) -> np.ndarray:
     return out
 
 
+def build_zone_membership_filter(rig, zones, tol_m: float = 0.15):
+    """A ``filter(cam_id, foot_uv_calibration_px) -> bool`` closure: True when
+    the detection's floor point lies inside ANY zone polygon (± ``tol_m``).
+
+    The semantic guarantee behind zone-scoped detection: a zone never reports
+    an object that is not metrically inside a zone, no matter how far its
+    (rectangular, height-extruded) pixel crop had to reach. Tolerance is
+    sampled as a 5-point cross (center ± tol on each axis) so an object
+    straddling the boundary by projection error is kept.
+    """
+    from backbone.shared.geometry import pixel_to_floor, undistort_points
+
+    views = {cid: rig[cid] for cid in rig.camera_ids}
+    offsets = ((0.0, 0.0), (tol_m, 0.0), (-tol_m, 0.0),
+               (0.0, tol_m), (0.0, -tol_m))
+
+    def _filter(cam_id: str, foot_uv) -> bool:
+        view = views.get(cam_id)
+        if view is None:
+            return True                       # unknown camera: never drop
+        try:
+            px = np.asarray([foot_uv], dtype=np.float64)
+            xy = pixel_to_floor(undistort_points(px, view.K, view.D), view.H)[0]
+            if not np.isfinite(xy).all():
+                return True                   # fail open — never lose a det to NaN
+            for name in zones.names:
+                zone = zones[name]
+                for dx, dy in offsets:
+                    if zone.contains((float(xy[0] + dx), float(xy[1] + dy))):
+                        return True
+            return False
+        except Exception:
+            return True                       # fail open on any geometry error
+    return _filter
+
+
+def _clipped_same(a: Detection, b: Detection) -> bool:
+    """One object seen as offset PARTIAL boxes by two overlapping crops.
+
+    Offset clips overlap only ~50%, evading the generic same-object tests
+    (2026-07-22 live case: Sortie_1's full-height strip vs Sortie_2's crop cut
+    at y=679 put two boxes on one pallet). The rule: a box lying ON its own
+    crop edge, with the other box extending past that edge and a real overlap
+    between them (≥30% of the smaller box), is a cut-off view of the same
+    object."""
+    eps = 2.0
+    ax0, ay0, ax1, ay1 = a.bbox_xyxy
+    bx0, by0, bx1, by1 = b.bbox_xyxy
+    ix = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+    iy = max(0.0, min(ay1, by1) - max(ay0, by0))
+    smaller = min((ax1 - ax0) * (ay1 - ay0), (bx1 - bx0) * (by1 - by0))
+    if smaller <= 0.0 or (ix * iy) / smaller < 0.3:
+        return False
+    for (x0, y0, x1, y1), other, crop in (
+            (a.bbox_xyxy, b.bbox_xyxy, getattr(a, "crop_xyxy", None)),
+            (b.bbox_xyxy, a.bbox_xyxy, getattr(b, "crop_xyxy", None))):
+        if crop is None:
+            continue
+        cx0, cy0, cx1, cy1 = crop
+        if ((abs(y1 - cy1) <= eps and other[3] > y1 + eps)
+                or (abs(y0 - cy0) <= eps and other[1] < y0 - eps)
+                or (abs(x1 - cx1) <= eps and other[2] > x1 + eps)
+                or (abs(x0 - cx0) <= eps and other[0] < x0 - eps)):
+            return True
+    return False
+
+
+def _iou_xyxy(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    if inter <= 0.0:
+        return 0.0
+    area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+    area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+    return inter / max(area_a + area_b - inter, 1e-9)
+
+
+def _merge_two(a: Detection, b: Detection) -> Detection:
+    """One detection from two views of the same object: UNION box (recovers
+    the true extent two crop-clipped partials each lost), max confidence,
+    union-composed mask, foot at the union's bottom-center."""
+    ax0, ay0, ax1, ay1 = a.bbox_xyxy
+    bx0, by0, bx1, by1 = b.bbox_xyxy
+    ux0, uy0 = min(ax0, bx0), min(ay0, by0)
+    ux1, uy1 = max(ax1, bx1), max(ay1, by1)
+    lead = a if float(a.confidence) >= float(b.confidence) else b
+
+    mask, offset = lead.mask, getattr(lead, "mask_offset_xy", None)
+    if a.mask is not None and b.mask is not None:
+        exts = []
+        for d in (a, b):
+            ox, oy = getattr(d, "mask_offset_xy", None) or (0, 0)
+            mh, mw = d.mask.shape[:2]
+            exts.append((int(ox), int(oy), int(ox) + mw, int(oy) + mh))
+        cx0 = min(e[0] for e in exts)
+        cy0 = min(e[1] for e in exts)
+        cx1 = max(e[2] for e in exts)
+        cy1 = max(e[3] for e in exts)
+        canvas = np.zeros((cy1 - cy0, cx1 - cx0), dtype=bool)
+        for d, (ox, oy, ex, ey) in zip((a, b), exts, strict=True):
+            canvas[oy - cy0:ey - cy0, ox - cx0:ex - cx0] |= d.mask.astype(bool)
+        mask, offset = canvas, (cx0, cy0)
+
+    return Detection(
+        camera_id=lead.camera_id, capture_ts=lead.capture_ts, cls=lead.cls,
+        confidence=max(float(a.confidence), float(b.confidence)),
+        bbox_xyxy=(ux0, uy0, ux1, uy1),
+        foot_uv=((ux0 + ux1) / 2.0, uy1),
+        keypoints_uv=lead.keypoints_uv,
+        mask=mask, mask_offset_xy=offset,
+        crop_xyxy=None,          # merged view spans crops — clip rule off
+    )
+
+
 def _dedup_across_crops(dets: list[Detection]) -> list[Detection]:
-    """One detection per physical object per camera: drop same-class
-    duplicates from overlapping zone crops (see the module docstring),
-    keeping the highest-confidence one — its box/mask/zone tag ride along."""
+    """One detection per physical object per camera: MERGE same-class
+    duplicates from overlapping zone crops into a union detection (box, mask,
+    max confidence) — a class appears once per physical object with its true
+    extent; non-overlapping same-class boxes are distinct objects and are
+    never touched. Merge triggers: the generic same-object geometry, the
+    crop-edge clip rule (`_clipped_same`), or plain IoU ≥ 0.10 (author rule:
+    same-class overlap in a zone means one object; the floor ignores
+    pixel-touching neighbors). Iterates to a fixed point."""
     if len(dets) < 2:
         return dets
     from backbone.detection.tiling import _same_object
-    order = sorted(dets, key=lambda d: -float(d.confidence))
-    kept: list[Detection] = []
-    for d in order:
-        if any(str(k.cls) == str(d.cls)
-               and _same_object(k.bbox_xyxy, d.bbox_xyxy, 0.5) for k in kept):
-            continue
-        kept.append(d)
-    return kept
+
+    def _same(x: Detection, y: Detection) -> bool:
+        return (str(x.cls) == str(y.cls)
+                and (_same_object(x.bbox_xyxy, y.bbox_xyxy, 0.5)
+                     or _clipped_same(x, y)
+                     or _iou_xyxy(x.bbox_xyxy, y.bbox_xyxy) >= 0.10))
+
+    pool = sorted(dets, key=lambda d: -float(d.confidence))
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(pool)):
+            for j in range(i + 1, len(pool)):
+                if _same(pool[i], pool[j]):
+                    union = _merge_two(pool[i], pool[j])
+                    pool = [d for k, d in enumerate(pool) if k not in (i, j)]
+                    pool.append(union)
+                    pool.sort(key=lambda d: -float(d.confidence))
+                    merged = True
+                    break
+            if merged:
+                break
+    return pool
 
 
 def zone_crop_boxes(
     rig,
     zones,
     *,
-    crop_height_m: float = 2.0,
+    crop_height_m: float = 0.0,
     margin_px: int = 16,
     min_side_px: int = 48,
 ) -> dict[str, list[tuple[str, tuple[int, int, int, int]]]]:
     """Per-camera crop boxes, CALIBRATION-frame pixels: ``{cam: [(zone, box)]}``.
 
-    The box is the union bbox of the zone polygon projected at the floor
-    (``z=0``) and at ``crop_height_m`` (objects have height — a loaded pallet
-    extends well above its floor footprint in the image), padded by
-    ``margin_px`` and clipped to the frame. Zones whose visible box is smaller
-    than ``min_side_px`` on either side (barely/not visible) are skipped.
+    The box is the tight bbox of the zone polygon's corners projected at the
+    floor (``z=0``), padded by ``margin_px`` and clipped to the frame. Zones
+    whose visible box is smaller than ``min_side_px`` on either side
+    (barely/not visible) are skipped.
+
+    ``crop_height_m`` default 0 (config ``detection.zone_crop_height_m``):
+    the crop IS the floor-polygon rectangle — no headroom. Nonzero values
+    additionally project the polygon at that height and take the union bbox
+    (for sites whose tall loads must stay fully in-crop). History: 2.0 m
+    ballooned a small floor zone into a frame-spanning strip at low camera
+    angles (2026-07-23 live case: Sortie_1 on cam_b covered (0,0,336,1080)).
 
     Mode-1 placeholder extrinsics (only ``H`` is real) can't lift the polygon
-    off the floor: the floor bbox is extended UPWARD by its own height as a
-    conservative stand-in.
+    off the floor: with a nonzero ``crop_height_m`` the floor bbox is extended
+    UPWARD by its own height as a conservative stand-in.
     """
     boxes: dict[str, list[tuple[str, tuple[int, int, int, int]]]] = {}
     for cam_id in rig.camera_ids:
@@ -149,13 +299,14 @@ def zone_crop_boxes(
             poly = densify_polygon(zones[name].polygon, segments_per_edge=8)
             if has_metric_camera_model(view.K, view.R, view.t):
                 floor3 = np.hstack([poly, np.zeros((len(poly), 1))])
-                top3 = np.hstack([poly, np.full((len(poly), 1), float(crop_height_m))])
-                uv = np.vstack([
-                    _project_world3(floor3, view.K, view.D, view.R, view.t,
-                                    view.image_size_wh),
-                    _project_world3(top3, view.K, view.D, view.R, view.t,
-                                    view.image_size_wh),
-                ])
+                pts3 = [_project_world3(floor3, view.K, view.D, view.R, view.t,
+                                        view.image_size_wh)]
+                if crop_height_m > 0:
+                    top3 = np.hstack(
+                        [poly, np.full((len(poly), 1), float(crop_height_m))])
+                    pts3.append(_project_world3(top3, view.K, view.D, view.R,
+                                                view.t, view.image_size_wh))
+                uv = np.vstack(pts3)
                 uv = uv[~np.isnan(uv).any(axis=1)]
             else:
                 uv = floor_to_pixel(poly, view.H)
@@ -165,7 +316,8 @@ def zone_crop_boxes(
             x1 = math.ceil(uv[:, 0].max()) + margin_px
             y0 = math.floor(uv[:, 1].min()) - margin_px
             y1 = math.ceil(uv[:, 1].max()) + margin_px
-            if not has_metric_camera_model(view.K, view.R, view.t):
+            if crop_height_m > 0 and not has_metric_camera_model(
+                    view.K, view.R, view.t):
                 y0 -= (y1 - y0)          # Mode 1: height stand-in (see docstring)
             x0, y0 = max(0, x0), max(0, y0)
             x1, y1 = min(w, x1), min(h, y1)
@@ -176,6 +328,59 @@ def zone_crop_boxes(
         logger.info("zone_scope: %s sees %d/%d zones: %s", cam_id,
                     len(cam_boxes), len(zones), [b[0] for b in cam_boxes])
     return boxes
+
+
+def zone_fill_polygons(
+    rig, zones, *, crop_height_m: float = 0.0,
+) -> dict[str, dict[str, tuple[np.ndarray, float]]]:
+    """Projected zone polygons for the crop outside-fill:
+    ``{cam: {zone: (poly_px Nx2, dilate_px)}}``, CALIBRATION-frame pixels.
+
+    The rectangular crop covers more than the polygon (its corner triangles,
+    ~35-45 % of the area on this rig); with fill on, ``detect()`` blanks those
+    pixels to neutral gray so the detector cannot see off-zone objects at all
+    (the membership filter then only mops up boundary cases). ``dilate_px`` is
+    ``_FILL_DILATE_M`` metres at the zone's local pixel scale. With
+    ``crop_height_m`` > 0 the fill region is the convex hull of the floor and
+    top projections. A zone whose projection is partially invalid (behind the
+    camera / non-finite) gets NO fill entry — its crop stays unfilled
+    (fail-open, same spirit as the membership filter).
+    """
+    out: dict[str, dict[str, tuple[np.ndarray, float]]] = {}
+    for cam_id in rig.camera_ids:
+        view = rig[cam_id]
+        cam_polys: dict[str, tuple[np.ndarray, float]] = {}
+        for name in zones.names:
+            poly = densify_polygon(zones[name].polygon, segments_per_edge=8)
+            metric_area = float(cv2.contourArea(
+                np.asarray(poly, dtype=np.float32)))
+            metric = has_metric_camera_model(view.K, view.R, view.t)
+            if metric:
+                floor3 = np.hstack([poly, np.zeros((len(poly), 1))])
+                uv = _project_world3(floor3, view.K, view.D, view.R, view.t,
+                                     view.image_size_wh)
+            else:
+                uv = floor_to_pixel(poly, view.H)
+            if len(uv) < 3 or not np.isfinite(uv).all():
+                continue
+            fill_uv = uv
+            if crop_height_m > 0 and metric:
+                top3 = np.hstack(
+                    [poly, np.full((len(poly), 1), float(crop_height_m))])
+                top = _project_world3(top3, view.K, view.D, view.R, view.t,
+                                      view.image_size_wh)
+                if not np.isfinite(top).all():
+                    continue
+                fill_uv = cv2.convexHull(
+                    np.vstack([uv, top]).astype(np.float32)).reshape(-1, 2)
+            px_area = float(cv2.contourArea(fill_uv.astype(np.float32)))
+            if metric_area <= 0 or px_area <= 0:
+                continue
+            dilate_px = _FILL_DILATE_M * math.sqrt(px_area / metric_area)
+            cam_polys[name] = (np.asarray(fill_uv, dtype=np.float64),
+                               float(dilate_px))
+        out[cam_id] = cam_polys
+    return out
 
 
 class ZoneScopedDetector:
@@ -192,9 +397,21 @@ class ZoneScopedDetector:
                  sahi: dict | None = None,
                  enhance: dict | None = None,
                  batch_buckets: tuple[int, ...] | None = None,
-                 max_crop_aspect: float = _MAX_CROP_ASPECT) -> None:
+                 max_crop_aspect: float = _MAX_CROP_ASPECT,
+                 zone_filter=None,
+                 fill_polys: dict | None = None) -> None:
         self._detector = detector
         self._boxes = boxes_by_camera
+        # In-zone membership filter (build_zone_membership_filter): drops
+        # object detections whose metric foot lies outside every zone polygon.
+        # Called with CALIBRATION-frame pixels; detect() rescales.
+        self._zone_filter = zone_filter
+        # Polygon fill (zone_fill_polygons): blank crop pixels outside the
+        # dilated zone polygon before inference. Outside-masks are rasterized
+        # once per (cam, zone, crop shape) and cached — frame sizes are stable
+        # at runtime, so the cache stays bounded.
+        self._fill_polys = fill_polys or {}
+        self._fill_cache: dict[tuple, np.ndarray] = {}
         self._calib_wh = {k: (int(v[0]), int(v[1]))
                           for k, v in calib_wh_by_camera.items()}
         # SAHI: slice big zone crops into overlapping tiles so far/small
@@ -228,6 +445,7 @@ class ZoneScopedDetector:
         out: dict[str, list[Detection]] = {cid: [] for cid in pair.frames}
         crops: dict[str, Frame] = {}
         origin: dict[str, tuple[str, int, int]] = {}
+        crop_rect: dict[str, tuple[float, float, float, float]] = {}
         for cam_id, frame in pair.frames.items():
             cam_boxes = self._boxes.get(cam_id) or []
             if not cam_boxes:
@@ -236,12 +454,16 @@ class ZoneScopedDetector:
             # Crop boxes are calibration-frame px; frames may be ingest-downscaled.
             calib_w, calib_h = self._calib_wh.get(cam_id, (fw, fh))
             sx, sy = fw / calib_w, fh / calib_h
-            for i, (_zone, (x0, y0, x1, y1)) in enumerate(cam_boxes):
+            for i, (zone_name, (x0, y0, x1, y1)) in enumerate(cam_boxes):
                 fx0, fy0 = max(0, int(x0 * sx)), max(0, int(y0 * sy))
                 fx1, fy1 = min(fw, math.ceil(x1 * sx)), min(fh, math.ceil(y1 * sy))
                 if fx1 - fx0 < 8 or fy1 - fy0 < 8:
                     continue
                 crop_img = frame.image[fy0:fy1, fx0:fx1]
+                fill = (self._fill_polys.get(cam_id) or {}).get(zone_name)
+                if fill is not None:
+                    crop_img = self._fill_outside(
+                        cam_id, zone_name, crop_img, fill, sx, sy, fx0, fy0)
                 if self._enh_on:
                     crop_img = enhance_bgr(crop_img, **self._enh_kwargs)
                 ch, cw = crop_img.shape[:2]
@@ -268,6 +490,10 @@ class ZoneScopedDetector:
                     # Origin folds the zone-crop offset AND the tile offset, so
                     # a detection maps straight back to frame coordinates.
                     origin[sid] = (cam_id, fx0 + tx0, fy0 + ty0)
+                    # The crop's window in frame px — the deduper's clip rule
+                    # needs to know where each detection's view was cut off.
+                    crop_rect[sid] = (float(fx0 + tx0), float(fy0 + ty0),
+                                      float(fx0 + tx1), float(fy0 + ty1))
         if not crops:
             return out
         raw = self._detect_padded(pair, crops)
@@ -281,6 +507,7 @@ class ZoneScopedDetector:
             cam_id, ox, oy = origin[sid]
             for d in dets:
                 d.camera_id = cam_id
+                d.crop_xyxy = crop_rect.get(sid)
                 x0, y0, x1, y1 = d.bbox_xyxy
                 d.bbox_xyxy = (x0 + ox, y0 + oy, x1 + ox, y1 + oy)
                 u, v = d.foot_uv
@@ -303,10 +530,46 @@ class ZoneScopedDetector:
                     d.mask_offset_xy = (ox + tx, oy + ty)
                 out[cam_id].append(d)
         for cam_id, dets in out.items():
+            # In-zone guarantee: drop detections whose metric foot is outside
+            # every zone polygon (the rectangular crop necessarily covers more
+            # than the zone; the polygon is the truth). Persons never pass
+            # through zone scope, so no exemption is needed here.
+            if self._zone_filter is not None and dets:
+                frame = pair.frames.get(cam_id)
+                if frame is not None:
+                    fh, fw = frame.image.shape[:2]
+                    cw, ch = self._calib_wh.get(cam_id, (fw, fh))
+                    kx, ky = cw / float(fw), ch / float(fh)
+                    dets = [d for d in dets
+                            if self._zone_filter(
+                                cam_id,
+                                (d.foot_uv[0] * kx, d.foot_uv[1] * ky))]
             out[cam_id] = _dedup_across_crops(dets)
         return out
 
     # ---- internals ----
+
+    def _fill_outside(self, cam_id, zone_name, crop_img, fill,
+                      sx, sy, fx0, fy0) -> np.ndarray:
+        """Blank crop pixels outside the (dilated) zone polygon to neutral
+        gray. Returns a COPY — the crop is a view into the shared frame."""
+        ch, cw = crop_img.shape[:2]
+        key = (cam_id, zone_name, ch, cw, fx0, fy0)
+        outside = self._fill_cache.get(key)
+        if outside is None:
+            poly_px, dilate_px = fill
+            pts = np.round(poly_px * (sx, sy) - (fx0, fy0)).astype(np.int32)
+            inside = np.zeros((ch, cw), np.uint8)
+            cv2.fillPoly(inside, [pts], 255)
+            r = max(1, round(dilate_px * (sx + sy) / 2.0))
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+            inside = cv2.dilate(inside, kernel)
+            outside = inside == 0
+            self._fill_cache[key] = outside
+        crop_img = crop_img.copy()
+        crop_img[outside] = _FILL_GRAY
+        return crop_img
 
     def _model_input_px(self) -> int:
         size = getattr(self._detector, "input_size", None)

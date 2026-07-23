@@ -223,8 +223,14 @@ def get_detector(cfg):
     # picker. select_plugin() is pure; here we only do the introspection I/O.
     if plugin == "yolo_onnx":
         try:
-            import onnx as _onnx
-            names = [o.name for o in _onnx.load(str(resolved)).graph.output]
+            if str(resolved).endswith(".engine"):
+                # native TRT engine: output names come from the conversion
+                # sidecar (no cheap CPU introspection for a serialized engine)
+                from backbone.shared.trt_session import read_sidecar
+                names = list((read_sidecar(resolved) or {}).get("outputs") or [])
+            else:
+                import onnx as _onnx
+                names = [o.name for o in _onnx.load(str(resolved)).graph.output]
             chosen = select_plugin(plugin, names)
             if chosen != plugin:
                 logger.info("detection overlay: %s outputs %s → using %s",

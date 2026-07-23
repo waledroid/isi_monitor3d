@@ -69,10 +69,12 @@ def test_crop_box_contains_projected_zone() -> None:
     # Floor footprint: x in [766, 900], y in [433, 566] (u = 1000*X/3 + 500).
     assert x0 <= 766 and x1 >= 900
     assert y0 <= 433 and y1 >= 566
-    # Height extent: at z=2 the same X spans u = 1000*X/1 + 500 → up to 1500+,
-    # clipped to the frame — the box must be materially larger than the
-    # floor-only footprint (not just the 16 px margin).
-    assert (x1 - x0) > (900 - 766) + 2 * 16 + 1
+    # DEFAULT is the tight floor rectangle (author decision 2026-07-23): no
+    # height extrusion — the box is the footprint plus only the 16 px margin.
+    assert (x1 - x0) <= (900 - 766) + 2 * 16 + 2
+    # An explicit headroom still lifts the box (opt-in for tall loads):
+    lifted = zone_crop_boxes(rig, zones, crop_height_m=2.0)["cam_a"][0][1]
+    assert (lifted[2] - lifted[0]) > (x1 - x0) + 1
 
 
 def test_invisible_zone_produces_no_box() -> None:
@@ -154,6 +156,84 @@ def test_no_crops_at_all_returns_empty_without_inner_call() -> None:
     det = ZoneScopedDetector(_Boom(), {"cam_a": []}, {"cam_a": (1000, 1000)})
     out = det.detect(_pair({"cam_a": np.zeros((100, 100, 3), np.uint8)}))
     assert out == {"cam_a": []}
+
+
+# ---- polygon fill ----------------------------------------------------------
+
+
+class _CaptureDetector:
+    """Records the crop images it was handed; reports nothing."""
+
+    def __init__(self):
+        self.images = []
+
+    def detect(self, pair: FramePair):
+        self.images = [f.image for f in pair.frames.values()]
+        return {sid: [] for sid in pair.frames}
+
+
+def _diamond_setup():
+    """A diamond zone whose AABB crop has large off-zone corner triangles.
+
+    Camera at origin looking down from z=3, f=1000, c=(500,500): floor point
+    (X, Y) projects to u = 1000*X/3 + 500. Diamond ±0.9 m → pixel diamond
+    with vertices (500,200) (800,500) (500,800) (200,500); AABB crop
+    (184,184,816,816) with the 16 px margin. Local px scale ≈ 333 px/m, so
+    the 0.3 m fill dilation ≈ 100 px.
+    """
+    rig = _FakeRig({"cam_a": _View()})
+    zones = _zones([[0.0, -0.9], [0.9, 0.0], [0.0, 0.9], [-0.9, 0.0]])
+    return rig, zones
+
+
+def test_zone_fill_polygons_shape_and_dilation() -> None:
+    from backbone.detection.zone_scope import zone_fill_polygons
+
+    rig, zones = _diamond_setup()
+    polys = zone_fill_polygons(rig, zones)
+    poly_px, dilate_px = polys["cam_a"]["Z1"]
+    assert poly_px.ndim == 2 and poly_px.shape[1] == 2
+    # Projected vertices land on the pixel diamond (densified points included).
+    assert abs(poly_px[:, 0].min() - 200) < 2 and abs(poly_px[:, 0].max() - 800) < 2
+    # 0.3 m at ~333 px/m ≈ 100 px.
+    assert 80 < dilate_px < 120
+
+
+def test_fill_blanks_outside_polygon_keeps_inside_and_dilation_band() -> None:
+    from backbone.detection.zone_scope import zone_crop_boxes, zone_fill_polygons
+
+    rig, zones = _diamond_setup()
+    boxes = zone_crop_boxes(rig, zones)
+    polys = zone_fill_polygons(rig, zones)
+    inner = _CaptureDetector()
+    det = ZoneScopedDetector(inner, boxes, {"cam_a": (1000, 1000)},
+                             max_crop_aspect=0, fill_polys=polys)
+    frame = np.full((1000, 1000, 3), 255, np.uint8)
+    det.detect(_pair({"cam_a": frame}))
+    (crop,) = inner.images
+    (x0, y0, _x1, _y1) = boxes["cam_a"][0][1]
+    # Frame (500,500) = diamond center → white.
+    assert (crop[500 - y0, 500 - x0] == 255).all()
+    # Frame (330,330): outside the diamond by ~28 px but inside the ~100 px
+    # dilation band → kept white (boundary objects stay whole).
+    assert (crop[330 - y0, 330 - x0] == 255).all()
+    # Crop corner: ~235 px outside the diamond edge → gray-filled.
+    assert (crop[2, 2] == 114).all()
+    # The shared frame itself is NEVER mutated (crops are views into it).
+    assert (frame == 255).all()
+
+
+def test_no_fill_polys_leaves_crops_untouched() -> None:
+    from backbone.detection.zone_scope import zone_crop_boxes
+
+    rig, zones = _diamond_setup()
+    boxes = zone_crop_boxes(rig, zones)
+    inner = _CaptureDetector()
+    det = ZoneScopedDetector(inner, boxes, {"cam_a": (1000, 1000)},
+                             max_crop_aspect=0)
+    det.detect(_pair({"cam_a": np.full((1000, 1000, 3), 255, np.uint8)}))
+    (crop,) = inner.images
+    assert (crop == 255).all()
 
 
 # ---- orchestrator wiring ---------------------------------------------------
@@ -403,3 +483,117 @@ def test_distinct_objects_in_separate_zones_both_survive() -> None:
     det = ZoneScopedDetector(inner, boxes, {"cam_a": (1000, 1000)})
     out = det.detect(_pair({"cam_a": np.zeros((1000, 1000, 3), np.uint8)}))
     assert len(out["cam_a"]) == 2
+
+
+# ---- clip-aware dedup: offset partial boxes from overlapping crops ----
+
+
+def _det(cls, conf, bbox, crop=None):
+    d = Detection(
+        camera_id="cam_b", capture_ts=0.0, cls=cls, confidence=conf,
+        bbox_xyxy=tuple(float(v) for v in bbox),
+        foot_uv=((bbox[0] + bbox[2]) / 2.0, float(bbox[3])),
+    )
+    d.crop_xyxy = tuple(float(v) for v in crop) if crop else None
+    return d
+
+
+def test_offset_clipped_boxes_merge_to_union() -> None:
+    """The live cam_b case (2026-07-22): Sortie_1's crop (0,0,336,1080) and
+    Sortie_2's crop (70,0,1070,679) both see one pallet as offset partials.
+    They must MERGE into one detection whose box is the UNION (the true
+    extent both partials lost), max confidence, foot at the union bottom."""
+    from backbone.detection.zone_scope import _dedup_across_crops
+    full = _det("palette", 0.875, (40, 120, 300, 900), crop=(0, 0, 336, 1080))
+    clipped = _det("palette", 0.535, (70, 100, 320, 679), crop=(70, 0, 1070, 679))
+    out = _dedup_across_crops([full, clipped])
+    assert len(out) == 1
+    d = out[0]
+    assert d.confidence == 0.875
+    assert d.bbox_xyxy == (40, 100, 320, 900)          # union
+    assert d.foot_uv == (180.0, 900.0)                  # union bottom-center
+    assert d.crop_xyxy is None                          # merged spans crops
+
+
+def test_clipped_but_disjoint_boxes_survive() -> None:
+    """Clipped at a crop edge but barely overlapping the other box: two
+    different objects on either side of a zone boundary — keep both."""
+    from backbone.detection.zone_scope import _dedup_across_crops
+    a = _det("palette", 0.9, (40, 120, 180, 900), crop=(0, 0, 336, 1080))
+    b = _det("palette", 0.6, (200, 600, 320, 679), crop=(70, 0, 1070, 679))
+    assert len(_dedup_across_crops([a, b])) == 2
+
+
+def test_overlapping_same_class_merge_by_iou_floor() -> None:
+    """Author rule (2026-07-23): same-class boxes that OVERLAP (IoU >= 0.10)
+    are one object — merged even without crop clipping. (Deliberate trade-off:
+    two truly distinct same-class objects overlapping >=10% inside a zone now
+    read as one.)"""
+    from backbone.detection.zone_scope import _dedup_across_crops
+    a = _det("palette", 0.9, (100, 100, 300, 400), crop=(0, 0, 1000, 1000))
+    b = _det("palette", 0.8, (220, 250, 420, 560), crop=(0, 0, 1000, 1000))
+    out = _dedup_across_crops([a, b])
+    assert len(out) == 1
+    assert out[0].bbox_xyxy == (100, 100, 420, 560)
+
+
+def test_barely_touching_same_class_kept_separate() -> None:
+    """IoU below the 0.10 floor (pixel-touching neighbors): two objects."""
+    from backbone.detection.zone_scope import _dedup_across_crops
+    a = _det("palette", 0.9, (100, 100, 300, 400))
+    b = _det("palette", 0.8, (290, 390, 480, 700))     # sliver overlap
+    assert len(_dedup_across_crops([a, b])) == 2
+
+
+def test_cross_class_never_merges() -> None:
+    """A carton ON a palette overlaps heavily but is a different class."""
+    from backbone.detection.zone_scope import _dedup_across_crops
+    a = _det("palette", 0.9, (100, 100, 400, 500))
+    b = _det("carton", 0.7, (150, 120, 350, 300))
+    assert len(_dedup_across_crops([a, b])) == 2
+
+
+def test_merge_composes_masks_on_union_canvas() -> None:
+    """Two crop-relative masks with different offsets → one canvas covering
+    both, each region set, offset = canvas origin."""
+    import numpy as np
+
+    from backbone.detection.zone_scope import _dedup_across_crops
+    a = _det("palette", 0.9, (100, 100, 300, 450), crop=(0, 0, 336, 1080))
+    a.mask = np.ones((10, 10), dtype=bool)
+    a.mask_offset_xy = (100, 100)
+    b = _det("palette", 0.5, (150, 300, 320, 679), crop=(70, 0, 1070, 679))
+    b.mask = np.ones((8, 8), dtype=bool)
+    b.mask_offset_xy = (200, 300)
+    out = _dedup_across_crops([a, b])
+    assert len(out) == 1
+    m, (ox, oy) = out[0].mask, out[0].mask_offset_xy
+    assert (ox, oy) == (100, 100)
+    assert m.shape == (208, 108)                       # spans both extents
+    assert m[0:10, 0:10].all()                         # a's region
+    assert m[200:208, 100:108].all()                   # b's region
+
+
+def test_zone_filter_drops_out_of_zone_detections() -> None:
+    """Detections whose (calibration-frame) foot the filter rejects vanish;
+    accepted ones survive — the in-zone guarantee at the detector level."""
+    inner = _EchoDetector()
+    boxes = {"cam_a": [("Z1", (100, 200, 400, 500))]}
+    rejected = []
+    def zfilter(cam_id, foot):
+        rejected.append((cam_id, foot))
+        return False
+    det = ZoneScopedDetector(inner, boxes, {"cam_a": (1000, 1000)},
+                             zone_filter=zfilter)
+    out = det.detect(_pair({"cam_a": np.zeros((1000, 1000, 3), np.uint8)}))
+    assert out["cam_a"] == []
+    assert rejected and rejected[0][0] == "cam_a"
+
+
+def test_zone_filter_accepting_keeps_detections() -> None:
+    inner = _EchoDetector()
+    boxes = {"cam_a": [("Z1", (100, 200, 400, 500))]}
+    det = ZoneScopedDetector(inner, boxes, {"cam_a": (1000, 1000)},
+                             zone_filter=lambda cid, foot: True)
+    out = det.detect(_pair({"cam_a": np.zeros((1000, 1000, 3), np.uint8)}))
+    assert len(out["cam_a"]) == 1

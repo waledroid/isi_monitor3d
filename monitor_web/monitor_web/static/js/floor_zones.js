@@ -14,7 +14,7 @@
 // Settings modal reopens on the Zones tab. Edits (name/kind/severity) and
 // deletes persist the same way. The Backbone applies zones on next START.
 
-import { startDraw } from "/static/js/draw_mode.js";
+import { promptZoneName, startDraw } from "/static/js/draw_mode.js";
 import { openPicker } from "/static/js/draw_target_picker.js";
 
 function t(key, fallback) {
@@ -123,9 +123,12 @@ function drawNewZone() {
         minPoints: 3,
         onDone: async (worldPoints) => {
           if (Array.isArray(worldPoints) && worldPoints.length >= 3) {
+            const name = promptZoneName(
+              zones.map((z) => z.name), nextDefaultName());
+            if (!name) { reopenSettingsOnZonesTab(); return; }
             zones.push({
               id: newZoneId(),
-              name: nextDefaultName(),
+              name,
               kind: "palette",
               type: "palette",
               severity: "info",
@@ -151,7 +154,17 @@ function buildRow(zone, idx) {
   nameInput.className = "zm-input";
   nameInput.value = zone.name;
   nameInput.addEventListener("change", () => {
-    zone.name = nameInput.value.trim() || zone.name;
+    const val = nameInput.value.trim();
+    const taken = zones.filter((z) => z.id !== zone.id)
+      .map((z) => String(z.name || "").trim().toLowerCase());
+    if (!val || taken.includes(val.toLowerCase())) {
+      window.alert(!val
+        ? "Zone name cannot be empty."
+        : `"${val}" is already used by another zone — names must be unique.`);
+      nameInput.value = zone.name;
+      return;
+    }
+    zone.name = val;
     persist();
   });
 

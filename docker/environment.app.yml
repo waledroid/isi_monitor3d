@@ -75,4 +75,6 @@ dependencies:
 
   - pip:
       - paho-mqtt>=1.6,<3
+      # native TensorRT .engine execution (backbone/shared/trt_session.py)
+      - cuda-python>=12.6,<13
       - pydantic-settings>=2.0

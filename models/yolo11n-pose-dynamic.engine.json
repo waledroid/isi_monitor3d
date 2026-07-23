@@ -1,0 +1,37 @@
+{
+  "source_onnx": "/home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.onnx",
+  "source_sha256": "d3a6bec5cd01c45aba61087ea5522e3ad0b0af3cd8949e5b6cc78f3fa95a19d8",
+  "tensorrt_version": "10.16.1.11",
+  "gpu_name": "NVIDIA GeForce RTX 5070",
+  "fp16": true,
+  "profile": {
+    "images": [
+      [
+        1,
+        3,
+        640,
+        640
+      ],
+      [
+        2,
+        3,
+        640,
+        640
+      ],
+      [
+        4,
+        3,
+        640,
+        640
+      ]
+    ]
+  },
+  "outputs": [
+    "output0"
+  ],
+  "class_names": [
+    "person"
+  ],
+  "built_at": "2026-07-22T16:09:08+0200",
+  "build_seconds": 124.2
+}

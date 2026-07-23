@@ -499,6 +499,23 @@ def post_zone_patches(body: PatchesBody, request: Request) -> dict:
         from fastapi import HTTPException
         raise HTTPException(status_code=422,
                             detail=f"max {MAX_PATCHES} zones (excluding twins)")
+
+    # Zone names are COMPULSORY and UNIQUE (case-insensitive): the name is
+    # what the cards, zones.yaml, and the MQTT zone_state payload all display —
+    # an empty or colliding name used to leak autonames/mangled suffixes into
+    # the wire (floor_zone_sync's "{name} ({id})" fallback becomes unreachable).
+    from fastapi import HTTPException
+    names = [str(p.get("name") or "").strip() for p in user_patches]
+    if any(not n for n in names):
+        raise HTTPException(status_code=422,
+                            detail="every zone needs a name — fill the name "
+                                   "field before saving")
+    lowered = [n.lower() for n in names]
+    if len(set(lowered)) != len(lowered):
+        dup = next(n for n in names if lowered.count(n.lower()) > 1)
+        raise HTTPException(status_code=422,
+                            detail=f"zone name {dup!r} is used more than once "
+                                   "— names must be unique")
     rig = _load_rig(cfg)
     # ORDER MATTERS: derive the Backbone's FLOOR zones from the drawings FIRST
     # (one drawing → cards AND zone_state/proximity MQTT; applies at next

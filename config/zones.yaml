@@ -1,6 +1,6 @@
 zones:
 - id: zp_mr8z7cot
-  name: Zone 1
+  name: Sortie_1
   type: palette
   kind: palette
   severity: info
@@ -13,8 +13,9 @@ zones:
     - -0.199
   - - -4.643
     - -2.773
+  derived_from: zone_patch
 - id: zp_mrc2y24v
-  name: Zone 2
+  name: Sortie_2
   type: palette
   kind: palette
   severity: info
@@ -27,17 +28,19 @@ zones:
     - 0.765
   - - 0.198
     - 0.036
-- id: zp_mrc2ypt4
-  name: Zone 3
+  derived_from: zone_patch
+- id: zp_mrx9l3wj
+  name: Sortie_3
   type: palette
   kind: palette
   severity: info
   polygon:
-  - - 0.68
-    - 1.475
-  - - 1.464
-    - 2.445
-  - - 2.083
-    - 1.642
-  - - 1.207
-    - 0.845
+  - - 0.132
+    - 2.083
+  - - 0.939
+    - 2.867
+  - - 1.832
+    - 1.687
+  - - 1.121
+    - 0.932
+  derived_from: zone_patch

@@ -43,6 +43,19 @@ detection:
   keep_classes: [person, forklift, pallet]
   confidence_threshold: 0.25
   iou_threshold: 0.45
+  # Zone crop headroom above the floor polygon (metres). Default 0: the crop
+  # is the tight rectangle around the floor polygon corners. Raise it (e.g.
+  # 1.2) if tall loads must stay fully in-crop — high values balloon crops
+  # into frame-spanning strips at low camera angles.
+  zone_crop_height_m: 0
+  # In-zone guarantee: object detections whose metric foot lies outside every
+  # zone polygon (± this tolerance, metres) are dropped by the producer.
+  zone_membership_tol_m: 0.15
+  # Polygon fill (default on): crop pixels outside the zone polygon (dilated
+  # ~0.3 m so boundary objects stay whole) are blanked to neutral gray before
+  # inference — the detector never sees the rectangular crop's off-zone
+  # corners. Set false to let it see the full crop rectangle.
+  zone_crop_polygon_fill: true
 
 # OpenVINO alternative (Intel CPU / iGPU edge node — NOT the NVIDIA GPU). The IR
 # is exported with nms=False so it shares the raw head with the ONNX model.

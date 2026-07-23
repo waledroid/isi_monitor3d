@@ -5,7 +5,7 @@
 // `raw` cam mode, stored in zone_patches.yaml, and the /stream/zone/{id} endpoint
 // crops + detects that region. live_overlay.js reads getPatches() to draw the red ROI.
 
-import { startDraw } from "/static/js/draw_mode.js";
+import { promptZoneName, startDraw } from "/static/js/draw_mode.js";
 
 const MAX_PATCHES = 6;   // max zones the operator can create (drawn on CAM)
 
@@ -83,11 +83,16 @@ export function startPatchDraw(camId) {
     minPoints: 3,                // a polygon (finish via the Done button)
     onDone: (points) => {
       if (!points || points.length < 3) return;
+      // Name is COMPULSORY and UNIQUE — ask before the zone exists, so no
+      // autonamed zone ever reaches zones.yaml / the MQTT zone_state payload.
+      const name = promptZoneName(
+        userPatches().map((p) => p.name), nextDefaultName());
+      if (!name) return;                       // cancelled → no zone
       const xs = points.map((p) => p[0]);
       const ys = points.map((p) => p[1]);
       patches.push({
         id: "zp_" + Date.now().toString(36),
-        name: nextDefaultName(),
+        name,
         camera: cam,
         polygon: points,                                   // red overlay + crop region
         rect: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
@@ -242,7 +247,20 @@ function renderSettingsList() {
         `</span>` +
       `</div>`;
 
-    row.querySelector(".zm-name").addEventListener("change", (e) => { p.name = e.target.value.trim(); save(); });
+    row.querySelector(".zm-name").addEventListener("change", (e) => {
+      const val = e.target.value.trim();
+      const taken = userPatches().filter((q) => q.id !== p.id)
+        .map((q) => String(q.name || "").trim().toLowerCase());
+      if (!val || taken.includes(val.toLowerCase())) {
+        window.alert(!val
+          ? "Zone name cannot be empty."
+          : `"${val}" is already used by another zone — names must be unique.`);
+        e.target.value = p.name;               // revert the field
+        return;
+      }
+      p.name = val;
+      save();
+    });
     // No per-zone confidence: ONE global model with ONE threshold
     // (Settings ▸ Isistream) serves every zone — the dashboard only renders.
     row.querySelector(".zm-color").addEventListener("change", (e) => { p.color = e.target.value; save(); });

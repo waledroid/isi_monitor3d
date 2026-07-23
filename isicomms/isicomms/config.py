@@ -35,6 +35,10 @@ class Settings(BaseSettings):
 
     # Aggregation tunables.
     node_stale_after_s: float = 15.0
+    # Nodes silent beyond this are EVICTED from the store entirely (vs merely
+    # displayed stale). Long by design: a rig down for maintenance must survive
+    # a workday; a decommissioned node ages out within a day. 0 disables.
+    node_evict_after_s: float = 86400.0
     passings_buffer: int = 200
     # Raw-message ring buffer behind /recent and the /ui probe tail.
     recent_buffer: int = 300

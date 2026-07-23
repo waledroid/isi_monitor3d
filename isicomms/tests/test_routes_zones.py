@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from backbone.comms.schemas import ZoneSpec
 
-from tests.conftest import make_config
+from tests.conftest import make_config, make_zone_state
 
 
 def test_zones_empty_initially(client):
@@ -175,3 +175,46 @@ def test_six_zones_per_node_all_served(client):
     r = client.get("/zones/zone6")
     assert r.status_code == 200
     assert r.json()["zones"][0]["objects"][0]["track_id"] == 6
+
+
+# ---- stable zone_id exposure for the /ui schema-tree annotation ----
+
+
+def _config_with_ids(node_id="node_a"):
+    from backbone.comms.schemas import ZoneSpec
+    zones = [
+        ZoneSpec(name="Sortie_1", zone_id="zp_aaa", kind="palette",
+                 type="palette", severity="info",
+                 polygon=[[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]]),
+        ZoneSpec(name="Sortie_2", zone_id="zp_bbb", kind="palette",
+                 type="palette", severity="info",
+                 polygon=[[3.0, 0.0], [5.0, 0.0], [5.0, 2.0]]),
+    ]
+    return make_config(node_id=node_id, zones=zones)
+
+
+def test_zones_expose_zone_id_and_name(client):
+    """The /ui schema tree resolves id-keyed zone topics to display names via
+    this pairing — both fields must be present per entry."""
+    sub = client.app.state.subscriber
+    sub.update_from_message("node_a", _config_with_ids())
+
+    r = client.get("/zones")
+    assert r.status_code == 200
+    by_id = {z["zone_id"]: z for z in r.json()["zones"]}
+    assert by_id["zp_aaa"]["name"] == "Sortie_1"
+    assert by_id["zp_bbb"]["name"] == "Sortie_2"
+
+
+def test_zone_state_joined_by_stable_id(client):
+    """State published under the id key must attach to the named zone entry."""
+    from backbone.comms.schemas import ZoneStateMessage
+    sub = client.app.state.subscriber
+    sub.update_from_message("node_a", _config_with_ids())
+    st = make_zone_state(zone="Sortie_1")
+    st = ZoneStateMessage(**{**st.model_dump(), "zone_id": "zp_aaa"})
+    sub.update_from_message("node_a", st)
+
+    r = client.get("/zones")
+    entry = {z["zone_id"]: z for z in r.json()["zones"]}["zp_aaa"]
+    assert entry["count"] == 1 and entry["objects"] is not None

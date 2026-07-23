@@ -33,6 +33,7 @@ from ..detection_overlay import (
     masks_enabled,
     nodes_enabled,
     person_pallet_max_m,
+    zone_fill_dim_enabled,
 )
 from ..floor_rectify import (
     build_fit_rectify_matrix,
@@ -311,7 +312,8 @@ def _to_crop(d, x0: int, y0: int, ch: int, cw: int):
 
 def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
                       display_px: int = 320, is_running=None, get_dets=None,
-                      polygon=None, hull_calib=None, calib_wh=None) -> Iterator:
+                      polygon=None, hull_calib=None, calib_wh=None,
+                      fill_poly_calib=None) -> Iterator:
     """Pure RENDERER for a zone panel — NO detection in the HTTP path. Crops each
     frame to the zone's bounding rect, draws the background worker's published
     detections for this zone (translated to crop coords; masks stencil-clipped
@@ -322,6 +324,7 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
 
     from ..zone_worker import _scaled_polygon
     _stencil, _stencil_key = None, None
+    _dim, _dim_key = None, None
     for image in frames:
         ih, iw = image.shape[:2]
         box = patch_pixel_box(rect, stored_wh, (iw, ih))
@@ -353,6 +356,30 @@ def _zone_render_iter(frames: Iterator, cfg, camera_id: str, rect, stored_wh,
                         _stencil = m
                     _stencil_key = (iw, ih, x0, y0, ch, cw)
                 stencil = _stencil
+            # Fill-dim (Settings ▸ Display, off by default): darken the pixels
+            # the producer's polygon fill blanks before inference — the panel
+            # then shows the detector's true field of view. Uses the projected
+            # FLOOR polygon (what the fill actually keeps at zero headroom),
+            # not the extruded hull; slightly conservative vs the producer's
+            # ~0.3 m dilation. Applied BEFORE annotate so overlays stay bright.
+            if zone_fill_dim_enabled(cfg) and (
+                    fill_poly_calib is not None or polygon is not None):
+                if _dim_key != (iw, ih, x0, y0, ch, cw):
+                    if fill_poly_calib is not None and calib_wh:
+                        poly = np.asarray(fill_poly_calib, dtype=np.float64) * [
+                            iw / float(calib_wh[0]), ih / float(calib_wh[1])]
+                    else:
+                        poly = _scaled_polygon({"polygon": polygon,
+                                                "frame_wh": stored_wh}, (iw, ih))
+                    _dim = None
+                    if poly is not None and len(poly) >= 3:
+                        m = np.zeros((ch, cw), dtype=np.uint8)
+                        cv2.fillPoly(m, [np.asarray(
+                            poly - [x0, y0], dtype=np.int32)], 255)
+                        _dim = m == 0
+                    _dim_key = (iw, ih, x0, y0, ch, cw)
+                if _dim is not None:
+                    crop[_dim] = (crop[_dim] * 0.45).astype(np.uint8)
             crop = annotate_frame(crop, None, cam_id=camera_id, detections=dets,
                                   show_nodes=nodes_enabled(cfg), show_masks=masks_enabled(cfg),
                                   show_boxes=boxes_enabled(cfg), pose_detector=None,
@@ -386,13 +413,19 @@ def build_zone_stream(state, patch_id: str) -> Iterator:
     manager = getattr(state, "zone_manager", None)
     # The zone's extruded hull in THIS camera (mask stencil) — the zone id is
     # the base patch id; a twin panel shares its base's floor zone.
-    hull_calib = calib_wh = None
+    hull_calib = calib_wh = fill_poly_calib = None
     ctx = _camera_zone_ctx(cfg, camera_id)
     if ctx is not None:
         zid = str(patch.get("twin_of") or patch_id)
         for h_zid, _n, hull in ctx["hulls"]:
             if h_zid == zid:
                 hull_calib, calib_wh = hull, ctx["calib_wh"]
+                break
+        # The FLOOR polygon (not the hull) — the fill-dim overlay mirrors the
+        # producer's polygon fill, which keeps only the floor footprint.
+        for p_zid, _n, poly in ctx["polys"]:
+            if p_zid == zid:
+                fill_poly_calib, calib_wh = poly, ctx["calib_wh"]
                 break
     frames = _frame_iter(camera_id, src_cfg)   # source-paced; no display cap
     return _zone_render_iter(
@@ -401,6 +434,7 @@ def build_zone_stream(state, patch_id: str) -> Iterator:
         get_dets=(lambda: manager.zone_dets(patch_id)) if manager is not None else None,
         polygon=patch.get("polygon"),
         hull_calib=hull_calib, calib_wh=calib_wh,
+        fill_poly_calib=fill_poly_calib,
     )
 
 

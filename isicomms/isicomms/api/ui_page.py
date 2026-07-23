@@ -51,6 +51,7 @@ h1 b{color:var(--accent)}
 #tree .leaf:hover,#tree summary:hover{background:rgba(255,255,255,.05);border-radius:6px}
 #tree .cnt{color:var(--muted);font-size:11px;margin-left:6px}
 #tree .age{color:var(--muted);font-size:11px;margin-left:4px}
+#tree .zname{color:var(--muted);font-size:11px;font-style:italic;margin-left:4px}
 #tree pre{white-space:pre-wrap;word-break:break-all;background:rgba(0,0,0,.35);
   border-radius:8px;padding:8px;margin:4px 0 6px;color:var(--text);font-size:11.5px}
 .card{background:var(--glass);border:1px solid var(--border);border-radius:14px;
@@ -214,6 +215,7 @@ function renderTail(d){
 let treeTopics="";          // signature of the current topic set
 let openPaths=new Set(["isiMonitor3D"]);   // default: base expanded
 let latestByTopic={};
+let zoneNames={};           // zone_id → display name, from /zones (config adverts)
 
 function buildTree(topics){
   const root={};
@@ -222,17 +224,21 @@ function buildTree(topics){
     t.split("/").forEach(seg=>{n=n.children=n.children||{};n=n[seg]=n[seg]||{};});
     n.topic=t;
   });
+  // Zone-id topic segments get their display name appended ("zp_x — “Sortie_1”"),
+  // resolved from the /zones pairing (config adverts) — topics stay id-keyed.
+  const label=seg=>esc(seg)+(zoneNames[seg]
+    ?'<span class="zname">— “'+esc(zoneNames[seg])+'”</span>':"");
   const render=(nodes,path)=>Object.keys(nodes).map(seg=>{
     const node=nodes[seg],p=path?path+"/"+seg:seg;
     if(node.topic&&!node.children)
-      return '<div class="leaf" data-topic="'+esc(node.topic)+'">'+esc(seg)+
+      return '<div class="leaf" data-topic="'+esc(node.topic)+'">'+label(seg)+
              '<span class="cnt" data-cnt="'+esc(node.topic)+'"></span>'+
              '<span class="age" data-age="'+esc(node.topic)+'"></span></div>';
     const inner=(node.children?render(node.children,p):"")+
       (node.topic?'<div class="leaf" data-topic="'+esc(node.topic)+'">(this level)'+
         '<span class="cnt" data-cnt="'+esc(node.topic)+'"></span></div>':"");
     return '<details data-path="'+esc(p)+'"'+(openPaths.has(p)?" open":"")+
-           "><summary>"+esc(seg)+"</summary>"+inner+"</details>";
+           "><summary>"+label(seg)+"</summary>"+inner+"</details>";
   }).join("");
   $("tree").innerHTML=render(root.children||{},"")||'<div class="empty">— no topics yet —</div>';
   $("tree").querySelectorAll("details").forEach(d=>d.addEventListener("toggle",()=>{
@@ -250,7 +256,9 @@ function renderTree(topics){
   latestByTopic=topics;
   const names=Object.keys(topics).sort();
   $("n-tree").textContent=names.length+" topics";
-  const sig=names.join("|");
+  // Rebuild when topics OR zone display names change (renames re-annotate live).
+  const sig=names.join("|")+"§"+
+    Object.entries(zoneNames).sort().map(e=>e.join(":")).join(",");
   if(sig!==treeTopics){treeTopics=sig;buildTree(topics);}
   names.forEach(t=>{
     const c=document.querySelector('[data-cnt="'+CSS.escape(t)+'"]');
@@ -266,6 +274,8 @@ async function tick(){
     j("/passings?limit=20"),j("/recent?limit=80")]);
   const alive=!!(nodes&&(nodes.nodes||[]).some(n=>n.status==="alive"));
   $("health").className="dot"+(h&&h.ok?(alive?" ok":" warn"):"");
+  const zn={};((zones&&zones.zones)||[]).forEach(z=>{if(z.zone_id)zn[z.zone_id]=z.name;});
+  zoneNames=zn;
   renderNodes(nodes);renderZones(zones);renderTracks(tracks);
   renderPassings(pass);renderTail(tail);
   if(tail&&tail.topics)renderTree(tail.topics);

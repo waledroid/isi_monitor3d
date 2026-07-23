@@ -478,6 +478,7 @@ def get_config(request: Request) -> JSONResponse:
         "show_nodes": bool(ui.get("show_nodes", True)),
         "show_masks": bool(ui.get("show_masks", True)),
         "show_floor_zones": bool(ui.get("show_floor_zones", False)),
+        "show_zone_fill": bool(ui.get("show_zone_fill", False)),
         "show_boxes": bool(ui.get("show_boxes", True)),
         "distance_line_opacity": float(ui.get("distance_line_opacity", 0.25)),
         "distance_line_color": str(ui.get("distance_line_color", "#ffffff")),
@@ -598,9 +599,14 @@ def _model_class_names(onnx_path: str | None) -> list[str]:
 
 
 def _onnx_output_names(onnx_path: str) -> list[str]:
-    """The ONNX graph's output names (cheap; no external data) — used to pick the
-    right task plugin (RF-DETR vs YOLO) on save, the same way the overlay does."""
+    """The model's output names (cheap) — used to pick the right task plugin
+    (RF-DETR vs YOLO) on save, the same way the overlay does. For a native
+    ``.engine`` the names come from its conversion sidecar (an engine can't be
+    introspected without deserializing on the GPU)."""
     try:
+        if str(onnx_path).endswith(".engine"):
+            from backbone.shared.trt_session import read_sidecar
+            return list((read_sidecar(onnx_path) or {}).get("outputs") or [])
         import onnx
         model = onnx.load(onnx_path, load_external_data=False)
         return [o.name for o in model.graph.output]
@@ -668,6 +674,7 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
     cameras_block = backbone_data.get("cameras", {})
     if not isinstance(cameras_block, dict):
         cameras_block = {}
+    had_cameras_before = bool(cameras_block)
     for cam_id, cam_cfg in payload.cameras.items():
         existing = cameras_block.get(cam_id, {})
         if not isinstance(existing, dict):
@@ -697,6 +704,21 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
     for slot in MANAGED_CAMERA_SLOTS:
         if slot in cameras_block and slot not in payload.cameras:
             cameras_block.pop(slot, None)
+
+    # Fail-fast guard: refuse to wipe EVERY camera from a config that had at
+    # least one. A camera-less backbone.yaml cannot boot (FrameSynchronizer
+    # requires >=1 camera), so a save from a badly-prefilled Settings modal
+    # must never take down a working system — reject it here, before any
+    # write reaches disk (2026-07-22 incident: an empty modal wrote
+    # `cameras: {}` and the backbone crash-looped at build).
+    if had_cameras_before and not cameras_block:
+        raise HTTPException(
+            status_code=422,
+            detail="refusing to remove every camera: a camera-less config "
+                   "cannot run. Fill Cam 1 (and optionally Cam 2) in the "
+                   "Settings modal, or reload the page if the fields came "
+                   "up empty.",
+        )
 
     # Camera FPS — write to every configured camera's source.capture_fps so the
     # camera-hub rate (and thus the cam-view video frame rate) matches the setting.
@@ -735,7 +757,8 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             block.pop("providers", None)
         else:  # ONNX host
             if not (det.onnx_path and det.onnx_path.strip()):
-                raise HTTPException(400, "GPU host: an ONNX (.onnx) model path is required")
+                raise HTTPException(
+                    400, "GPU host: a model path (.onnx or .engine) is required")
             onnx_path = det.onnx_path.strip()
             block["onnx_path"] = onnx_path
             block.pop("model_xml", None)

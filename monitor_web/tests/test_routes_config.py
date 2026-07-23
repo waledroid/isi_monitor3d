@@ -701,8 +701,14 @@ def test_rfdetr_model_save_sets_plugin_and_infers_classes(populated_app, tmp_pat
     with TestClient(app) as client:
         cls = client.get("/api/detection/classes", params={"path": str(rf)}).json()["classes"]
         assert cls == ["palette", "carton", "polybag"]
+        # The real Settings modal always posts the camera slots alongside the
+        # model change; a cameras:{} payload would (rightly) be rejected by the
+        # camera-wipe guard — and under pre-guard code it silently DELETED both
+        # cameras, which is the 2026-07-22 incident this suite now pins.
         res = client.post("/api/config", json={
-            "cameras": {}, "zones": [],
+            "cameras": {"cam_a": {"url": "rtsp://A/1"},
+                        "cam_b": {"url": "rtsp://B/1"}},
+            "zones": [],
             "detection": {"onnx_path": str(rf), "class_names": cls, "confidence_threshold": 0.3},
         })
         assert res.status_code == 200, res.text
@@ -1112,3 +1118,41 @@ def test_detection_quality_toggle_round_trips(tmp_path, monkeypatch):
             "detect_substream": False})
         assert r.status_code == 200, r.text
         assert client.get("/api/config").json()["isistream"]["detect_substream"] is False
+
+
+# ---- camera-wipe guard (2026-07-22 incident: empty Settings modal wrote
+# ---- cameras: {} and crash-looped the backbone at boot) ----
+
+
+def test_post_config_refuses_wiping_all_cameras(populated_app) -> None:
+    """A save that would remove EVERY camera from a config that had cameras
+    must be rejected — a camera-less backbone cannot boot, so the write must
+    never reach disk."""
+    app, backbone_yaml, _zones = populated_app
+    with TestClient(app) as client:
+        res = client.post("/api/config", json={"cameras": {}})
+        assert res.status_code == 422
+        assert "camera" in res.json()["detail"].lower()
+    bb = yaml.safe_load(backbone_yaml.read_text())
+    assert "cam_a" in bb["cameras"]          # disk untouched
+    assert "cam_b" in bb["cameras"]
+
+
+def test_post_config_still_allows_dropping_to_one_camera(populated_app) -> None:
+    """Clearing only Cam 2 (Mode 2 → Mode 1) remains a legitimate save."""
+    app, backbone_yaml, _zones = populated_app
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/config", json={"cameras": {"cam_a": {"url": "rtsp://A/1"}}})
+        assert res.status_code == 200, res.text
+    bb = yaml.safe_load(backbone_yaml.read_text())
+    assert "cam_a" in bb["cameras"] and "cam_b" not in bb["cameras"]
+
+
+def test_post_config_empty_cameras_ok_on_unconfigured_system(empty_app) -> None:
+    """Zone-only edits on a not-yet-configured system (no cameras before,
+    none after) stay allowed — the guard fires only on the >=1 -> 0 wipe."""
+    app, _ = empty_app
+    with TestClient(app) as client:
+        res = client.post("/api/config", json={"cameras": {}})
+        assert res.status_code == 200, res.text

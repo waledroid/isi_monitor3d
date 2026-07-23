@@ -274,6 +274,9 @@ class Orchestrator:
         # disables — hermetic tests with static-batch stub models need a
         # stable batch size).
         zone_crop_max_aspect = det_cfg.pop("zone_crop_max_aspect", None)
+        zone_crop_height_m = float(det_cfg.pop("zone_crop_height_m", 0.0) or 0.0)
+        zone_membership_tol_m = float(det_cfg.pop("zone_membership_tol_m", 0.15))
+        zone_crop_polygon_fill = bool(det_cfg.pop("zone_crop_polygon_fill", True))
         if scope not in ("zones", "full_frame"):
             raise ValueError(f"detection.scope={scope!r}, expected 'zones' or 'full_frame'")
         if scope == "zones" and len(self._zones) == 0:
@@ -288,12 +291,21 @@ class Orchestrator:
             if scope == "zones":
                 from backbone.detection.zone_scope import (
                     ZoneScopedDetector,
+                    build_zone_membership_filter,
                     zone_crop_boxes,
+                    zone_fill_polygons,
                 )
-                boxes = zone_crop_boxes(self._rig, self._zones)
+                boxes = zone_crop_boxes(
+                    self._rig, self._zones, crop_height_m=zone_crop_height_m)
                 zsd_kwargs = {}
                 if zone_crop_max_aspect is not None:
                     zsd_kwargs["max_crop_aspect"] = float(zone_crop_max_aspect)
+                zsd_kwargs["zone_filter"] = build_zone_membership_filter(
+                    self._rig, self._zones, tol_m=zone_membership_tol_m)
+                if zone_crop_polygon_fill:
+                    zsd_kwargs["fill_polys"] = zone_fill_polygons(
+                        self._rig, self._zones,
+                        crop_height_m=zone_crop_height_m)
                 self._detector = ZoneScopedDetector(
                     self._detector, boxes,
                     {cid: self._rig[cid].image_size_wh for cid in self._rig.camera_ids},

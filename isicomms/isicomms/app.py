@@ -42,6 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         password=cfg.mqtt_password,
         passings_buffer=cfg.passings_buffer,
         recent_buffer=cfg.recent_buffer,
+        node_evict_after_s=cfg.node_evict_after_s,
     )
 
     @asynccontextmanager
