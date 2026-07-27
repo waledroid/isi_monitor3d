@@ -165,3 +165,61 @@ def test_core_run_loop_paces_and_stops() -> None:
         assert core.sets_sent["cam_a"] >= 3
     finally:
         ing.stop()
+
+
+def test_build_object_detector_drops_yolo_only_keys_for_rfdetr(monkeypatch) -> None:
+    """A plugin switch in Settings can leave YOLO-only keys behind in the
+    detection block; forwarding them to RF-DETR's constructor is a TypeError
+    that kills the producer at boot. They must be dropped for RF-DETR."""
+    from isistream import core as isicore
+
+    captured: dict = {}
+
+    def fake_create(plugin, **kwargs):
+        captured["plugin"] = plugin
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(isicore.detector_registry, "create", fake_create)
+    cfg = {"detection": {
+        "plugin": "rfdetr_onnx_seg",
+        "onnx_path": "m.onnx",
+        "class_names": ["palette", "carton", "polybag"],
+        "confidence_threshold": 0.3,
+        "scope": "full_frame",
+        # leftovers from a previous yolo_onnx_seg config
+        "iou_threshold": 0.45,
+        "keep_classes": ["palette"],
+        "decode_masks": True,
+    }}
+    det = isicore._build_object_detector(cfg, rig=None, zones=None)
+    assert det is not None
+    assert captured["plugin"] == "rfdetr_onnx_seg"
+    for yolo_key in ("iou_threshold", "keep_classes", "decode_masks"):
+        assert yolo_key not in captured["kwargs"]
+    assert captured["kwargs"]["onnx_path"] == "m.onnx"
+
+
+def test_build_object_detector_keeps_yolo_keys_for_yolo(monkeypatch) -> None:
+    """The same keys are real knobs for YOLO plugins and must keep flowing."""
+    from isistream import core as isicore
+
+    captured: dict = {}
+
+    def fake_create(plugin, **kwargs):
+        captured["plugin"] = plugin
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(isicore.detector_registry, "create", fake_create)
+    cfg = {"detection": {
+        "plugin": "yolo_onnx_seg",
+        "onnx_path": "m.onnx",
+        "scope": "full_frame",
+        "iou_threshold": 0.45,
+        "decode_masks": True,
+    }}
+    det = isicore._build_object_detector(cfg, rig=None, zones=None)
+    assert det is not None
+    assert captured["kwargs"]["iou_threshold"] == 0.45
+    assert captured["kwargs"]["decode_masks"] is True

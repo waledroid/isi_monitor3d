@@ -71,6 +71,13 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
                      "pose_imgsz", "pose_every_n", "person_pallet_max_distance_m",
                      "trt_enabled"):
         det_cfg.pop(pose_key, None)
+    if det_plugin == "rfdetr_onnx_seg":
+        # RF-DETR is NMS-free and always decodes its masks — these are YOLO-only
+        # knobs. A plugin switch in Settings leaves them behind in the YAML, and
+        # forwarding them here is a constructor TypeError that kills the whole
+        # producer at boot (same whitelist as engines.get_detector).
+        for yolo_key in ("iou_threshold", "keep_classes", "decode_masks"):
+            det_cfg.pop(yolo_key, None)
     # Global zone-inference options (Settings ▸ Isistream). ONE model, ONE
     # batched call for every zone of every camera — these apply to all zones.
     sahi_cfg = det_cfg.pop("sahi", None)
