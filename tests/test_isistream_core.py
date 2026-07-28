@@ -191,11 +191,14 @@ def test_build_object_detector_drops_yolo_only_keys_for_rfdetr(monkeypatch) -> N
         "iou_threshold": 0.45,
         "keep_classes": ["palette"],
         "decode_masks": True,
+        # slider size: fine for dynamic YOLO exports, poison for the static
+        # RF-DETR graph (ORT: Got 640 Expected 432)
+        "inference_imgsz": 640,
     }}
     det = isicore._build_object_detector(cfg, rig=None, zones=None)
     assert det is not None
     assert captured["plugin"] == "rfdetr_onnx_seg"
-    for yolo_key in ("iou_threshold", "keep_classes", "decode_masks"):
+    for yolo_key in ("iou_threshold", "keep_classes", "decode_masks", "input_size"):
         assert yolo_key not in captured["kwargs"]
     assert captured["kwargs"]["onnx_path"] == "m.onnx"
 

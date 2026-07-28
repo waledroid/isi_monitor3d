@@ -103,6 +103,13 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
         return None
     if scope_is_zones:
         det_cfg["input_size"] = (zone_imgsz, zone_imgsz)
+    if det_plugin == "rfdetr_onnx_seg":
+        # RF-DETR's exported graph is STATIC (e.g. 432x432): forcing the
+        # slider/zone size onto it fails ORT shape validation on every tick
+        # ("Got: 320 Expected: 432") — silently, since the tick loop swallows
+        # inference errors into empty sets. The plugin reads its own fixed
+        # input from the ONNX; crops are resized to it.
+        det_cfg.pop("input_size", None)
     detector = detector_registry.create(det_plugin, **det_cfg)
     if scope_is_zones:
         from backbone.detection.zone_scope import (
