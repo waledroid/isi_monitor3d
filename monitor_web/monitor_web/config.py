@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import Field
@@ -19,6 +20,15 @@ class Settings(BaseSettings):
     # HTTP server.
     host: str = "0.0.0.0"
     port: int = 8000
+
+    @property
+    def instance_id(self) -> str:
+        """Stable identity of THIS dashboard instance, stamped onto every
+        child it spawns and matched by the stray reapers. Port-derived: the
+        TCP bind guarantees uniqueness among live siblings (:8000 vs :8100),
+        and it survives crashes so the next run on the same port adopts the
+        previous run's orphans. Override with ``ISI3D_INSTANCE_ID``."""
+        return os.environ.get("ISI3D_INSTANCE_ID") or f"monitor-web:{self.port}"
 
     # Backbone integration.
     backbone_config_path: Path = Field(

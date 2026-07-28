@@ -96,13 +96,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         config_path=cfg.backbone_config_path,
         terminate_timeout_s=cfg.backbone_terminate_timeout_s,
         log_buffer_size=cfg.log_buffer_size,
+        instance_id=cfg.instance_id,
     )
     # Direction 1: when backbone.yaml says ingestion.mode: points, the
     # dashboard hosts the perception producer (hub-backed, one decode per
     # camera) for the metric engine. Started/stopped with the Backbone by
     # the control routes; a no-op in frames mode.
     from .isistream_host import IsistreamHost
-    perception = IsistreamHost(cfg.backbone_config_path)
+    perception = IsistreamHost(cfg.backbone_config_path,
+                               instance_id=cfg.instance_id)
     # Background zone detection: one worker thread per camera with zones, publishing
     # one coherent snapshot per frame. Panels + cam views are pure renderers of it.
     zone_manager = ZoneWorkerManager(
@@ -126,6 +128,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # clean STOP (e.g. OOM-killed). Otherwise the stray (~1.5 GB) survives until
         # the operator next presses START and can OOM-kill THIS dashboard first.
         supervisor.reap_orphans_on_boot()
+        # Same adoption for the producer: previously it was reaped only on
+        # START, so an orphan survived a whole idle dashboard lifetime.
+        perception.reap_orphans_on_boot()
         bus.attach_loop(asyncio.get_running_loop())
         bus.start()
         zone_manager.start()      # no-op when no zones are configured

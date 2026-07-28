@@ -149,46 +149,94 @@ def test_start_refuses_when_config_missing(tmp_path) -> None:
 
 
 @pytest.mark.skipif(not Path("/proc").is_dir(), reason="needs Linux procfs")
-def test_find_and_kill_finds_strays_via_proc(tmp_path, real_backbone_finder) -> None:
-    """The reaper scans /proc for EVERY backbone.runtime process — including one
-    launched under a DIFFERENT config than the supervisor's — and SIGKILLs it.
-    This is the robustness upgrade over the old config-scoped pgrep match."""
+def test_find_and_kill_finds_strays_via_proc(tmp_path, real_find_strays,
+                                             monkeypatch) -> None:
+    """The reaper scans /proc for backbone.runtime processes carrying THIS
+    instance's marker — even ones launched under a DIFFERENT config — and
+    SIGKILLs them, while a sibling instance's process is never listed."""
     import subprocess
 
-    # A decoy whose argv contains "backbone.runtime" under an unrelated config path.
+    from monitor_web import proc_reaper
+
+    mine = f"test-bb-{os.getpid()}"
+    # A decoy whose argv contains "backbone.runtime" under an unrelated config
+    # path, stamped as OURS — and a twin stamped as another instance's.
     decoy = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)",
          "-m", "backbone.runtime", "--config", "/tmp/some-other-config.yaml"],
+        env={**os.environ, proc_reaper.MARKER_ENV: mine},
+    )
+    other = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)",
+         "-m", "backbone.runtime", "--config", "/tmp/some-other-config.yaml"],
+        env={**os.environ, proc_reaper.MARKER_ENV: "another-instance"},
     )
     try:
         assert _wait_for(lambda: (Path("/proc") / str(decoy.pid)).exists())
-        # Supervisor is wired to a *different* config — proves the scan is host-wide,
-        # not scoped to its own config path.
-        sup = BackboneSupervisor(config_path=tmp_path / "unrelated.yaml")
-        assert decoy.pid in real_backbone_finder(sup)         # host-wide scan works
-        assert os.getpid() not in real_backbone_finder(sup)   # never targets self
+        assert _wait_for(lambda: (Path("/proc") / str(other.pid)).exists())
+        found = real_find_strays(proc_reaper.BACKBONE_TOKEN, mine)
+        assert decoy.pid in found            # our marked stray, any config
+        assert other.pid not in found        # the sibling-safety pin
+        assert os.getpid() not in found      # never targets self
 
         # The KILL sweep must only ever target the DECOY (see the autouse
         # guard's docstring — an unrestricted sweep kills live systems).
+        sup = BackboneSupervisor(config_path=tmp_path / "unrelated.yaml",
+                                 instance_id=mine)
+        monkeypatch.delenv(proc_reaper.DISABLE_ENV, raising=False)
         sup._find_backbone_pids = lambda exclude=None: [decoy.pid]
         killed = sup._kill_backbones(why="test-reaped")
         assert killed >= 1
         assert _wait_for(lambda: decoy.poll() is not None)    # decoy is dead
+        assert other.poll() is None                           # twin untouched
         assert any("test-reaped backbone pid" in line for line in sup.log_lines())
     finally:
-        if decoy.poll() is None:
-            decoy.kill()
-            decoy.wait(timeout=2.0)
+        for p in (decoy, other):
+            if p.poll() is None:
+                p.kill()
+                p.wait(timeout=2.0)
 
 
 @pytest.mark.skipif(not Path("/proc").is_dir(), reason="needs Linux procfs")
-def test_find_backbone_pids_excludes_self(tmp_path, real_backbone_finder) -> None:
+def test_find_backbone_pids_excludes_self(real_find_strays) -> None:
     """Sanity: the scan never returns this process (no backbone.runtime in our argv),
     so a clean host yields no targets — the reaper is a no-op, not a footgun."""
-    sup = BackboneSupervisor(config_path=tmp_path / "unrelated.yaml")
-    pids = real_backbone_finder(sup)           # the real (read-only) scan
+    from monitor_web import proc_reaper
+
+    pids = real_find_strays(proc_reaper.BACKBONE_TOKEN,
+                            f"test-none-{os.getpid()}")
     assert os.getpid() not in pids
     assert all(isinstance(p, int) for p in pids)
+
+
+def test_spawn_sets_session_and_marker(tmp_path, monkeypatch) -> None:
+    """START must put the Backbone in its own session (killpg-able tree) and
+    stamp it with the supervisor's instance id."""
+    import subprocess as sp
+
+    cfg = tmp_path / "backbone.yaml"
+    cfg.write_text("cameras: []\n")
+    captured: dict = {}
+
+    class _FakeProc:
+        pid = 4242
+
+        def __init__(self):
+            self.stdout = iter(())
+
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, **kwargs):
+        captured.update(kwargs, cmd=cmd)
+        return _FakeProc()
+
+    monkeypatch.setattr(sp, "Popen", fake_popen)
+    sup = BackboneSupervisor(config_path=cfg, instance_id="test-id-777")
+    sup._reap_orphans = lambda: None          # keep the test hermetic
+    assert sup.start() is True
+    assert captured["start_new_session"] is True
+    assert captured["env"]["ISI3D_INSTANCE_ID"] == "test-id-777"
 
 
 def test_default_cwd_is_repo_root() -> None:

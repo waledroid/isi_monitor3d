@@ -27,21 +27,32 @@ def _isolate_ui_settings(tmp_path_factory, monkeypatch):
     yield
 
 # ---- LIVE-FIRE GUARD (suite-wide) -------------------------------------------
-# The supervisor's reaper (`_kill_backbones`, reached from app lifespan
-# `reap_orphans_on_boot`, `start()`, and `stop()`) SIGKILLs EVERY process on
-# the HOST whose cmdline contains `backbone.runtime`. Any test that boots the
-# app (`with TestClient(create_app(...))`) therefore murdered a LIVE production
-# Backbone running beside the suite (observed 2026-07-06: the operator's
-# system "crashed at random" — the random was `pytest`). Neuter the /proc scan
-# for the whole suite; the one test that needs the real scan gets it read-only
-# via `real_backbone_finder`.
+# The reapers (`BackboneSupervisor._kill_backbones` and
+# `IsistreamHost._reap_strays`, reached from app lifespan, START, STOP, and
+# config-save restarts) SIGKILL matching processes on the HOST. Before the
+# instance-identity work they matched by cmdline alone: any test that booted
+# the app murdered a LIVE production Backbone running beside the suite
+# (observed 2026-07-06: the operator's system "crashed at random" — the random
+# was `pytest`); the producer reaper had the same hole. The identity rule now
+# scopes kills to the suite's own (pid-qualified, matching nothing) instance —
+# and this guard stays as BELT + BRACES on top:
+#   belt   — ISI3D_DISABLE_REAP inerts every kill path, inherited by any
+#            subprocess the suite spawns;
+#   braces — both finders are patched to find nothing.
+# The one test that needs the real scan gets it read-only via
+# `real_backbone_finder` (the finder has no disable gate, by design).
+from monitor_web import proc_reaper as _proc_reaper  # noqa: E402
 from monitor_web.backbone_supervisor import BackboneSupervisor as _BBS  # noqa: E402
 
 _REAL_BACKBONE_FINDER = _BBS._find_backbone_pids
+_REAL_FIND_STRAYS = _proc_reaper.find_strays
 
 
 @pytest.fixture(autouse=True)
 def _no_host_wide_reaping(monkeypatch):
+    monkeypatch.setenv(_proc_reaper.DISABLE_ENV, "1")
+    monkeypatch.setattr(_proc_reaper, "find_strays",
+                        lambda token, instance_id, exclude=None: [])
     monkeypatch.setattr(_BBS, "_find_backbone_pids",
                         lambda self, exclude=None: [])
 
@@ -50,3 +61,9 @@ def _no_host_wide_reaping(monkeypatch):
 def real_backbone_finder():
     """The un-neutered /proc scan, for READ-ONLY assertions."""
     return _REAL_BACKBONE_FINDER
+
+
+@pytest.fixture
+def real_find_strays():
+    """The un-neutered shared finder, for READ-ONLY assertions."""
+    return _REAL_FIND_STRAYS

@@ -17,13 +17,14 @@ from __future__ import annotations
 
 import logging
 import os
-import signal
 import subprocess
 import sys
 import threading
 import time
 
 import yaml
+
+from . import proc_reaper
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,13 @@ _RESPAWN_WINDOW_S = 300.0
 class IsistreamHost:
     """Spawn/stop the standalone producer with the Backbone's lifecycle."""
 
-    def __init__(self, backbone_config_path) -> None:
+    def __init__(self, backbone_config_path, *,
+                 instance_id: str | None = None) -> None:
         self._config_path = backbone_config_path
+        # Same identity contract as BackboneSupervisor: stamped onto the
+        # spawned producer, matched by the reaper. Pid-qualified fallback so a
+        # bare-constructed host (tests) can never match a real process.
+        self._instance_id = instance_id or proc_reaper.fallback_instance_id()
         self._proc: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
         self._lock = threading.Lock()
@@ -66,17 +72,23 @@ class IsistreamHost:
                 return False
             self._deliberate_stop = False
             self._reap_strays()
+            self._purge_stale_frame_files()
             env = dict(os.environ)
             # Same CPU caging as the Backbone spawn: ORT/BLAS pools sized for
             # a co-tenant process, not the whole machine.
             env.setdefault("OMP_NUM_THREADS", "2")
             env.setdefault("OPENBLAS_NUM_THREADS", "2")
+            # Identity stamp (reaper matches it via /proc/<pid>/environ) —
+            # plain assignment so OUR id wins over anything inherited.
+            env[proc_reaper.MARKER_ENV] = self._instance_id
             try:
                 self._proc = subprocess.Popen(
                     [sys.executable, "-m", "isistream",
                      "--config", str(self._config_path)],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, env=env)
+                    text=True, env=env,
+                    # Own session ⇒ stop() can killpg the whole tree.
+                    start_new_session=True)
             except Exception:
                 logger.warning("isistream host: spawn failed", exc_info=True)
                 self._proc = None
@@ -92,20 +104,70 @@ class IsistreamHost:
         with self._lock:
             self._deliberate_stop = True
             proc, self._proc = self._proc, None
-        if proc is None or proc.poll() is not None:
+        if proc is not None and proc.poll() is None:
+            logger.info("isistream host: STOP → SIGTERM pid=%d", proc.pid)
+            proc_reaper.terminate_tree(proc, term_grace_s=_TERM_GRACE_S)
+            logger.info("isistream host: producer stopped (exit=%s)", proc.returncode)
+        # Parity with the Backbone supervisor's STOP: sweep any stray producer
+        # of OURS (or a pre-identity orphan) so STOP leaves a clean slate.
+        # Safe re respawn: _deliberate_stop is already set, _respawn checks it.
+        self._reap_strays()
+
+    def reap_orphans_on_boot(self) -> None:
+        """App-lifespan hook: adopt and kill producers orphaned by a previous
+        run of THIS instance (dashboard OOM-killed without a clean STOP).
+        Mirrors ``BackboneSupervisor.reap_orphans_on_boot``; no-op while a
+        live producer is held."""
+        if self._proc is not None and self._proc.poll() is None:
             return
-        logger.info("isistream host: STOP → SIGTERM pid=%d", proc.pid)
+        self._reap_strays()
+        self._purge_stale_frame_files()
+
+    @staticmethod
+    def _purge_stale_frame_files(max_age_s: float = 5.0) -> int:
+        """Unlink ``isi3d_frame_*`` buses whose writer is dead. A SIGKILLed
+        producer (reaped orphan) never runs its clean unlink, so its frame
+        files linger in /dev/shm. Frame files are CAMERA-keyed, not instance-
+        keyed — so the freshness check is mandatory: a live sibling instance
+        publishing the same camera keeps its bus (``latest()`` returns a
+        frame), and only truly dead/corrupt buses are removed. Never keyed on
+        mtime: mmap writes don't bump it."""
         try:
-            proc.terminate()
+            from backbone.shared.frame_shm import FrameShmReader, _default_dir
+        except Exception:                  # backbone not importable — skip
+            return 0
+        directory = _default_dir()
+        prefix = "isi3d_frame_"
+        purged = 0
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            return 0
+        for name in names:
+            if not name.startswith(prefix):
+                continue
+            cam_id = name[len(prefix):]
+            reader = FrameShmReader(cam_id, directory, max_age_s=max_age_s)
             try:
-                proc.wait(timeout=_TERM_GRACE_S)
-            except subprocess.TimeoutExpired:
-                logger.warning("isistream host: STOP → SIGKILL pid=%d", proc.pid)
-                proc.kill()
-                proc.wait(timeout=2.0)
-        except ProcessLookupError:
-            pass
-        logger.info("isistream host: producer stopped (exit=%s)", proc.returncode)
+                fresh = reader.latest() is not None
+            except Exception:
+                fresh = False              # unreadable/corrupt → purge
+            finally:
+                close = getattr(reader, "close", None)
+                if close:
+                    try:
+                        close()
+                    except Exception:
+                        pass
+            if fresh:
+                continue
+            try:
+                os.unlink(os.path.join(directory, name))
+                purged += 1
+                logger.info("isistream host: purged stale frame bus %s", name)
+            except OSError:
+                pass
+        return purged
 
     def status(self) -> dict:
         proc = self._proc
@@ -154,20 +216,11 @@ class IsistreamHost:
         self.start()
 
     def _reap_strays(self) -> None:
-        """SIGKILL producer orphans from a previous dashboard life — exactly
-        the Backbone supervisor's stray policy, for the same reason."""
-        try:
-            out = subprocess.run(
-                ["pgrep", "-f", r"python(3)? -m isistream"],
-                capture_output=True, text=True, timeout=5.0).stdout
-        except Exception:
-            return
-        for pid_s in out.split():
-            pid = int(pid_s)
-            if pid == os.getpid():
-                continue
-            try:
-                os.kill(pid, signal.SIGKILL)
-                logger.warning("isistream host: reaped stray producer pid %d", pid)
-            except OSError:
-                pass
+        """SIGKILL producer strays THIS INSTANCE owns (or pre-identity
+        orphans) — the Backbone supervisor's stray policy, same rule, same
+        shared implementation (/proc scan; the old ``pgrep`` regex was both
+        host-wide and truncation-fragile). Honors ``ISI3D_DISABLE_REAP``."""
+        exclude = {self._proc.pid} if self._proc is not None else None
+        proc_reaper.kill_strays(
+            proc_reaper.ISISTREAM_TOKEN, self._instance_id,
+            why="reaped stray producer", exclude=exclude)
