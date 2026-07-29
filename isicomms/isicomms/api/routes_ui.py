@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .auth import require_token
+from .test_page import TEST_HTML
 from .ui_page import UI_HTML
 
 router = APIRouter()
@@ -42,3 +43,9 @@ async def recent(request: Request,
 @page_router.get("/ui", include_in_schema=False)
 async def ui() -> HTMLResponse:
     return HTMLResponse(UI_HTML)
+
+
+@page_router.get("/test", include_in_schema=False)
+async def test_console() -> HTMLResponse:
+    """The AGV system-test console (see ``test_page.py``)."""
+    return HTMLResponse(TEST_HTML)
