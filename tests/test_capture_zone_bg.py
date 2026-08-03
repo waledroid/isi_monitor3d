@@ -1,16 +1,23 @@
-"""Tests for zone background capture tool — scale_box, fill_crop, CropDeduper."""
+"""Tests for tools/capture_zone_bg.py (hermetic — no cameras, no GPU)."""
+from __future__ import annotations
+
 import importlib.util
 import math
+from pathlib import Path
 
 import numpy as np
+import pytest
 
-# Loader block for the tool module (which uses tools/ not sys.path).
-spec = importlib.util.spec_from_file_location("capture_zone_bg", "/home/aatanda/isi_monitor3d/tools/capture_zone_bg.py")
-czb = importlib.util.module_from_spec(spec)
+cv2 = pytest.importorskip("cv2")
+
+_ROOT = Path(__file__).resolve().parents[1]
+_SPEC = importlib.util.spec_from_file_location(
+    "capture_zone_bg", _ROOT / "tools" / "capture_zone_bg.py")
+czb = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(czb)
 
 
 def test_scale_box_matches_zone_scoped_detector():
-    spec.loader.exec_module(czb)
     # Same formula as ZoneScopedDetector.detect (zone_scope.py:456-459):
     # int() floor on the min corner, ceil on the max corner, clamped.
     box = (100, 200, 900, 1000)
@@ -23,12 +30,10 @@ def test_scale_box_matches_zone_scoped_detector():
 
 
 def test_scale_box_identity_when_sizes_match():
-    spec.loader.exec_module(czb)
     assert czb.scale_box((10, 20, 30, 40), (640, 480), (640, 480))[:4] == (10, 20, 30, 40)
 
 
 def test_fill_crop_grays_outside_polygon_and_copies():
-    spec.loader.exec_module(czb)
     img = np.full((100, 100, 3), 200, np.uint8)
     poly = np.array([[30, 30], [70, 30], [70, 70], [30, 70]], dtype=np.float64)
     out = czb.fill_crop(img, (poly, 4.0), 1.0, 1.0, 0, 0)
@@ -39,7 +44,6 @@ def test_fill_crop_grays_outside_polygon_and_copies():
 
 
 def test_fill_crop_respects_crop_origin_offset():
-    spec.loader.exec_module(czb)
     # Polygon at frame px (130..170); crop starts at fx0=100, fy0=100.
     img = np.full((100, 100, 3), 200, np.uint8)
     poly = np.array([[130, 130], [170, 130], [170, 170], [130, 170]], dtype=np.float64)
@@ -49,7 +53,6 @@ def test_fill_crop_respects_crop_origin_offset():
 
 
 def test_deduper_first_always_then_threshold():
-    spec.loader.exec_module(czb)
     d = czb.CropDeduper(min_diff=4.0)
     flat = np.zeros((80, 80, 3), np.uint8)
     assert d.should_save("cam_a", "z1", flat) is True     # first crop always saves
