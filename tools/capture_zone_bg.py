@@ -156,3 +156,85 @@ def capture_loop(providers, boxes, fill_polys, calib_wh, out_dir, *,
         if interval_s:
             sleep(interval_s)
     return tally
+
+
+class BusProvider:
+    """Latest frame from the /dev/shm bus (isistream running) — zero RTSP."""
+
+    def __init__(self, camera_id: str, directory: str | None = None) -> None:
+        from backbone.shared.frame_shm import FrameShmReader
+        self.camera_id = camera_id
+        self._reader = FrameShmReader(camera_id, directory=directory)
+
+    def __call__(self):
+        got = self._reader.latest()
+        return None if got is None else got[0]
+
+    def stop(self) -> None:
+        pass
+
+
+class RtspProvider:
+    """Own RTSP session (SOFTWARE decode — never touch the GPU) pumping the
+    newest frame into a slot; used only when the frame bus is absent/stale."""
+
+    def __init__(self, camera_id: str, source_cfg: dict) -> None:
+        import backbone.ingestion  # noqa: F401  auto-registration fires @register
+        from backbone.core.registry import frame_source_registry
+        kwargs = {k: source_cfg[k]
+                  for k in ("latency_ms", "capture_fps", "output_wh")
+                  if source_cfg.get(k) is not None}
+        self.camera_id = camera_id
+        self._src = frame_source_registry.create(
+            "rtsp", camera_id=camera_id, url=source_cfg["url"],
+            decoder="software", **kwargs)
+        self._latest = None
+        self._lock = threading.Lock()
+        threading.Thread(target=self._pump, daemon=True,
+                         name=f"rtsp-pump-{camera_id}").start()
+
+    def _pump(self) -> None:
+        try:
+            for frame in self._src.frames():
+                with self._lock:
+                    self._latest = frame.image
+        except Exception:
+            logger.exception("%s: RTSP pump died", self.camera_id)
+
+    def __call__(self):
+        with self._lock:
+            return self._latest
+
+    def stop(self) -> None:
+        self._src.stop()
+
+
+def make_provider(cam_id: str, source_cfg: dict, *, bus_wait_s: float = 5.0,
+                  frame_wait_s: float = 15.0, directory: str | None = None,
+                  poll_s: float = 0.25):
+    """Bus if it delivers within ``bus_wait_s``; else RTSP fallback (when the
+    camera's config source is rtsp) if IT delivers within ``frame_wait_s``;
+    else ``None`` (caller skips the camera)."""
+    bus = BusProvider(cam_id, directory=directory)
+    deadline = time.monotonic() + bus_wait_s
+    while time.monotonic() < deadline:
+        if bus() is not None:
+            logger.info("%s: using /dev/shm frame bus", cam_id)
+            return bus
+        time.sleep(poll_s)
+    source_cfg = source_cfg or {}
+    if source_cfg.get("name") == "rtsp" and source_cfg.get("url"):
+        logger.info("%s: bus absent — opening RTSP (software decode)", cam_id)
+        try:
+            rtsp = RtspProvider(cam_id, source_cfg)
+        except Exception:
+            logger.exception("%s: RTSP fallback failed to build", cam_id)
+            return None
+        deadline = time.monotonic() + frame_wait_s
+        while time.monotonic() < deadline:
+            if rtsp() is not None:
+                return rtsp
+            time.sleep(poll_s)
+        rtsp.stop()
+        logger.warning("%s: RTSP delivered no frame in %.0fs", cam_id, frame_wait_s)
+    return None

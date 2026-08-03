@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import time
 from pathlib import Path
 
 import numpy as np
@@ -106,3 +107,37 @@ def test_capture_loop_stops_at_count(tmp_path):
 def test_slug_sanitizes_zone_names():
     assert czb._slug("Zone 1") == "Zone-1"
     assert czb._slug("étagère/2") == "tag-re-2"
+
+
+def test_bus_provider_roundtrip(tmp_path):
+    from backbone.shared.frame_shm import FrameShmWriter
+    img = np.full((48, 64, 3), 37, np.uint8)
+    writer = FrameShmWriter("camx", directory=str(tmp_path))
+    try:
+        writer.write(img, time.time())
+        provider = czb.BusProvider("camx", directory=str(tmp_path))
+        got = provider()
+        assert got is not None and got.shape == (48, 64, 3) and (got == 37).all()
+    finally:
+        writer.close()
+
+
+def test_bus_provider_none_when_bus_absent(tmp_path):
+    assert czb.BusProvider("ghost", directory=str(tmp_path))() is None
+
+
+def test_make_provider_prefers_bus(tmp_path):
+    from backbone.shared.frame_shm import FrameShmWriter
+    writer = FrameShmWriter("camy", directory=str(tmp_path))
+    try:
+        writer.write(np.zeros((8, 8, 3), np.uint8), time.time())
+        p = czb.make_provider("camy", {"name": "rtsp", "url": "rtsp://x"},
+                              bus_wait_s=1.0, directory=str(tmp_path))
+        assert isinstance(p, czb.BusProvider)
+    finally:
+        writer.close()
+
+
+def test_make_provider_none_without_bus_or_rtsp(tmp_path):
+    p = czb.make_provider("ghost", {}, bus_wait_s=0.2, directory=str(tmp_path))
+    assert p is None
