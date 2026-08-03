@@ -5,6 +5,7 @@ import importlib.util
 import math
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -141,3 +142,41 @@ def test_make_provider_prefers_bus(tmp_path):
 def test_make_provider_none_without_bus_or_rtsp(tmp_path):
     p = czb.make_provider("ghost", {}, bus_wait_s=0.2, directory=str(tmp_path))
     assert p is None
+
+
+def test_main_refuses_without_zones(tmp_path, monkeypatch):
+    cfg = tmp_path / "backbone.yaml"
+    cfg.write_text("calibration_path: /nonexistent.json\n")   # no zones_path
+    monkeypatch.setattr(czb.CameraRig, "from_file",
+                        staticmethod(lambda p: object()))
+    rc = czb.main(["--config", str(cfg), "--out", str(tmp_path / "o")])
+    assert rc == 2
+
+
+def test_main_exits_1_when_no_camera_delivers(tmp_path, monkeypatch):
+    cfg = tmp_path / "backbone.yaml"
+    cfg.write_text("calibration_path: /nonexistent.json\nzones_path: z.yaml\n")
+
+    class _FakeView:
+        image_size_wh = (1920, 1080)
+
+    class _FakeRig:
+        camera_ids: ClassVar = ["cam_a"]
+        def __getitem__(self, k):
+            return _FakeView()
+
+    class _FakeZones:
+        def __len__(self):
+            return 1
+
+    monkeypatch.setattr(czb.CameraRig, "from_file",
+                        staticmethod(lambda p: _FakeRig()))
+    monkeypatch.setattr(czb.ZoneRegistry, "load",
+                        staticmethod(lambda p: _FakeZones()))
+    monkeypatch.setattr(czb, "zone_crop_boxes",
+                        lambda rig, zones, crop_height_m: {"cam_a": [("z", (0, 0, 100, 100))]})
+    monkeypatch.setattr(czb, "zone_fill_polygons",
+                        lambda rig, zones, crop_height_m: {"cam_a": {}})
+    monkeypatch.setattr(czb, "make_provider", lambda *a, **k: None)
+    rc = czb.main(["--config", str(cfg), "--out", str(tmp_path / "o")])
+    assert rc == 1

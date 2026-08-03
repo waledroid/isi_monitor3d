@@ -36,8 +36,15 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import yaml
 
-from backbone.detection.zone_scope import _FILL_GRAY  # noqa: F401  (re-exported for tests)
+from backbone.detection.zone_scope import (
+    _FILL_GRAY,
+    zone_crop_boxes,
+    zone_fill_polygons,
+)
+from backbone.shared.camera_rig import CameraRig
+from backbone.shared.zones import ZoneRegistry
 
 logger = logging.getLogger("capture_zone_bg")
 
@@ -80,7 +87,7 @@ def fill_crop(crop_img, fill, sx, sy, fx0, fy0):
 class CropDeduper:
     """Save a crop only when it visibly differs from the LAST SAVED one.
 
-    Signature = 64×64 grayscale; difference = mean absolute pixel delta.
+    Signature = 64x64 grayscale; difference = mean absolute pixel delta.
     A static empty zone then costs one file, not one per interval.
     """
 
@@ -238,3 +245,76 @@ def make_provider(cam_id: str, source_cfg: dict, *, bus_wait_s: float = 5.0,
         rtsp.stop()
         logger.warning("%s: RTSP delivered no frame in %.0fs", cam_id, frame_wait_s)
     return None
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Save inference-identical (gray-filled) zone crops as "
+                    "YOLO background images. See module docstring for the "
+                    "dataset merge procedure.")
+    ap.add_argument("--config", required=True, help="backbone.yaml path")
+    ap.add_argument("--out", default="trainer/isidet/data/bg_captures")
+    ap.add_argument("--prefix", default="bg",
+                    help="filename prefix; use 'pos' for occupied-zone sessions")
+    ap.add_argument("--interval", type=float, default=2.0, help="seconds between polls")
+    ap.add_argument("--count", type=int, default=300, help="stop after N saved images")
+    ap.add_argument("--min-diff", type=float, default=4.0,
+                    help="mean abs gray delta vs last saved crop to count as new")
+    ap.add_argument("--cams", default=None, help="comma list; default: all in rig")
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    cfg = yaml.safe_load(Path(args.config).read_text()) or {}
+    rig = CameraRig.from_file(cfg["calibration_path"])
+    zones_path = cfg.get("zones_path")
+    zones = ZoneRegistry.load(zones_path) if zones_path else ZoneRegistry.empty()
+    if len(zones) == 0:
+        logger.error("no zones configured (%s) — nothing to crop; draw zones first",
+                     zones_path or "no zones_path in config")
+        return 2
+
+    det = cfg.get("detection", {}) or {}
+    crop_h = float(det.get("zone_crop_height_m", 0.0) or 0.0)
+    boxes = zone_crop_boxes(rig, zones, crop_height_m=crop_h)
+    fills = zone_fill_polygons(rig, zones, crop_height_m=crop_h)
+    calib_wh = {cid: rig[cid].image_size_wh for cid in rig.camera_ids}
+
+    cams = ([c.strip() for c in args.cams.split(",") if c.strip()]
+            if args.cams else list(rig.camera_ids))
+    providers = {}
+    for cam_id in cams:
+        source_cfg = ((cfg.get("cameras", {}).get(cam_id) or {}).get("source")) or {}
+        provider = make_provider(cam_id, source_cfg)
+        if provider is not None:
+            providers[cam_id] = provider
+        else:
+            logger.warning("skipping %s: no frames from bus or RTSP", cam_id)
+    if not providers:
+        logger.error("no camera delivered frames — is the system (or a camera) up?")
+        return 1
+
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: stop.set())
+
+    try:
+        tally = capture_loop(
+            providers, boxes, fills, calib_wh, Path(args.out),
+            prefix=args.prefix, interval_s=args.interval, count=args.count,
+            min_diff=args.min_diff, stop=stop)
+    finally:
+        for provider in providers.values():
+            provider.stop()
+
+    total = sum(tally.values())
+    logger.info("done: %d image(s) in %s", total, args.out)
+    for key in sorted(tally):
+        logger.info("  %-30s %d", key, tally[key])
+    logger.info("next: review every crop (delete any containing an object), then "
+                "copy ~90%% to images/train and ~10%% to images/val with NO label files")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
