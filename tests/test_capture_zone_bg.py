@@ -60,3 +60,49 @@ def test_deduper_first_always_then_threshold():
     brighter = np.full((80, 80, 3), 60, np.uint8)
     assert d.should_save("cam_a", "z1", brighter) is True # big change → save
     assert d.should_save("cam_a", "z2", flat) is True     # other zone independent
+
+
+def _frames_provider(frames):
+    it = iter(frames)
+    return lambda: next(it, None)
+
+
+def test_capture_loop_saves_dedups_names_and_stops_when_idle(tmp_path):
+    frames = [np.full((720, 1280, 3), v, np.uint8) for v in (10, 10, 200)]
+    boxes = {"cam_a": [("Zone 1", (100, 100, 600, 600))]}
+    tally = czb.capture_loop(
+        {"cam_a": _frames_provider(frames)}, boxes, {"cam_a": {}},
+        {"cam_a": (1280, 720)}, tmp_path,
+        interval_s=0, count=10, min_diff=4.0, max_idle_polls=3)
+    files = sorted(p.name for p in tmp_path.glob("*.jpg"))
+    assert files == ["bg_cam_a_Zone-1_0000.jpg", "bg_cam_a_Zone-1_0001.jpg"]
+    assert tally == {"cam_a/Zone 1": 2}          # middle frame dedup-skipped
+
+
+def test_capture_loop_applies_fill(tmp_path):
+    frames = [np.full((720, 1280, 3), 200, np.uint8)]
+    boxes = {"cam_a": [("z", (0, 0, 1280, 720))]}
+    poly = np.array([[300, 300], [900, 300], [900, 600], [300, 600]], dtype=np.float64)
+    fills = {"cam_a": {"z": (poly, 4.0)}}
+    czb.capture_loop(
+        {"cam_a": _frames_provider(frames)}, boxes, fills,
+        {"cam_a": (1280, 720)}, tmp_path,
+        interval_s=0, count=1, max_idle_polls=2)
+    img = cv2.imread(str(next(tmp_path.glob("*.jpg"))))
+    assert abs(int(img[5, 5, 0]) - czb._FILL_GRAY) <= 3      # outside → gray (± JPEG)
+    assert int(img[450, 640, 0]) > 180                        # inside preserved
+
+
+def test_capture_loop_stops_at_count(tmp_path):
+    frames = [np.full((720, 1280, 3), v, np.uint8) for v in (10, 200, 90, 250)]
+    boxes = {"cam_a": [("z", (100, 100, 600, 600))]}
+    tally = czb.capture_loop(
+        {"cam_a": _frames_provider(frames)}, boxes, {"cam_a": {}},
+        {"cam_a": (1280, 720)}, tmp_path,
+        interval_s=0, count=2, max_idle_polls=3)
+    assert sum(tally.values()) == 2
+
+
+def test_slug_sanitizes_zone_names():
+    assert czb._slug("Zone 1") == "Zone-1"
+    assert czb._slug("étagère/2") == "tag-re-2"

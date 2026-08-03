@@ -96,3 +96,63 @@ class CropDeduper:
             return False
         self._last[(cam_id, zone_name)] = sig
         return True
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "zone"
+
+
+def capture_loop(providers, boxes, fill_polys, calib_wh, out_dir, *,
+                 prefix: str = "bg", interval_s: float = 2.0, count: int = 300,
+                 min_diff: float = 4.0, max_idle_polls: int = 60,
+                 stop: threading.Event | None = None,
+                 sleep=time.sleep) -> dict[str, int]:
+    """Poll every provider each tick; save deduped filled crops until ``count``
+    images exist, ``stop`` is set, or ``max_idle_polls`` consecutive ticks
+    yield no frame from any camera. Returns a ``{"cam/zone": n}`` tally."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dedup = CropDeduper(min_diff)
+    counters: dict[tuple[str, str], int] = {}
+    tally: dict[str, int] = {}
+    saved_total = 0
+    idle = 0
+    while saved_total < count and (stop is None or not stop.is_set()):
+        got_any = False
+        for cam_id, provider in providers.items():
+            if saved_total >= count:
+                break
+            frame = provider()
+            if frame is None:
+                continue
+            got_any = True
+            fh, fw = frame.shape[:2]
+            for zone_name, box in boxes.get(cam_id) or []:
+                if saved_total >= count:
+                    break
+                fx0, fy0, fx1, fy1, sx, sy = scale_box(
+                    box, calib_wh.get(cam_id, (fw, fh)), (fw, fh))
+                if fx1 - fx0 < 8 or fy1 - fy0 < 8:
+                    continue
+                crop = frame[fy0:fy1, fx0:fx1]
+                fill = (fill_polys.get(cam_id) or {}).get(zone_name)
+                if fill is not None:
+                    crop = fill_crop(crop, fill, sx, sy, fx0, fy0)
+                if not dedup.should_save(cam_id, zone_name, crop):
+                    continue
+                key = (cam_id, zone_name)
+                n = counters.get(key, 0)
+                counters[key] = n + 1
+                path = out_dir / f"{prefix}_{cam_id}_{_slug(zone_name)}_{n:04d}.jpg"
+                cv2.imwrite(str(path), crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                tally_key = f"{cam_id}/{zone_name}"
+                tally[tally_key] = tally.get(tally_key, 0) + 1
+                saved_total += 1
+                logger.info("saved %s (%d/%d)", path.name, saved_total, count)
+        idle = 0 if got_any else idle + 1
+        if idle >= max_idle_polls:
+            logger.warning("no camera delivered frames for %d polls — stopping", idle)
+            break
+        if interval_s:
+            sleep(interval_s)
+    return tally
