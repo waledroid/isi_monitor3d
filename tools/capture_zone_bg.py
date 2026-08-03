@@ -38,6 +38,7 @@ import cv2
 import numpy as np
 import yaml
 
+from backbone.detection.enhance import enhance_bgr
 from backbone.detection.zone_scope import (
     _FILL_GRAY,
     zone_crop_boxes,
@@ -109,14 +110,34 @@ def _slug(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "zone"
 
 
+def _seed_counter(out_dir: Path, prefix: str, cam_id: str, zone_name: str) -> int:
+    """Continue numbering from existing ``{prefix}_{cam}_{slug}_NNNN.jpg``
+    files in ``out_dir`` (max index + 1) so a second session never clobbers a
+    first one's files — counters otherwise start at 0000 every run."""
+    pattern = f"{prefix}_{cam_id}_{_slug(zone_name)}_*.jpg"
+    best = -1
+    for p in out_dir.glob(pattern):
+        m = re.search(r"_(\d+)\.jpg$", p.name)
+        if m:
+            best = max(best, int(m.group(1)))
+    return best + 1
+
+
 def capture_loop(providers, boxes, fill_polys, calib_wh, out_dir, *,
                  prefix: str = "bg", interval_s: float = 2.0, count: int = 300,
                  min_diff: float = 4.0, max_idle_polls: int = 60,
                  stop: threading.Event | None = None,
-                 sleep=time.sleep) -> dict[str, int]:
+                 sleep=time.sleep, enhance=None) -> dict[str, int]:
     """Poll every provider each tick; save deduped filled crops until ``count``
     images exist, ``stop`` is set, or ``max_idle_polls`` consecutive ticks
-    yield no frame from any camera. Returns a ``{"cam/zone": n}`` tally."""
+    yield no frame from any camera. Returns a ``{"cam/zone": n}`` tally.
+
+    ``enhance``, when given, is a ``callable(crop) -> crop`` applied to EVERY
+    crop (filled or not) right after the polygon fill — mirroring
+    ``ZoneScopedDetector.detect`` (zone_scope.py: fill, then
+    ``enhance_bgr``), so a saved background matches the inference domain when
+    ``detection.enhance.enabled`` is on.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dedup = CropDeduper(min_diff)
@@ -145,10 +166,14 @@ def capture_loop(providers, boxes, fill_polys, calib_wh, out_dir, *,
                 fill = (fill_polys.get(cam_id) or {}).get(zone_name)
                 if fill is not None:
                     crop = fill_crop(crop, fill, sx, sy, fx0, fy0)
+                if enhance is not None:
+                    crop = enhance(crop)
                 if not dedup.should_save(cam_id, zone_name, crop):
                     continue
                 key = (cam_id, zone_name)
-                n = counters.get(key, 0)
+                if key not in counters:
+                    counters[key] = _seed_counter(out_dir, prefix, cam_id, zone_name)
+                n = counters[key]
                 counters[key] = n + 1
                 path = out_dir / f"{prefix}_{cam_id}_{_slug(zone_name)}_{n:04d}.jpg"
                 cv2.imwrite(str(path), crop, [cv2.IMWRITE_JPEG_QUALITY, 95])
@@ -280,8 +305,41 @@ def main(argv=None) -> int:
     fills = zone_fill_polygons(rig, zones, crop_height_m=crop_h)
     calib_wh = {cid: rig[cid].image_size_wh for cid in rig.camera_ids}
 
+    # Mirror the live detector's crop enhancement (isistream/core.py,
+    # zone_scope.py:467-468) so captured backgrounds match the domain the
+    # model was actually shown, not a CLAHE/gamma-mismatched raw crop.
+    enhance_cfg = det.get("enhance")
+    enhance_fn = None
+    if isinstance(enhance_cfg, dict) and enhance_cfg.get("enabled"):
+        enh_kwargs = {
+            "clip_limit": float(enhance_cfg.get("clip_limit", 2.0)),
+            "tile_grid": int(enhance_cfg.get("tile_grid", 8)),
+            "gamma": float(enhance_cfg.get("gamma", 1.0)),
+        }
+        enhance_fn = lambda img: enhance_bgr(img, **enh_kwargs)  # noqa: E731
+        logger.info("crop enhancement ON (mirrors live detector: CLAHE clip=%.1f, "
+                    "gamma=%.2f) — captures will match the inference domain",
+                    enh_kwargs["clip_limit"], enh_kwargs["gamma"])
+
     cams = ([c.strip() for c in args.cams.split(",") if c.strip()]
             if args.cams else list(rig.camera_ids))
+
+    # Substream domain mismatch: isistream defaults detect_substream to True,
+    # so a per-camera detect_source (the camera's SUBSTREAM) silently becomes
+    # the pixels the live detector sees, while this tool always captures the
+    # camera's `source` (main stream). Only an explicit `false` guarantees
+    # they're the same stream.
+    isis_cfg = cfg.get("isistream", cfg.get("perception", {})) or {}
+    if isis_cfg.get("detect_substream", True) is not False:
+        cams_cfg = cfg.get("cameras", {}) or {}
+        if any((cams_cfg.get(c) or {}).get("detect_source") for c in cams):
+            logger.warning(
+                "isistream.detect_substream is not explicitly false and at "
+                "least one selected camera defines detect_source — captured "
+                "crops come from the MAIN stream but live detection may run "
+                "on the SUBSTREAM. Captures may not match the detection pixel "
+                "domain; set isistream.detect_substream: false or verify manually.")
+
     providers = {}
     for cam_id in cams:
         source_cfg = ((cfg.get("cameras", {}).get(cam_id) or {}).get("source")) or {}
@@ -302,7 +360,7 @@ def main(argv=None) -> int:
         tally = capture_loop(
             providers, boxes, fills, calib_wh, Path(args.out),
             prefix=args.prefix, interval_s=args.interval, count=args.count,
-            min_diff=args.min_diff, stop=stop)
+            min_diff=args.min_diff, stop=stop, enhance=enhance_fn)
     finally:
         for provider in providers.values():
             provider.stop()

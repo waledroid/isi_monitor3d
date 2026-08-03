@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import math
 import time
 from pathlib import Path
@@ -95,6 +96,24 @@ def test_capture_loop_applies_fill(tmp_path):
     assert int(img[450, 640, 0]) > 180                        # inside preserved
 
 
+def test_capture_loop_applies_enhance(tmp_path):
+    # Finding 1: production (zone_scope.py) enhances every crop right after
+    # the polygon fill, before letterboxing/inference — capture_loop must do
+    # the same or captured backgrounds mismatch the inference domain.
+    frames = [np.full((720, 1280, 3), 50, np.uint8)]
+    boxes = {"cam_a": [("z", (100, 100, 600, 600))]}
+
+    def invert(img):
+        return 255 - img
+
+    czb.capture_loop(
+        {"cam_a": _frames_provider(frames)}, boxes, {"cam_a": {}},
+        {"cam_a": (1280, 720)}, tmp_path,
+        interval_s=0, count=1, max_idle_polls=2, enhance=invert)
+    img = cv2.imread(str(next(tmp_path.glob("*.jpg"))))
+    assert int(img[10, 10, 0]) > 200          # 255-50=205: inversion applied
+
+
 def test_capture_loop_stops_at_count(tmp_path):
     frames = [np.full((720, 1280, 3), v, np.uint8) for v in (10, 200, 90, 250)]
     boxes = {"cam_a": [("z", (100, 100, 600, 600))]}
@@ -103,6 +122,21 @@ def test_capture_loop_stops_at_count(tmp_path):
         {"cam_a": (1280, 720)}, tmp_path,
         interval_s=0, count=2, max_idle_polls=3)
     assert sum(tally.values()) == 2
+
+
+def test_capture_loop_seeds_counter_from_existing_files(tmp_path):
+    # Finding 2: counters must not restart at 0000 every run — a second
+    # session on the same --out dir would silently clobber the first one's
+    # files via cv2.imwrite.
+    (tmp_path / "bg_cam_a_z_0000.jpg").write_bytes(b"first-session")
+    frames = [np.full((720, 1280, 3), 200, np.uint8)]
+    boxes = {"cam_a": [("z", (100, 100, 600, 600))]}
+    czb.capture_loop(
+        {"cam_a": _frames_provider(frames)}, boxes, {"cam_a": {}},
+        {"cam_a": (1280, 720)}, tmp_path,
+        interval_s=0, count=1, max_idle_polls=2)
+    assert (tmp_path / "bg_cam_a_z_0000.jpg").read_bytes() == b"first-session"
+    assert (tmp_path / "bg_cam_a_z_0001.jpg").exists()
 
 
 def test_slug_sanitizes_zone_names():
@@ -180,3 +214,135 @@ def test_main_exits_1_when_no_camera_delivers(tmp_path, monkeypatch):
     monkeypatch.setattr(czb, "make_provider", lambda *a, **k: None)
     rc = czb.main(["--config", str(cfg), "--out", str(tmp_path / "o")])
     assert rc == 1
+
+
+def test_main_warns_on_substream_domain_mismatch(tmp_path, monkeypatch, caplog):
+    # Finding 3: isistream defaults detect_substream to True, so a per-camera
+    # detect_source silently moves live detection onto the substream while
+    # this tool always captures the main `source` — one loud warning, no
+    # behavior change.
+    cfg = tmp_path / "backbone.yaml"
+    cfg.write_text(
+        "calibration_path: /nonexistent.json\n"
+        "zones_path: z.yaml\n"
+        "cameras:\n"
+        "  cam_a:\n"
+        "    detect_source:\n"
+        "      name: rtsp\n"
+        "      url: rtsp://x\n")
+
+    class _FakeView:
+        image_size_wh = (1920, 1080)
+
+    class _FakeRig:
+        camera_ids: ClassVar = ["cam_a"]
+        def __getitem__(self, k):
+            return _FakeView()
+
+    class _FakeZones:
+        def __len__(self):
+            return 1
+
+    monkeypatch.setattr(czb.CameraRig, "from_file",
+                        staticmethod(lambda p: _FakeRig()))
+    monkeypatch.setattr(czb.ZoneRegistry, "load",
+                        staticmethod(lambda p: _FakeZones()))
+    monkeypatch.setattr(czb, "zone_crop_boxes",
+                        lambda rig, zones, crop_height_m: {"cam_a": [("z", (0, 0, 100, 100))]})
+    monkeypatch.setattr(czb, "zone_fill_polygons",
+                        lambda rig, zones, crop_height_m: {"cam_a": {}})
+    monkeypatch.setattr(czb, "make_provider", lambda *a, **k: None)
+    with caplog.at_level(logging.WARNING, logger="capture_zone_bg"):
+        rc = czb.main(["--config", str(cfg), "--out", str(tmp_path / "o")])
+    assert rc == 1                        # unchanged behavior — no camera delivers
+    assert any("substream" in r.message.lower() for r in caplog.records)
+
+
+def test_main_no_warning_when_substream_explicitly_false(tmp_path, monkeypatch, caplog):
+    cfg = tmp_path / "backbone.yaml"
+    cfg.write_text(
+        "calibration_path: /nonexistent.json\n"
+        "zones_path: z.yaml\n"
+        "isistream:\n"
+        "  detect_substream: false\n"
+        "cameras:\n"
+        "  cam_a:\n"
+        "    detect_source:\n"
+        "      name: rtsp\n"
+        "      url: rtsp://x\n")
+
+    class _FakeView:
+        image_size_wh = (1920, 1080)
+
+    class _FakeRig:
+        camera_ids: ClassVar = ["cam_a"]
+        def __getitem__(self, k):
+            return _FakeView()
+
+    class _FakeZones:
+        def __len__(self):
+            return 1
+
+    monkeypatch.setattr(czb.CameraRig, "from_file",
+                        staticmethod(lambda p: _FakeRig()))
+    monkeypatch.setattr(czb.ZoneRegistry, "load",
+                        staticmethod(lambda p: _FakeZones()))
+    monkeypatch.setattr(czb, "zone_crop_boxes",
+                        lambda rig, zones, crop_height_m: {"cam_a": [("z", (0, 0, 100, 100))]})
+    monkeypatch.setattr(czb, "zone_fill_polygons",
+                        lambda rig, zones, crop_height_m: {"cam_a": {}})
+    monkeypatch.setattr(czb, "make_provider", lambda *a, **k: None)
+    with caplog.at_level(logging.WARNING, logger="capture_zone_bg"):
+        czb.main(["--config", str(cfg), "--out", str(tmp_path / "o")])
+    assert not any("substream" in r.message.lower() for r in caplog.records)
+
+
+def test_differential_parity_with_zone_scoped_detector():
+    """Finding 4: feed a synthetic frame through the REAL
+    ``ZoneScopedDetector`` (the exact production class, not a reimplemented
+    formula) and assert the crop it hands to the wrapped detector is
+    byte-identical to what capture_zone_bg computes for the same box/fill —
+    this catches drift in zone_scope.py that same-formula assertions
+    (test_scale_box_matches_zone_scoped_detector, etc.) cannot.
+
+    No enhance (kept out of scope here — enhance parity is exercised
+    directly against ``enhance_bgr`` by test_capture_loop_applies_enhance);
+    aspect kept <= 2.0 so self-tiling doesn't split the crop into tiles.
+    """
+    from backbone.core.types import Frame, FramePair
+    from backbone.detection.zone_scope import ZoneScopedDetector
+
+    class _RecordingDetector:
+        def __init__(self):
+            self.crops: dict[str, np.ndarray] = {}
+
+        def detect(self, pair):
+            for sid, frame in pair.frames.items():
+                self.crops[sid] = frame.image
+            return {}
+
+    rng = np.random.default_rng(0)
+    # Calibration frame is larger than the live frame (simulates an
+    # ingest-downscaled source, same scale_box arithmetic exercised above).
+    calib_wh = (1920, 1080)
+    frame_img = rng.integers(0, 255, (720, 1280, 3), dtype=np.uint8)
+    box = (150, 150, 1050, 750)                     # calib px; 900x600, aspect 1.5
+    poly = np.array([[225, 225], [975, 225], [975, 675], [225, 675]],
+                    dtype=np.float64)                # calib px
+    fill = (poly, 4.0)
+
+    stub = _RecordingDetector()
+    zsd = ZoneScopedDetector(
+        stub, {"cam_a": [("z1", box)]}, {"cam_a": calib_wh},
+        fill_polys={"cam_a": {"z1": fill}})
+
+    frame = Frame(camera_id="cam_a", capture_ts=1.0, frame_idx=0, image=frame_img)
+    pair = FramePair(capture_ts=1.0, frame_idx=0, frames={"cam_a": frame})
+    zsd.detect(pair)
+
+    assert len(stub.crops) == 1
+    got = next(iter(stub.crops.values()))
+
+    fx0, fy0, fx1, fy1, sx, sy = czb.scale_box(box, calib_wh, (1280, 720))
+    expected = czb.fill_crop(frame_img[fy0:fy1, fx0:fx1], fill, sx, sy, fx0, fy0)
+    assert np.array_equal(got, expected)
