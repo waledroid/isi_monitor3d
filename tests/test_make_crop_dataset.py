@@ -1,8 +1,10 @@
-from importlib.util import spec_from_file_location, module_from_spec
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
+import yaml
 
 # Loader block: import tools/make_crop_dataset.py as mcd
 _spec = spec_from_file_location("mcd", Path(__file__).parent.parent / "tools" / "make_crop_dataset.py")
@@ -176,3 +178,86 @@ def test_generate_crops_small_image_not_upscaled():
     poly = labels[0][1] * 384
     assert poly[:, 0].min() == pytest.approx(dx + 50, abs=1.5)
     assert (crop[0, 0] == mcd.GRAY).all()
+
+
+@pytest.fixture
+def _make_src(tmp_path, n_train=2, n_val=1):
+    src = tmp_path / "src"
+    for split, n in (("train", n_train), ("val", n_val)):
+        (src / "images" / split).mkdir(parents=True)
+        (src / "labels" / split).mkdir(parents=True)
+        for i in range(n):
+            img = np.full((600, 800, 3), 160, np.uint8)
+            cv2.imwrite(str(src / "images" / split / f"{split}{i}.jpg"), img)
+            (src / "labels" / split / f"{split}{i}.txt").write_text(
+                "0 0.25 0.25 0.5 0.25 0.5 0.5 0.25 0.5\n")
+    (src / "data.yaml").write_text(
+        "path: X\ntrain: images/train\nval: images/val\nnc: 3\n"
+        "names: ['palette', 'carton', 'polybag']\n")
+    return src
+
+
+def test_main_builds_split_preserving_dataset(_make_src, tmp_path):
+    src = _make_src
+    out = tmp_path / "out"
+    rc = mcd.main(["--src", str(src), "--out", str(out), "--size", "384"])
+    assert rc == 0
+    train = sorted(p.name for p in (out / "images" / "train").glob("*.jpg"))
+    val = sorted(p.name for p in (out / "images" / "val").glob("*.jpg"))
+    assert train == ["train0_c0.jpg", "train1_c0.jpg"]
+    assert val == ["val0_c0.jpg"]
+    for stem in ("train/train0_c0", "train/train1_c0", "val/val0_c0"):
+        txt = (out / "labels" / (stem + ".txt")).read_text()
+        assert txt.startswith("0 ") and len(txt.split()) >= 7
+    y = yaml.safe_load((out / "data.yaml").read_text())
+    assert y["names"] == ["palette", "carton", "polybag"] and y["nc"] == 3
+    img = cv2.imread(str(out / "images" / "train" / "train0_c0.jpg"))
+    assert img.shape == (384, 384, 3)
+
+
+def test_main_refuses_existing_out(_make_src, tmp_path):
+    src = _make_src
+    out = tmp_path / "out"
+    (out / "images").mkdir(parents=True)
+    assert mcd.main(["--src", str(src), "--out", str(out)]) == 2
+
+
+def test_main_folds_backgrounds_without_labels(_make_src, tmp_path):
+    src = _make_src
+    bg = tmp_path / "bg"
+    bg.mkdir()
+    for i in range(10):
+        cv2.imwrite(str(bg / f"bg_{i:03d}.jpg"),
+                    np.full((300, 400, 3), 120, np.uint8))
+    out = tmp_path / "out"
+    rc = mcd.main(["--src", str(src), "--out", str(out),
+                   "--backgrounds", str(bg)])
+    assert rc == 0
+    bg_imgs = [p for s in ("train", "val")
+               for p in (out / "images" / s).glob("bg_*.jpg")]
+    assert len(bg_imgs) == 10
+    for p in bg_imgs:
+        assert not (out / "labels" / p.parent.name / (p.stem + ".txt")).exists()
+        assert cv2.imread(str(p)).shape == (384, 384, 3)
+    # deterministic split
+    assert {p.parent.name for p in bg_imgs} == {
+        mcd.bg_split(p.name) for p in bg_imgs} or True
+    for p in bg_imgs:
+        assert p.parent.name == mcd.bg_split(p.name)
+
+
+def test_bg_split_deterministic():
+    assert mcd.bg_split("a.jpg") == mcd.bg_split("a.jpg")
+    assert all(mcd.bg_split(f"x{i}.jpg") in ("train", "val") for i in range(50))
+
+
+def test_main_preview_writes_only_preview(_make_src, tmp_path):
+    src = _make_src
+    out = tmp_path / "out"
+    rc = mcd.main(["--src", str(src), "--out", str(out), "--preview", "2"])
+    assert rc == 0
+    previews = list((out / "_preview").glob("*.jpg"))
+    assert len(previews) == 2
+    assert not (out / "images").exists() and not (out / "labels").exists()
+    # a full run AFTER preview is allowed (out contains only _preview)
+    assert mcd.main(["--src", str(src), "--out", str(out)]) == 0

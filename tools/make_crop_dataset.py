@@ -231,3 +231,140 @@ def generate_crops(img, objs, *, size, margin_range, keep_frac, rng):
         labels = [(cls, (p * scale + (dx, dy)) / size) for cls, p in kept]
         out.append((canvas, labels))
     return out
+
+
+# ---- CLI ----
+
+def bg_split(name: str) -> str:
+    """Deterministic 90/10 background split by filename hash."""
+    return "val" if int(hashlib.md5(name.encode()).hexdigest(), 16) % 10 == 0 \
+        else "train"
+
+
+def _iter_images(split_dir: Path):
+    return sorted(p for p in split_dir.glob("*")
+                  if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Derive an object-centric cropped YOLO-seg dataset from "
+                    "GT labels. See module docstring.")
+    ap.add_argument("--src", required=True, help="source dataset root")
+    ap.add_argument("--out", required=True, help="output dataset root")
+    ap.add_argument("--size", type=int, default=384)
+    ap.add_argument("--backgrounds", default=None,
+                    help="folder of label-free background images to fold in")
+    ap.add_argument("--margin", type=float, nargs=2, default=(0.10, 0.25),
+                    metavar=("LO", "HI"))
+    ap.add_argument("--keep-frac", type=float, default=0.30)
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--preview", type=int, default=0, metavar="N",
+                    help="write N annotated sample crops to <out>/_preview "
+                         "and exit (no dataset generated)")
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    src, out = Path(args.src), Path(args.out)
+    if out.exists() and any(p.name != "_preview" for p in out.iterdir()):
+        logger.error("refusing: %s exists and is not empty", out)
+        return 2
+    rng = np.random.default_rng(args.seed)
+
+    pairs = []          # (split, img_path, label_path)
+    for split in ("train", "val"):
+        for img_path in _iter_images(src / "images" / split):
+            pairs.append((split, img_path,
+                          src / "labels" / split / (img_path.stem + ".txt")))
+
+    if args.preview:
+        pv = out / "_preview"
+        pv.mkdir(parents=True, exist_ok=True)
+        idxs = rng.choice(len(pairs), size=min(args.preview, len(pairs)),
+                          replace=False)
+        written = 0
+        for i in idxs:
+            split, img_path, lbl_path = pairs[int(i)]
+            img = cv2.imread(str(img_path))
+            if img is None:
+                continue
+            objs = (parse_label_file(lbl_path, img.shape[1], img.shape[0])
+                    if lbl_path.exists() else [])
+            for k, (crop, labels) in enumerate(generate_crops(
+                    img, objs, size=args.size, margin_range=tuple(args.margin),
+                    keep_frac=args.keep_frac, rng=rng)):
+                for cls, poly in labels:
+                    pts = np.round(poly * args.size).astype(np.int32)
+                    cv2.polylines(crop, [pts], True, (0, 255, 0), 2)
+                    cv2.putText(crop, str(cls), tuple(pts[0]),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.imwrite(str(pv / f"{img_path.stem}_c{k}.jpg"), crop)
+                written += 1
+                if written >= args.preview:
+                    break
+            if written >= args.preview:
+                break
+        logger.info("preview: %d annotated crop(s) in %s", written, pv)
+        return 0
+
+    stats = {"images": 0, "unreadable": 0, "crops": 0, "labels": 0,
+             "grayfilled_or_dropped": 0, "backgrounds": 0}
+    for split in ("train", "val"):
+        (out / "images" / split).mkdir(parents=True, exist_ok=True)
+        (out / "labels" / split).mkdir(parents=True, exist_ok=True)
+    for split, img_path, lbl_path in pairs:
+        img = cv2.imread(str(img_path))
+        if img is None:
+            logger.warning("unreadable image skipped: %s", img_path)
+            stats["unreadable"] += 1
+            continue
+        stats["images"] += 1
+        objs = (parse_label_file(lbl_path, img.shape[1], img.shape[0])
+                if lbl_path.exists() else [])
+        n_src = len(objs)
+        n_kept = 0
+        for k, (crop, labels) in enumerate(generate_crops(
+                img, objs, size=args.size, margin_range=tuple(args.margin),
+                keep_frac=args.keep_frac, rng=rng)):
+            name = f"{img_path.stem}_c{k}"
+            cv2.imwrite(str(out / "images" / split / (name + ".jpg")), crop,
+                        [cv2.IMWRITE_JPEG_QUALITY, 95])
+            if labels:
+                (out / "labels" / split / (name + ".txt")).write_text(
+                    format_label_lines(labels))
+            stats["crops"] += 1
+            stats["labels"] += len(labels)
+            n_kept += len(labels)
+        stats["grayfilled_or_dropped"] += max(0, n_src - n_kept)
+
+    if args.backgrounds:
+        for p in _iter_images(Path(args.backgrounds)):
+            img = cv2.imread(str(p))
+            if img is None:
+                logger.warning("unreadable background skipped: %s", p)
+                continue
+            canvas, _, _, _ = letterbox_to(img, args.size)
+            cv2.imwrite(str(out / "images" / bg_split(p.name) / p.name),
+                        canvas, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            stats["backgrounds"] += 1
+
+    names = ["palette", "carton", "polybag"]
+    src_yaml = src / "data.yaml"
+    if src_yaml.exists():
+        loaded = yaml.safe_load(src_yaml.read_text()) or {}
+        names = list(loaded.get("names", names))
+    (out / "data.yaml").write_text(
+        f"path: {out.resolve()}\ntrain: images/train\nval: images/val\n"
+        f"nc: {len(names)}\nnames: {names}\n")
+
+    for split in ("train", "val"):
+        n_img = len(list((out / "images" / split).glob("*.jpg")))
+        n_lbl = len(list((out / "labels" / split).glob("*.txt")))
+        logger.info("%s: %d images (%d labeled, %d backgrounds)",
+                    split, n_img, n_lbl, n_img - n_lbl)
+    logger.info("summary: %s", stats)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
