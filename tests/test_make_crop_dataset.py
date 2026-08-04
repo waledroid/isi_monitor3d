@@ -222,6 +222,52 @@ def test_main_refuses_existing_out(_make_src, tmp_path):
     assert mcd.main(["--src", str(src), "--out", str(out)]) == 2
 
 
+def test_main_missing_src_exits_2_no_output(tmp_path):
+    out = tmp_path / "o"
+    rc = mcd.main(["--src", str(tmp_path / "nope"), "--out", str(out)])
+    assert rc == 2
+    assert not (out / "images").exists()
+
+
+def test_main_backgrounds_skip_collision_and_convert_to_jpg(_make_src, tmp_path):
+    src = _make_src
+    bg = tmp_path / "bg"
+    bg.mkdir()
+    cv2.imwrite(str(bg / "extra.png"), np.full((300, 400, 3), 120, np.uint8))
+    out = tmp_path / "out"
+    rc = mcd.main(["--src", str(src), "--out", str(out),
+                   "--backgrounds", str(bg)])
+    assert rc == 0
+    # png background written as .jpg, no label file created for it
+    split = mcd.bg_split("extra.png")
+    converted = out / "images" / split / "extra.jpg"
+    assert converted.exists()
+    assert not (out / "labels" / split / "extra.txt").exists()
+
+    # a background named to collide with an existing crop must not overwrite
+    # it. "train0_c0.jpg" is a real crop name from _make_src, and it hashes
+    # (as a background name) into the "train" split -- the same split its
+    # crop lives in -- so the collision is real, not coincidental.
+    collide_name = "train0_c0"
+    collide_split = "train"
+    assert mcd.bg_split(f"{collide_name}.jpg") == collide_split
+    crop_path = out / "images" / collide_split / (collide_name + ".jpg")
+    assert crop_path.exists()
+    before = crop_path.read_bytes()
+
+    bg2 = tmp_path / "bg2"
+    bg2.mkdir()
+    cv2.imwrite(str(bg2 / f"{collide_name}.jpg"),
+                np.full((300, 400, 3), 40, np.uint8))
+    out2 = tmp_path / "out2"
+    rc2 = mcd.main(["--src", str(src), "--out", str(out2),
+                    "--backgrounds", str(bg2)])
+    assert rc2 == 0
+    crop2_path = out2 / "images" / collide_split / (collide_name + ".jpg")
+    assert crop2_path.exists()
+    assert crop2_path.read_bytes() == before
+
+
 def test_main_folds_backgrounds_without_labels(_make_src, tmp_path):
     src = _make_src
     bg = tmp_path / "bg"
@@ -246,6 +292,12 @@ def test_main_folds_backgrounds_without_labels(_make_src, tmp_path):
 def test_bg_split_deterministic():
     assert mcd.bg_split("a.jpg") == mcd.bg_split("a.jpg")
     assert all(mcd.bg_split(f"x{i}.jpg") in ("train", "val") for i in range(50))
+    # same capture series (shared prefix before the trailing _NNNN.ext) stays
+    # in one split, even though the frame numbers differ.
+    assert mcd.bg_split("bg_cam_a_Sortie-1_0000.jpg") == \
+        mcd.bg_split("bg_cam_a_Sortie-1_0042.jpg")
+    # a name without a numeric suffix still resolves to a valid split.
+    assert mcd.bg_split("no_suffix_here.jpg") in ("train", "val")
 
 
 def test_main_preview_writes_only_preview(_make_src, tmp_path):

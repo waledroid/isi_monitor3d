@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -219,6 +220,7 @@ def generate_crops(img, objs, *, size, margin_range, keep_frac, rng):
                 continue
             area = poly_area(clipped)
             if area < 1.0:
+                fills.append(clipped)
                 continue
             if area / max(poly_area(poly), 1e-9) >= keep_frac:
                 kept.append((cls, clipped))
@@ -236,8 +238,10 @@ def generate_crops(img, objs, *, size, margin_range, keep_frac, rng):
 # ---- CLI ----
 
 def bg_split(name: str) -> str:
-    """Deterministic 90/10 background split by filename hash."""
-    return "val" if int(hashlib.md5(name.encode()).hexdigest(), 16) % 10 == 0 \
+    """Deterministic 90/10 background split by capture-series prefix, so
+    near-duplicate frames from one (cam, zone) series stay in ONE split."""
+    group = re.sub(r"_\d+\.[A-Za-z]+$", "", name)
+    return "val" if int(hashlib.md5(group.encode()).hexdigest(), 16) % 10 == 0 \
         else "train"
 
 
@@ -276,6 +280,10 @@ def main(argv=None) -> int:
         for img_path in _iter_images(src / "images" / split):
             pairs.append((split, img_path,
                           src / "labels" / split / (img_path.stem + ".txt")))
+
+    if not pairs:
+        logger.error("no images found under %s/images/{train,val}", src)
+        return 2
 
     if args.preview:
         pv = out / "_preview"
@@ -343,9 +351,13 @@ def main(argv=None) -> int:
             if img is None:
                 logger.warning("unreadable background skipped: %s", p)
                 continue
+            target = out / "images" / bg_split(p.name) / (p.stem + ".jpg")
+            if target.exists():
+                logger.warning("background name collides with an existing "
+                               "crop, skipped: %s", target)
+                continue
             canvas, _, _, _ = letterbox_to(img, args.size)
-            cv2.imwrite(str(out / "images" / bg_split(p.name) / p.name),
-                        canvas, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            cv2.imwrite(str(target), canvas, [cv2.IMWRITE_JPEG_QUALITY, 95])
             stats["backgrounds"] += 1
 
     names = ["palette", "carton", "polybag"]
