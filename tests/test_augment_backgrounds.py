@@ -1,20 +1,27 @@
-"""Test augment_backgrounds: photometric effects, variant_name."""
-import numpy as np
-import cv2
+"""Tests for tools/augment_backgrounds.py (hermetic — synthetic images)."""
+from __future__ import annotations
 
-import sys
+import importlib.util
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
-import augment_backgrounds as ab
-from tools.make_crop_dataset import bg_split as bg_split_func
+import numpy as np
+import pytest
+
+cv2 = pytest.importorskip("cv2")
+
+_ROOT = Path(__file__).resolve().parents[1]
 
 
-# Mock bg_split for testing (will use real one from make_crop_dataset)
-class mcd:
-    @staticmethod
-    def bg_split(name: str):
-        return bg_split_func(name)
+def _load(modname):
+    spec = importlib.util.spec_from_file_location(
+        modname, _ROOT / "tools" / f"{modname}.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+ab = _load("augment_backgrounds")
+mcd = _load("make_crop_dataset")
 
 
 def _structured_img(size=64):
