@@ -212,7 +212,7 @@ class RtspProvider:
 
     def __init__(self, camera_id: str, source_cfg: dict) -> None:
         import backbone.ingestion  # noqa: F401  auto-registration fires @register
-        from backbone.core.registry import frame_source_registry
+        from backbone.core.interfaces import frame_source_registry
         kwargs = {k: source_cfg[k]
                   for k in ("latency_ms", "capture_fps", "output_wh")
                   if source_cfg.get(k) is not None}
