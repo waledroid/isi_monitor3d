@@ -54,8 +54,10 @@ python tools/augment_backgrounds.py \
    `..._Sortie_1_1007.jpg`, `_2007.jpg`. The `_<digits>.jpg` suffix shape
    is preserved, so `bg_split`'s prefix-strip yields the same series
    group ⇒ same split as the original; collisions impossible.
-   Fallback for names without a `_<digits>` suffix: append `_<v>000.jpg`
-   style indices (`<stem>_1000.jpg`, `_2000.jpg`, …) — same guarantee.
+   Fallback for names without a `_<digits>` suffix (not produced by the
+   capture flow): `<stem>_1000.jpg`, `_2000.jpg`, … — variants then share
+   a group with EACH OTHER (`<stem>`) though not with the original file;
+   acceptable best-effort, and unreachable for our real inputs.
 4. Exit summary: originals copied, variants written, skipped files.
 
 ## Rebuild step (operator, after the tool runs)
