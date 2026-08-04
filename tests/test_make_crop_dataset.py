@@ -239,9 +239,6 @@ def test_main_folds_backgrounds_without_labels(_make_src, tmp_path):
     for p in bg_imgs:
         assert not (out / "labels" / p.parent.name / (p.stem + ".txt")).exists()
         assert cv2.imread(str(p)).shape == (384, 384, 3)
-    # deterministic split
-    assert {p.parent.name for p in bg_imgs} == {
-        mcd.bg_split(p.name) for p in bg_imgs} or True
     for p in bg_imgs:
         assert p.parent.name == mcd.bg_split(p.name)
 
