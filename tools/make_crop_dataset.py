@@ -63,15 +63,8 @@ def parse_label_file(path: Path, img_w: int, img_h: int):
 def format_label_lines(objs) -> str:
     """[(cls, poly_norm (N,2) in [0,1])] -> YOLO-seg text (clamped, 6dp)."""
     lines = []
-    epsilon = 1e-4  # Push near-1.0 values over the rounding edge
     for cls, poly in objs:
-        flat = np.asarray(poly, dtype=np.float64)
-        flat = np.clip(flat, 0.0, 1.0)  # Clamp to [0, 1]
-        # Add epsilon to values very close to 1.0 to ensure rounding to 1.0
-        flat = np.where(flat > (1.0 - epsilon), flat + epsilon, flat)
-        flat = np.round(flat, 6)  # Round to 6 decimals
-        flat = np.clip(flat, 0.0, 1.0)  # Clamp again to [0, 1]
-        flat = flat.flatten()
+        flat = np.clip(np.asarray(poly, dtype=np.float64), 0.0, 1.0).flatten()
         lines.append(str(cls) + " " + " ".join(f"{v:.6f}" for v in flat))
     return "".join(line + "\n" for line in lines)
 
