@@ -149,16 +149,16 @@ def crop_window(bbox, img_wh, size, margin_range, rng):
     x0, y0, x1, y1 = bbox
     bw, bh = x1 - x0, y1 - y0
     lo, hi = margin_range
-    x0 -= bw * rng.uniform(lo, hi)
-    x1 += bw * rng.uniform(lo, hi)
-    y0 -= bh * rng.uniform(lo, hi)
-    y1 += bh * rng.uniform(lo, hi)
+    x0 -= bw * float(rng.uniform(lo, hi))
+    x1 += bw * float(rng.uniform(lo, hi))
+    y0 -= bh * float(rng.uniform(lo, hi))
+    y1 += bh * float(rng.uniform(lo, hi))
     side = max(x1 - x0, y1 - y0, float(size))
     cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-    wx0 = int(round(cx - side / 2.0))
-    wy0 = int(round(cy - side / 2.0))
-    wx1 = wx0 + int(round(side))
-    wy1 = wy0 + int(round(side))
+    wx0 = round(cx - side / 2.0)
+    wy0 = round(cy - side / 2.0)
+    wx1 = wx0 + round(side)
+    wy1 = wy0 + round(side)
     if wx0 < 0:
         wx1 -= wx0
         wx0 = 0
