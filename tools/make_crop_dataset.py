@@ -113,3 +113,75 @@ def clip_polygon(poly, x0, y0, x1, y1):
         if not pts:
             return None
     return np.array(pts, dtype=np.float64)
+
+
+# ---- clustering & windows ----
+
+def cluster_boxes(boxes, expand_frac: float):
+    """Union-find over boxes whose expanded rects intersect."""
+    n = len(boxes)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    exp = []
+    for x0, y0, x1, y1 in boxes:
+        mx, my = (x1 - x0) * expand_frac, (y1 - y0) * expand_frac
+        exp.append((x0 - mx, y0 - my, x1 + mx, y1 + my))
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = exp[i], exp[j]
+            if a[0] <= b[2] and b[0] <= a[2] and a[1] <= b[3] and b[1] <= a[3]:
+                parent[find(i)] = find(j)
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    return sorted((sorted(g) for g in groups.values()), key=lambda g: g[0])
+
+
+def crop_window(bbox, img_wh, size, margin_range, rng):
+    """Square window >= size px covering bbox+margin, clamped to the image."""
+    iw, ih = img_wh
+    x0, y0, x1, y1 = bbox
+    bw, bh = x1 - x0, y1 - y0
+    lo, hi = margin_range
+    x0 -= bw * rng.uniform(lo, hi)
+    x1 += bw * rng.uniform(lo, hi)
+    y0 -= bh * rng.uniform(lo, hi)
+    y1 += bh * rng.uniform(lo, hi)
+    side = max(x1 - x0, y1 - y0, float(size))
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    wx0 = int(round(cx - side / 2.0))
+    wy0 = int(round(cy - side / 2.0))
+    wx1 = wx0 + int(round(side))
+    wy1 = wy0 + int(round(side))
+    if wx0 < 0:
+        wx1 -= wx0
+        wx0 = 0
+    if wy0 < 0:
+        wy1 -= wy0
+        wy0 = 0
+    if wx1 > iw:
+        wx0 -= wx1 - iw
+        wx1 = iw
+    if wy1 > ih:
+        wy0 -= wy1 - ih
+        wy1 = ih
+    return max(0, wx0), max(0, wy0), wx1, wy1
+
+
+def letterbox_to(img, size):
+    """Fit img into size x size with gray padding; NEVER upscale content."""
+    h, w = img.shape[:2]
+    scale = min(size / w, size / h, 1.0)
+    nw, nh = round(w * scale), round(h * scale)
+    if (nw, nh) != (w, h):
+        img = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+    canvas = np.full((size, size, 3), GRAY, np.uint8)
+    dx, dy = (size - nw) // 2, (size - nh) // 2
+    canvas[dy:dy + nh, dx:dx + nw] = img
+    return canvas, float(scale), dx, dy
