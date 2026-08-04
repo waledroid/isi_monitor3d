@@ -185,3 +185,49 @@ def letterbox_to(img, size):
     dx, dy = (size - nw) // 2, (size - nh) // 2
     canvas[dy:dy + nh, dx:dx + nw] = img
     return canvas, float(scale), dx, dy
+
+
+# ---- per-image pipeline ----
+
+def generate_crops(img, objs, *, size, margin_range, keep_frac, rng):
+    """One (crop, labels) per GT cluster; keep-frac rule gray-fills partials.
+
+    An image with no objects becomes a single letterboxed full-frame
+    background crop (empty labels).
+    """
+    h, w = img.shape[:2]
+    if not objs:
+        canvas, _, _, _ = letterbox_to(img, size)
+        return [(canvas, [])]
+    boxes = [poly_bbox(p) for _, p in objs]
+    out = []
+    for group in cluster_boxes(boxes, expand_frac=margin_range[1]):
+        gx0 = min(boxes[i][0] for i in group)
+        gy0 = min(boxes[i][1] for i in group)
+        gx1 = max(boxes[i][2] for i in group)
+        gy1 = max(boxes[i][3] for i in group)
+        wx0, wy0, wx1, wy1 = crop_window((gx0, gy0, gx1, gy1), (w, h),
+                                         size, margin_range, rng)
+        cw, ch = wx1 - wx0, wy1 - wy0
+        if cw < 8 or ch < 8:
+            continue
+        crop = img[wy0:wy1, wx0:wx1].copy()
+        kept, fills = [], []
+        for cls, poly in objs:
+            clipped = clip_polygon(poly - (wx0, wy0), 0, 0, cw, ch)
+            if clipped is None or len(clipped) < 3:
+                continue
+            area = poly_area(clipped)
+            if area < 1.0:
+                continue
+            if area / max(poly_area(poly), 1e-9) >= keep_frac:
+                kept.append((cls, clipped))
+            else:
+                fills.append(clipped)
+        for f in fills:
+            cv2.fillPoly(crop, [np.round(f).astype(np.int32)],
+                         (GRAY, GRAY, GRAY))
+        canvas, scale, dx, dy = letterbox_to(crop, size)
+        labels = [(cls, (p * scale + (dx, dy)) / size) for cls, p in kept]
+        out.append((canvas, labels))
+    return out

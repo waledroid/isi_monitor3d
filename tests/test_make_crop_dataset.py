@@ -97,3 +97,82 @@ def test_letterbox_never_upscales():
     assert scale == 1.0 and dx == dy == (384 - 100) // 2
     assert (canvas[dy + 50, dx + 50] == 50).all()
     assert (canvas[0, 0] == mcd.GRAY).all()
+
+
+def _sq(x0, y0, x1, y1):
+    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float64)
+
+
+def test_generate_crops_labels_full_object():
+    img = np.full((1080, 1920, 3), 180, np.uint8)
+    objs = [(0, _sq(800, 500, 1000, 650))]
+    crops = mcd.generate_crops(img, objs, size=384, margin_range=(0.1, 0.25),
+                               keep_frac=0.30, rng=np.random.default_rng(0))
+    assert len(crops) == 1
+    crop, labels = crops[0]
+    assert crop.shape == (384, 384, 3)
+    assert len(labels) == 1 and labels[0][0] == 0
+    poly = labels[0][1]
+    assert poly.min() >= 0.0 and poly.max() <= 1.0
+    # object must occupy a plausible area share of the crop:
+    # window >= 384 src px, object 200x150 -> >= (200*150)/(win_side^2) of crop
+    assert mcd.poly_area(poly * 384) > 0.05 * 384 * 384
+
+
+def test_generate_crops_two_far_objects_two_crops():
+    img = np.full((1080, 1920, 3), 180, np.uint8)
+    objs = [(0, _sq(100, 100, 260, 220)), (1, _sq(1500, 800, 1700, 950))]
+    crops = mcd.generate_crops(img, objs, size=384, margin_range=(0.1, 0.25),
+                               keep_frac=0.30, rng=np.random.default_rng(0))
+    assert len(crops) == 2
+    got = sorted(cls for _, labels in crops for cls, _ in labels)
+    assert got == [0, 1]
+
+
+def test_generate_crops_grayfills_barely_visible_neighbor():
+    img = np.full((1080, 1920, 3), 180, np.uint8)
+    # cls-0's window is deterministic with margin (0,0): the 384px square
+    # clamps to x 0..384, y 288..672. The cls-1 slab (350..1200 px) pokes
+    # 34 px into that window (~4% of its area, < keep-frac 0.30) ->
+    # gray-filled, unlabeled. It gets its own second crop where it IS labeled.
+    objs = [(0, _sq(50, 400, 250, 560)),
+            (1, _sq(350, 380, 1200, 600))]
+    crops = mcd.generate_crops(img, objs, size=384, margin_range=(0.0, 0.0),
+                               keep_frac=0.30, rng=np.random.default_rng(0))
+    assert len(crops) == 2
+    crop, labels = next(c for c in crops if any(cl == 0 for cl, _ in c[1]))
+    assert [cl for cl, _ in labels] == [0]       # slab below keep-frac: unlabeled
+    assert (crop == mcd.GRAY).all(axis=2).any()  # ...and its sliver gray-filled
+
+
+def test_generate_crops_keeps_neighbor_above_keep_frac():
+    img = np.full((600, 600, 3), 180, np.uint8)
+    objs = [(0, _sq(100, 100, 300, 300)), (1, _sq(320, 100, 500, 300))]
+    crops = mcd.generate_crops(img, objs, size=384, margin_range=(0.1, 0.1),
+                               keep_frac=0.30, rng=np.random.default_rng(0))
+    assert len(crops) == 1                     # overlap after expansion -> one cluster
+    _, labels = crops[0]
+    assert sorted(cl for cl, _ in labels) == [0, 1]
+
+
+def test_generate_crops_no_objects_full_frame_background():
+    img = np.full((200, 300, 3), 90, np.uint8)
+    crops = mcd.generate_crops(img, [], size=384, margin_range=(0.1, 0.25),
+                               keep_frac=0.30, rng=np.random.default_rng(0))
+    assert len(crops) == 1
+    crop, labels = crops[0]
+    assert labels == [] and crop.shape == (384, 384, 3)
+    assert (crop[0, 0] == mcd.GRAY).all()      # padded, not upscaled
+
+
+def test_generate_crops_small_image_not_upscaled():
+    img = np.full((200, 200, 3), 90, np.uint8)
+    objs = [(0, _sq(50, 50, 150, 150))]
+    crops = mcd.generate_crops(img, objs, size=384, margin_range=(0.0, 0.0),
+                               keep_frac=0.30, rng=np.random.default_rng(0))
+    crop, labels = crops[0]
+    # content occupies exactly 200x200 centered; object polygon maps inside it
+    dx = (384 - 200) // 2
+    poly = labels[0][1] * 384
+    assert poly[:, 0].min() == pytest.approx(dx + 50, abs=1.5)
+    assert (crop[0, 0] == mcd.GRAY).all()
