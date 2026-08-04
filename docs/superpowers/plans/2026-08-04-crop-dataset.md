@@ -94,7 +94,7 @@ def test_parse_label_file_skips_malformed(tmp_path):
 def test_format_label_lines_clamps_and_rounds():
     poly = np.array([[0.123456789, -0.01], [1.02, 0.5], [0.5, 0.999999]])
     out = mcd.format_label_lines([(2, poly)])
-    assert out == "2 0.123457 0.000000 1.000000 0.500000 0.500000 1.000000\n"
+    assert out == "2 0.123457 0.000000 1.000000 0.500000 0.500000 0.999999\n"
     assert mcd.format_label_lines([]) == ""
 
 
