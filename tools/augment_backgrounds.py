@@ -106,3 +106,46 @@ def augment_image(img: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     if rng.random() < 0.5:
         out = out[:, ::-1, :]
     return np.ascontiguousarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(
+        description="Write photometric lighting variants of background "
+                    "crops. See module docstring.")
+    ap.add_argument("--src", required=True, help="folder of background crops")
+    ap.add_argument("--out", required=True, help="output folder (must not exist)")
+    ap.add_argument("--variants", type=int, default=4)
+    ap.add_argument("--seed", type=int, default=0)
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    src, out = Path(args.src), Path(args.out)
+    if out.exists():
+        logger.error("refusing: %s exists", out)
+        return 2
+    out.mkdir(parents=True)
+    rng = np.random.default_rng(args.seed)
+
+    copied = written = skipped = 0
+    files = sorted(p for p in src.glob("*")
+                   if p.suffix.lower() in (".jpg", ".jpeg", ".png"))
+    for p in files:
+        img = cv2.imread(str(p))
+        if img is None:
+            logger.warning("unreadable, skipped: %s", p)
+            skipped += 1
+            continue
+        shutil.copy2(p, out / p.name)
+        copied += 1
+        for v in range(1, args.variants + 1):
+            aug = augment_image(img, rng)
+            cv2.imwrite(str(out / variant_name(p.name, v)), aug,
+                        [cv2.IMWRITE_JPEG_QUALITY, 95])
+            written += 1
+    logger.info("done: %d original(s) copied, %d variant(s) written, "
+                "%d skipped -> %s", copied, written, skipped, out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
