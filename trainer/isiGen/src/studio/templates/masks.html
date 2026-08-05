@@ -5,9 +5,8 @@
 {% block content %}
 <section class="card" id="maps-root" data-project="{{ project }}" data-classes='{{ classes | tojson }}'>
   <h1>Phase 3 — Ground-truth masks (SAM2)</h1>
-  <p class="msg">Box/click to mask just the class object, then Save + Run masks. Records with imported masks already have one.</p>
+  <p class="msg">Box/click to mask just the class object — prompts save automatically; then Run masks. Records with imported masks already have one.</p>
   <div class="toolbar">
-    <button id="run-masks">Run masks (SAM2)</button>
     <label class="chip">auto-prompt
       <select id="prompt-detector" title="A detector auto-feeds boxes to SAM2 (detect → box → SAM2). None = SAM2 only.">
         <option value="">— none (SAM2 only) —</option>
@@ -25,7 +24,7 @@
         <select id="prompt-class"></select>
         <button id="prompt-detect" title="Run the selected auto-prompt detector on THIS image and draw its boxes">Detect on this image</button>
         <button id="prompt-clear">Clear prompts</button>
-        <button id="prompt-save">Save prompts</button>
+        <button id="run-masks">Run masks (SAM2)</button>
       </div>
     </figure>
     <figure><figcaption>ground-truth mask</figcaption><img id="v-mask"></figure>

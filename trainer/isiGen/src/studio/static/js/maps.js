@@ -62,6 +62,7 @@ function setSrc(id, url) {
 }
 
 function select(r) {
+  flushSave();                 // persist any pending edit before switching records
   current = r;
   prompts = (r.mask_prompts || []).map((p) => ({ ...p }));
   const n = Date.now();
@@ -133,12 +134,44 @@ if (canvas) {
     }
     dragStart = null;
     drawPrompts();
+    scheduleSave();
   });
-  window.addEventListener("resize", drawPrompts);
+  window.addEventListener("resize", () => drawPrompts());
+}
+
+// ── Auto-save prompts (debounced) — replaces the old Save-prompts button ────
+// Every canvas edit schedules a save; the snapshot pins the edited record so a
+// late flush never writes to the wrong record after the user switches images.
+let saveTimer = null;
+let pendingSave = null;        // { rec, prompts } snapshot of the last edit
+
+function cancelPendingSave() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  pendingSave = null;
+}
+
+async function flushSave() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  if (!pendingSave) return;
+  const { rec, prompts: snap } = pendingSave;
+  pendingSave = null;
+  try {
+    await sendJSON(`/api/p/${project}/records/${rec.id}/prompts`, "PUT", { prompts: snap });
+    rec.mask_prompts = snap;
+    flash(el("maps-msg"), "prompts saved — run masks to apply", true);
+  } catch (e) { flash(el("maps-msg"), `prompt save FAILED: ${e.message}`, false); }
+}
+
+function scheduleSave() {
+  if (!current) return;
+  pendingSave = { rec: current, prompts: prompts.map((p) => ({ ...p })) };
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(flushSave, 400);
 }
 
 const clearBtn = el("prompt-clear");
 if (clearBtn) clearBtn.onclick = async () => {
+  cancelPendingSave();         // a queued edit must not resurrect cleared prompts
   prompts = [];
   drawPrompts();                                   // wipe the canvas dots
   if (!current) return;
@@ -151,14 +184,6 @@ if (clearBtn) clearBtn.onclick = async () => {
     setSrc("v-mask", "");
     flash(el("maps-msg"), "prompts + mask cleared", true);
   } catch (e) { flash(el("maps-msg"), e.message, false); }
-};
-
-const saveBtn = el("prompt-save");
-if (saveBtn) saveBtn.onclick = async () => {
-  if (!current) return;
-  await sendJSON(`/api/p/${project}/records/${current.id}/prompts`, "PUT", { prompts });
-  current.mask_prompts = prompts;
-  flash(el("maps-msg"), "prompts saved — run masks to apply", true);
 };
 
 // ── Auto-prompt detector (masks page only) ──────────────────────────────────
@@ -188,7 +213,8 @@ if (detectBtn) detectBtn.onclick = async () => {
     // Replace existing box prompts with the detector's; keep hand-drawn points.
     prompts = prompts.filter((p) => p.kind !== "box").concat(found || []);
     drawPrompts();
-    flash(el("maps-msg"), `${(found || []).length} box(es) — edit then Save prompts`, true);
+    scheduleSave();
+    flash(el("maps-msg"), `${(found || []).length} box(es) — saving…`, true);
   } catch (e) { flash(el("maps-msg"), e.message, false); }
   finally { detectBtn.disabled = false; }
 };
@@ -196,6 +222,7 @@ if (detectBtn) detectBtn.onclick = async () => {
 function runner(phase) {
   return async () => {
     try {
+      await flushSave();       // just-drawn prompts must reach the run
       const body = phase === "masks" && detSel ? { prompt_detector: detSel.value || "none" } : {};
       const { job } = await sendJSON(`/api/p/${project}/run/${phase}`, "POST", body);
       flash(el("maps-msg"), `${phase} running…`, true);
