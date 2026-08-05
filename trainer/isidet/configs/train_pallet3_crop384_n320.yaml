@@ -1,0 +1,73 @@
+# isidet/configs/train_pallet3_crop384_n320.yaml
+# NANO @ 320 on the object-centric CROP dataset — the empty-support-FP fix run.
+# 3-class warehouse SEGMENTATION — palette / carton / polybag (YOLO26n-seg).
+#
+# Dataset: data/pallet3_yolo_seg_crop384 (5731 train / 1033 val), built by
+# tools/make_crop_dataset.py — 384px GT-cluster crops matching zone inference
+# (gray fill + enhance), + 445 backgrounds (89 real empty-support + 356
+# lighting variants) + 76 isiGen-labeled on-support positives.
+# Deploy target: detection.zone_imgsz: 320 in backbone.yaml.
+#
+# Run FROM trainer/isidet/ :
+#   conda activate isi-train
+#   python scripts/run_train.py --config configs/train_pallet3_crop384_n320.yaml
+
+project_name: "pallet3_crop384_seg"
+nc: 3
+class_names: ["palette", "carton", "polybag"]
+hooks:
+  - "IndustrialLogger"
+
+# --- model: YOLO26 NANO SEGMENTATION ---
+model_type: "yolo"
+model_size: "n"
+weights: "yolo26n-seg.pt"
+dataset_path: "data/pallet3_yolo_seg_crop384"
+optimizer_config: "configs/optimizers/yolo_optim.yaml"
+batch_size: 32                # nano @320 is tiny — VRAM is not the limit here
+imgsz: 320                    # matches deployed zone_imgsz: 320 (crops are 384 → clean downscale)
+mixed_precision: true
+epochs: 200
+workers: 2                    # host-RAM lever; drop to 1/0 if the WSL VM swaps
+
+# --- one-shot export: .pt + .onnx + OpenVINO (raw head, Backbone runs NMS) ---
+export_model: true
+export_formats: ["onnx", "openvino"]
+export_nms: false
+export_opset: 17
+
+# === Augmentations — tuned for the crop domain ===
+# Color: lighting is still the dominant variable (the 356 synthetic lighting
+# variants cover backgrounds; HSV jitter covers the positives).
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.5
+# Geometry: crops are already object-centric, so scale variety matters less
+# than in the full-photo dataset but mosaic still shrinks objects usefully.
+degrees: 15.0
+translate: 0.1
+scale: 0.5                    # crops already frame objects large; 0.7 over-zooms at 320
+shear: 2.0
+perspective: 0.0005
+fliplr: 0.5
+flipud: 0.0
+mosaic: 1.0
+close_mosaic: 10
+mixup: 0.1
+copy_paste: 0.3
+erasing: 0.4
+camera_aug: true              # MotionBlur + ImageCompression + GaussNoise + Downscale
+
+inference:
+  conf_threshold: 0.3
+  tracker:
+    track_buffer: 60
+    match_thresh: 0.9
+  logging:
+    enabled: true
+    save_interval: 3600
+    log_dir: "logs"
+  udp:
+    enabled: false
+    host: "127.0.0.1"
+    port: 9502
