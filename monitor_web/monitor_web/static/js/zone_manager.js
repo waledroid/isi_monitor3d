@@ -251,6 +251,10 @@ function collectPayload() {
   // the config default (true) governs .onnx paths, untouched by saves.
   // S16: distance lines — always send the field (empty list clears the file).
   payload.link_lines = collectLinkLines();
+  // 3D localization — omit when the pane never populated (null) so a failed
+  // load can't wipe subscriptions.yaml; [] explicitly clears every rule.
+  const loc3d = collectLoc3d();
+  if (loc3d !== null) payload.localization_3d = loc3d;
   // Communication — MQTT broker + node identity.
   const { node_id, mqtt_sink } = collectMqttSink();
   payload.node_id = node_id;
@@ -343,6 +347,48 @@ function collectLinkLines() {
     out.push(rule);
   }
   return out;
+}
+
+// ---- 3D localization section ----
+// One checkbox per detectable class; checked classes get a Track3D subscription
+// (the server regenerates subscriptions.yaml wholesale on Save; applies at the
+// next Backbone STOP/START). person is never offered — dead triangulation path.
+
+function buildLoc3dSection(classes, selected) {
+  const host = el("zm-loc3d-classes");
+  if (!host) return;
+  host.innerHTML = "";
+  delete host.dataset.loaded;
+  const names = (classes || []).filter((c) => c && c !== "person");
+  if (names.length === 0) {
+    const hint = document.createElement("span");
+    hint.className = "zm-hint";
+    hint.textContent = t("loc3d_empty", "No detectable classes — configure a detection model first.");
+    host.appendChild(hint);
+    return;   // dataset.loaded stays unset → Save leaves the file untouched
+  }
+  const chosen = new Set(selected || []);
+  for (const name of names) {
+    const label = document.createElement("label");
+    label.className = "zm-checkbox-row";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.className = "zm-loc3d-cls";
+    input.value = name;
+    input.checked = chosen.has(name);
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(` ${name}`));
+    host.appendChild(label);
+  }
+  host.dataset.loaded = "1";   // send-guard: only a populated pane may write
+}
+
+function collectLoc3d() {
+  const host = el("zm-loc3d-classes");
+  // A pane that never populated (fetch failed / no classes) must NEVER wipe
+  // the on-disk subscriptions — null means "omit the field entirely".
+  if (!host || host.dataset.loaded !== "1") return null;
+  return Array.from(host.querySelectorAll(".zm-loc3d-cls:checked")).map((i) => i.value);
 }
 
 // ---- detection model section ----
@@ -515,16 +561,18 @@ async function open() {
   invalidateCalibrationCache();   // reload calibration status each time modal opens
   await loadDevices();   // populate the per-camera device dropdowns first
   await loadPoseOnnxFiles();   // populate the pose-model picker
-  // Fetch both config (backbone.yaml) and ui-settings in parallel.
-  let configData = null, uiSettings = null;
+  // Fetch config (backbone.yaml), ui-settings and the model's classes in parallel.
+  let configData = null, uiSettings = null, modelClasses = [];
   try {
-    const [configRes, uiRes] = await Promise.all([
+    const [configRes, uiRes, clsRes] = await Promise.all([
       fetch("/api/config"),
       fetch("/api/ui-settings"),
+      fetch("/api/detection/classes"),
     ]);
     if (!configRes.ok) throw new Error(`/api/config status ${configRes.status}`);
     configData = await configRes.json();
     uiSettings = uiRes.ok ? await uiRes.json() : null;
+    modelClasses = clsRes.ok ? ((await clsRes.json()).classes || []) : [];
   } catch (err) {
     console.warn("zone_manager: failed to load config", err);
   }
@@ -537,12 +585,18 @@ async function open() {
     if (camFpsEl) camFpsEl.value = configData.camera_fps ?? 20;
     fillModelSection(configData.detection, configData.isistream);
     buildLinkLines(configData.link_lines || []);
+    // 3D localization: classes from the model's metadata, falling back to the
+    // configured class_names; selection mirrors subscriptions.yaml.
+    buildLoc3dSection(
+      modelClasses.length ? modelClasses : (configData.detection?.class_names || []),
+      configData.localization_3d || []);
     fillCommSection(configData.node_id, configData.mqtt_sink, uiSettings);
   } else {
     buildCameraInputs({});
     const camFpsEl = el("zm-camera-fps");
     if (camFpsEl) camFpsEl.value = 20;
     buildLinkLines([]);
+    buildLoc3dSection([], []);   // empty hint; send-guard keeps the file untouched
     fillCommSection("", null, uiSettings);
   }
   wireCommMode();

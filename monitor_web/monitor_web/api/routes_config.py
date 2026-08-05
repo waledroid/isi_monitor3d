@@ -19,6 +19,7 @@ import functools
 import logging
 import math
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Literal
@@ -46,16 +47,6 @@ from ..overlay import CLASS_COLORS_HEX, DEFAULT_CLASS_COLOR_HEX
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _trt_available() -> bool:
-    """Does THIS env's onnxruntime ship the TensorRT EP? (Same env isistream
-    runs in, so the dashboard's answer holds for the producer too.)"""
-    try:
-        from backbone.shared.ort_session import trt_available
-        return trt_available()
-    except Exception:
-        return False
 
 
 def _detect_backend() -> str:
@@ -108,6 +99,19 @@ ALLOWED_SEVERITIES = ("info", "warning", "critical")
 # of these means "remove it"; cameras outside this set (hand-added to
 # backbone.yaml) are never touched by the dashboard writer.
 MANAGED_CAMERA_SLOTS = ("cam_a", "cam_b")
+
+# ---- 3D localization (triangulation subscriptions) ----
+# Fixed rule shape written per checked class: both cameras must see the object
+# (Mode 2) at a modest rate — the 3D-localized classes move slowly (pallets etc.).
+LOC3D_DEFAULT_RATE_HZ = 5.0
+LOC3D_CAMERAS_SEEING_MIN = 2
+# person never reaches triangulation (the orchestrator excludes person
+# detections from detections_by_camera) — a person rule would be dead code.
+LOC3D_UNSUPPORTED = {"person"}
+MAX_LOC3D_CLASSES = 32
+# Class names feed rule names ("<cls>_3d") and come from model metadata —
+# keep them to a safe identifier charset.
+_LOC3D_CLS_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 class CameraConfig(BaseModel):
@@ -281,9 +285,6 @@ class ConfigPayload(BaseModel):
     # untouched; a save hot-restarts a running producer so they apply live.
     motion_gate: bool | None = None
     detect_substream: bool | None = None
-    # TensorRT acceleration (default OFF — the ONNX/CUDA fp16 path). Only
-    # meaningful when the env's onnxruntime ships TensorrtExecutionProvider.
-    trt_enabled: bool | None = None
     # Distance-line rules (S16). Omitted == "no change"; an empty list explicitly
     # clears all rules on disk (the dashboard sends this when the operator
     # deletes every rule).
@@ -295,6 +296,9 @@ class ConfigPayload(BaseModel):
     # Controls the shared camera-hub rate, which sets the cam-view VIDEO frame rate.
     # None = leave the existing per-camera values untouched.
     camera_fps: int | None = None
+    # 3D localization — class names to triangulate (regenerates subscriptions.yaml
+    # wholesale). None = leave the file untouched; [] explicitly clears every rule.
+    localization_3d: list[str] | None = None
 
     @field_validator("camera_fps")
     @classmethod
@@ -302,6 +306,22 @@ class ConfigPayload(BaseModel):
         if v is None:
             return None
         return max(1, min(30, int(v)))
+
+    @field_validator("localization_3d")
+    @classmethod
+    def _loc3d_classes(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        out: list[str] = []
+        for name in v:
+            name = (name or "").strip()
+            if not name or name in LOC3D_UNSUPPORTED:
+                continue   # empties + person silently dropped, not an error
+            if not _LOC3D_CLS_RE.match(name):
+                raise ValueError(f"invalid class name: {name!r}")
+            if name not in out:   # dedupe, order preserved
+                out.append(name)
+        return out[:MAX_LOC3D_CLASSES]
 
 
 # ---- path resolution helpers ----
@@ -316,6 +336,67 @@ def _resolve_zones_path(cfg, backbone_data: dict[str, Any] | None) -> Path | Non
         return None
     raw = backbone_data.get("zones_path")
     return Path(raw) if raw else None
+
+
+def _resolve_subscriptions_path(backbone_data: dict[str, Any], backbone_path: Path) -> Path:
+    """subscriptions.yaml location — ``subscriptions_path`` from backbone.yaml when
+    set, else the default beside it (``mode2/subscriptions.yaml``). The default is
+    RECORDED into ``backbone_data`` (mirrors the zones_path self-heal in
+    ``post_config``) so the Backbone and the UI agree on the same file."""
+    raw = backbone_data.get("subscriptions_path")
+    if raw:
+        return Path(raw)
+    path = backbone_path.parent / "mode2" / "subscriptions.yaml"
+    backbone_data["subscriptions_path"] = str(path)
+    return path
+
+
+def _read_localization_3d(subs_path: Path) -> list[str]:
+    """Class names currently subscribed for 3D: rules with ``request: xyz`` and a
+    ``match.cls``, file order, deduped. The dead person path is hidden. A
+    missing/unreadable file is an empty selection, never an error."""
+    if not subs_path.exists():
+        return []
+    try:
+        data = yaml.safe_load(subs_path.read_text()) or []
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("localization_3d: %s unreadable: %s", subs_path, exc)
+        return []
+    if not isinstance(data, list):
+        logger.warning("localization_3d: %s: top-level must be a list", subs_path)
+        return []
+    out: list[str] = []
+    for entry in data:
+        if not isinstance(entry, dict) or entry.get("request") != "xyz":
+            continue
+        match = entry.get("match")
+        cls_name = match.get("cls") if isinstance(match, dict) else None
+        if not cls_name or cls_name in LOC3D_UNSUPPORTED:
+            continue
+        if cls_name not in out:
+            out.append(cls_name)
+    return out
+
+
+def _localization_3d_doc(classes: list[str]) -> list[dict[str, Any]]:
+    """Deterministic subscriptions.yaml body for the operator's class selection.
+
+    The file becomes fully UI-OWNED: every save regenerates it wholesale, so
+    hand edits (``in_zone`` predicates, ``rate_hz`` tweaks, person rules) are
+    dropped. person is filtered because it never reaches triangulation — the
+    orchestrator excludes person detections before the subscription filter.
+    """
+    return [
+        {
+            "name": f"{cls_name}_3d",
+            "module": "palettes",
+            "match": {"cls": cls_name, "cameras_seeing_min": LOC3D_CAMERAS_SEEING_MIN},
+            "request": "xyz",
+            "rate_hz": LOC3D_DEFAULT_RATE_HZ,
+        }
+        for cls_name in classes
+        if cls_name not in LOC3D_UNSUPPORTED
+    ]
 
 
 def _read_backbone(cfg) -> dict[str, Any]:
@@ -339,7 +420,7 @@ def _read_zones(zones_path: Path | None) -> list[dict[str, Any]]:
     return raw if isinstance(raw, list) else []
 
 
-def _write_yaml_atomic(path: Path, data: dict[str, Any]) -> None:
+def _write_yaml_atomic(path: Path, data: dict[str, Any] | list[Any]) -> None:
     """Write ``data`` to ``path`` atomically (tmp in same dir + os.replace).
 
     A crash between the write and the rename leaves the previous file intact;
@@ -522,9 +603,6 @@ def get_config(request: Request) -> JSONResponse:
             "zones": zones_out,
             "detection": detection_out,
             "isistream": {
-                "trt_enabled": bool(
-                    (backbone_data.get("detection") or {}).get("trt_enabled", True)),
-                "trt_available": _trt_available(),
                 "motion_gate": bool((backbone_data.get("isistream") or {}).get("motion_gate", True)),
                 "detect_substream": bool(
                     (backbone_data.get("isistream") or {}).get("detect_substream", True)),
@@ -535,6 +613,10 @@ def get_config(request: Request) -> JSONResponse:
                     for c in (backbone_data.get("cameras") or {}).values()),
             },
             "link_lines": rules_to_dict(link_lines_rules),
+            "localization_3d": _read_localization_3d(
+                _resolve_subscriptions_path(
+                    backbone_data if isinstance(backbone_data, dict) else {},
+                    Path(cfg.backbone_config_path))),
             "max_zones": MAX_ZONES,
             "allowed_kinds": list(ALLOWED_KINDS),
             "allowed_severities": list(ALLOWED_SEVERITIES),
@@ -854,12 +936,6 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             block["decode_masks"] = bool(payload.decode_masks)
             backbone_data["detection"] = block
 
-    if payload.trt_enabled is not None:
-        block = backbone_data.get("detection", {})
-        if isinstance(block, dict):
-            block["trt_enabled"] = bool(payload.trt_enabled)
-            backbone_data["detection"] = block
-
     # ---- isistream toggles (motion gate / substream detection) ----
     if payload.motion_gate is not None or payload.detect_substream is not None:
         isis = backbone_data.get("isistream")
@@ -937,6 +1013,21 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
                 for z in payload.zones
             ]
         }
+
+    # ---- 3D localization: regenerate subscriptions.yaml from the class list.
+    #      Resolving the path may record a defaulted subscriptions_path into
+    #      backbone_data — done BEFORE the backbone.yaml write below so both land
+    #      in the same save. No hot-apply: subscriptions load at orchestrator
+    #      boot, so the change takes effect at the next Backbone START. ----
+    if payload.localization_3d is not None:
+        subs_path = _resolve_subscriptions_path(backbone_data, backbone_path)
+        try:
+            _write_yaml_atomic(subs_path, _localization_3d_doc(payload.localization_3d))
+        except OSError as exc:
+            logger.exception("post_config: subscriptions write failed")
+            raise HTTPException(
+                status_code=500, detail=f"subscriptions write failed: {exc}"
+            ) from exc
 
     # ---- fill required keys (metadata.sinks, calibration_path) so the written
     #      config can actually be launched, then write the file(s) atomically ----
