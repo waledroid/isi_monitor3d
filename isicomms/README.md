@@ -47,7 +47,7 @@ un-prefixed and under `/v1`.
 |--------|------|------|-------------|
 | GET | /healthz | /healthz | Liveness probe — never touches the broker |
 | GET | /v1/nodes | /nodes | Per-node summary (alive/stale, **topic_version**, mode, cameras, latency/fps) |
-| GET | /v1/tracks | /tracks | Flat track list with node_id tag; filters: `?node=&cls=&zone=` |
+| GET | /v1/tracks | /tracks | Flat track list with node_id tag; filters: `?node=&cls=&zone=&type=`. 2D and 3D rows are **merged**: a triangulation-subscribed object appears twice (same `track_id` — one row with `xy_m`, one with `xyz_m`); `?type=track_2d\|track_3d` keeps only one kind (any other value → 400) |
 | GET | /v1/diagnostics | /diagnostics | Per-node diagnostics heartbeat |
 | GET | /v1/passings | /passings | Recent zone-passing events; filters: `?limit=&node=` |
 | GET | /v1/zones | /zones | Union of all nodes' config zones (global warehouse map), each enriched with the zone's live contents (`objects` + confidence, `count`, `state_ts`) |

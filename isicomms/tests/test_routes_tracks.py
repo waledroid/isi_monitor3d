@@ -116,6 +116,49 @@ def test_tracks_zone_filter_track3d_by_xy(client):
     assert data["count"] == 1
 
 
+def test_tracks_type_filter_3d(client):
+    sub = client.app.state.subscriber
+    sub.update_from_message("node_a", make_track2d(track_id=1, cls="palette"))
+    sub.update_from_message("node_a", make_track3d(track_id=1, cls="palette"))
+
+    r = client.get("/tracks?type=track_3d")
+    data = r.json()
+    assert data["count"] == 1
+    assert "xyz_m" in data["tracks"][0]
+    assert "xy_m" not in data["tracks"][0]
+
+
+def test_tracks_type_filter_2d(client):
+    sub = client.app.state.subscriber
+    sub.update_from_message("node_a", make_track2d(track_id=1, cls="palette"))
+    sub.update_from_message("node_a", make_track3d(track_id=1, cls="palette"))
+
+    r = client.get("/tracks?type=track_2d")
+    data = r.json()
+    assert data["count"] == 1
+    assert "xy_m" in data["tracks"][0]
+    assert "xyz_m" not in data["tracks"][0]
+
+
+def test_tracks_type_invalid_is_400(client):
+    r = client.get("/tracks?type=banana")
+    assert r.status_code == 400
+    assert "track_2d" in r.json()["detail"]
+
+
+def test_tracks_type_composes_with_cls(client):
+    sub = client.app.state.subscriber
+    sub.update_from_message("node_a", make_track2d(track_id=1, cls="palette"))
+    sub.update_from_message("node_a", make_track3d(track_id=2, cls="palette"))
+    sub.update_from_message("node_a", make_track3d(track_id=3, cls="carton"))
+
+    r = client.get("/tracks?type=track_3d&cls=palette")
+    data = r.json()
+    assert data["count"] == 1
+    assert data["tracks"][0]["track_id"] == 2
+    assert "xyz_m" in data["tracks"][0]
+
+
 def test_tracks_node_and_cls_combined(client):
     sub = client.app.state.subscriber
     sub.update_from_message("node_a", make_track2d(track_id=1, cls="palette"))

@@ -5,6 +5,11 @@ Filters:
   ?cls=<class>      exact class match
   ?zone=<name>      point-in-polygon: keep tracks whose floor position lies inside
                     the named zone (searched across all nodes' config advertisements)
+  ?type=<track_2d|track_3d>
+                    keep only 2D or only 3D rows. Without it, both are merged —
+                    a triangulation-subscribed object appears TWICE (same
+                    track_id, one row with xy_m and one with xyz_m). Any other
+                    value → 400.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ import logging
 
 import numpy as np
 from backbone.shared.zones import Zone
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from .auth import require_token
@@ -51,8 +56,18 @@ async def tracks(
     node: str | None = Query(default=None),
     cls: str | None = Query(default=None),
     zone: str | None = Query(default=None),
+    track_type: str | None = Query(default=None, alias="type"),
 ) -> JSONResponse:
-    """Flat list of the most recent track from every node, each tagged with node_id."""
+    """Flat list of the most recent track from every node, each tagged with node_id.
+
+    2D and 3D rows are merged by default (a subscribed object yields one row of
+    each, same track_id); ``?type=track_2d|track_3d`` keeps only one kind.
+    """
+    if track_type is not None and track_type not in ("track_2d", "track_3d"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid type {track_type!r}: expected 'track_2d' or 'track_3d'",
+        )
     subscriber = request.app.state.subscriber
     nodes_snapshot = subscriber.snapshot_nodes()
 
@@ -69,8 +84,9 @@ async def tracks(
         if node is not None and node_id != node:
             continue
 
-        # 2D tracks.
-        for _track_id, msg in node_state.last_track2d_by_id.items():
+        # 2D tracks (skipped entirely under ?type=track_3d).
+        track2d = {} if track_type == "track_3d" else node_state.last_track2d_by_id
+        for _track_id, msg in track2d.items():
             if cls is not None and msg.cls != cls:
                 continue
             if zone_filter is not None:
@@ -80,8 +96,9 @@ async def tracks(
             item["node_id"] = node_id
             result.append(item)
 
-        # 3D tracks (also checked against the 2D floor position via xyz_m[:2]).
-        for _track_id, msg in node_state.last_track3d_by_id.items():
+        # 3D tracks (skipped under ?type=track_2d; zone filter uses xyz_m[:2]).
+        track3d = {} if track_type == "track_2d" else node_state.last_track3d_by_id
+        for _track_id, msg in track3d.items():
             if cls is not None and msg.cls != cls:
                 continue
             if zone_filter is not None:

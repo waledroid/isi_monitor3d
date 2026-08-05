@@ -120,3 +120,38 @@ def test_recent_endpoint_includes_topics():
         body = c.get("/recent").json()
         assert "x/y" in body["topics"]
         assert body["topics"]["x/y"]["count"] == 1
+
+# ---- /test → /ui redirect ---------------------------------------------------
+
+
+def test_test_redirects_to_ui():
+    """/test (referenced by the AGV guide) permanently forwards to /ui,
+    preserving the query string so /test?run=all still auto-runs."""
+    with _client() as c:
+        r = c.get("/test", follow_redirects=False)
+        assert r.status_code == 307
+        assert r.headers["location"] == "/ui"
+        r = c.get("/test?run=all", follow_redirects=False)
+        assert r.headers["location"] == "/ui?run=all"
+
+
+def test_ui_contains_test_cards_and_consumers():
+    """The merged page carries the AGV test section and the consumers card,
+    and the removed passings/tail cards are gone."""
+    with _client() as c:
+        html = c.get("/ui").text
+        for probe in ("AGV system test", "runall", "mosquitto_sub",
+                      "Consumers", "/clients"):
+            assert probe in html
+        assert 'id="passings"' not in html
+        assert 'id="feed"' not in html
+
+
+def test_ui_contains_tracks3d_card_and_dim_column():
+    """The 3D-localization test card (REST ?type=track_3d + track3d topic) is
+    present, and the Tracks card renders a dimension column."""
+    with _client() as c:
+        html = c.get("/ui").text
+        for probe in ("tracks3d", "3D localization", "/v1/tracks?type=track_3d",
+                      "isiMonitor3D/v1/+/track3d/+", '"dim"', "single-view"):
+            assert probe in html
