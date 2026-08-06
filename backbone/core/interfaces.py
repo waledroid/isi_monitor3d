@@ -164,6 +164,17 @@ class MetadataSink(ABC):
         """
         return None
 
+    def advertise_zones(self, zones: list[tuple[str, str]]) -> None:
+        """Announce the ACTIVE zone set as ``(name, zone_id)`` pairs, once at startup.
+
+        Non-abstract default no-op (same rationale as ``publish_zone_state``):
+        existing sinks/mocks stay valid; the five-seam count is unchanged.
+        The MQTT sink overrides this to reconcile its retained per-zone topics
+        against the active set — zones deleted from config would otherwise
+        leave stale retained ``ZoneStateMessage``s on the broker forever.
+        """
+        return None
+
     @abstractmethod
     def close(self) -> None: ...
 

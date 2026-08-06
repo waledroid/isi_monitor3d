@@ -711,6 +711,158 @@ def test_topic_zone_name_restores_legacy_segment() -> None:
         sink.close()
 
 
+# ---------------------------------------------------------------------------
+# advertise_zones — retained zone-topic reconciliation (startup hygiene)
+# ---------------------------------------------------------------------------
+
+def _retained_msg(topic: str, payload: bytes = b'{"x":1}', retain: bool = True):
+    """Minimal stand-in for a paho MQTTMessage."""
+    from types import SimpleNamespace
+    return SimpleNamespace(topic=topic, payload=payload, retain=retain)
+
+
+def test_advertise_zones_subscribes_to_own_zone_wildcard() -> None:
+    """advertise_zones subscribes once to {prefix}/zone/# and installs on_message."""
+    sink, mock_instance = _make_sink(host="127.0.0.1", port=1883, prefix="isi/v1/node")
+    mock_instance.subscribe.return_value = (0, 1)   # MQTT_ERR_SUCCESS
+
+    sink.advertise_zones([("Loading Bay", "zp_live")])
+
+    mock_instance.subscribe.assert_called_once_with("isi/v1/node/zone/#", qos=1)
+    assert mock_instance.on_message == sink._on_reconcile_message
+    sink.close()   # also cancels the reconcile timer
+
+
+def test_reconcile_clears_stale_topics_keeps_active() -> None:
+    """Stale zone topics (incl. subtopics) get a retained-empty; active ones don't."""
+    sink, mock_instance = _make_sink(host="127.0.0.1", port=1883, prefix="isi/v1/node")
+    mock_instance.subscribe.return_value = (0, 1)
+    sink.advertise_zones([("Loading Bay", "zp_live")])
+    mock_instance.publish.reset_mock()
+
+    # Retained messages arriving during the collection window.
+    sink._on_reconcile_message(mock_instance, None, _retained_msg("isi/v1/node/zone/zp_live"))
+    sink._on_reconcile_message(mock_instance, None, _retained_msg("isi/v1/node/zone/zp_dead"))
+    sink._on_reconcile_message(
+        mock_instance, None, _retained_msg("isi/v1/node/zone/zp_dead/images/42")
+    )
+    sink._finish_zone_reconcile()
+
+    cleared = {
+        c[0][0] for c in mock_instance.publish.call_args_list if c[0][1] == b""
+    }
+    assert cleared == {"isi/v1/node/zone/zp_dead", "isi/v1/node/zone/zp_dead/images/42"}
+    for c in mock_instance.publish.call_args_list:
+        if c[0][1] == b"":
+            assert c[1].get("retain") is True, "clear must be a retained-empty publish"
+    # The active zone's topic must NOT have been touched.
+    assert "isi/v1/node/zone/zp_live" not in cleared
+    mock_instance.unsubscribe.assert_called_once_with("isi/v1/node/zone/#")
+    sink.close()
+
+
+def test_reconcile_no_zones_configured_purges_all() -> None:
+    """A zoneless config leaves no ghost zone state: every retained topic is cleared."""
+    sink, mock_instance = _make_sink(host="127.0.0.1", port=1883, prefix="isi/v1/node")
+    mock_instance.subscribe.return_value = (0, 1)
+    sink.advertise_zones([])
+    mock_instance.publish.reset_mock()
+
+    sink._on_reconcile_message(mock_instance, None, _retained_msg("isi/v1/node/zone/zp_a"))
+    sink._on_reconcile_message(mock_instance, None, _retained_msg("isi/v1/node/zone/zp_b"))
+    sink._finish_zone_reconcile()
+
+    cleared = {c[0][0] for c in mock_instance.publish.call_args_list if c[0][1] == b""}
+    assert cleared == {"isi/v1/node/zone/zp_a", "isi/v1/node/zone/zp_b"}
+    sink.close()
+
+
+def test_reconcile_ignores_non_retained_foreign_and_empty() -> None:
+    """Live traffic, other prefixes, and already-cleared topics are never purged."""
+    sink, mock_instance = _make_sink(host="127.0.0.1", port=1883, prefix="isi/v1/node")
+    mock_instance.subscribe.return_value = (0, 1)
+    sink.advertise_zones([])
+    mock_instance.publish.reset_mock()
+
+    # Live (non-retained) passing event during the window.
+    sink._on_reconcile_message(
+        mock_instance, None,
+        _retained_msg("isi/v1/node/zone/zp_x/passings", retain=False),
+    )
+    # Another node's prefix (must never be touched).
+    sink._on_reconcile_message(
+        mock_instance, None, _retained_msg("isi/v1/other_node/zone/zp_y")
+    )
+    # Already-cleared retained topic (empty payload).
+    sink._on_reconcile_message(
+        mock_instance, None, _retained_msg("isi/v1/node/zone/zp_z", payload=b"")
+    )
+    sink._finish_zone_reconcile()
+
+    cleared = [c for c in mock_instance.publish.call_args_list if c[0][1] == b""]
+    assert cleared == []
+    sink.close()
+
+
+def test_reconcile_deferred_until_connect_when_broker_down() -> None:
+    """subscribe before CONNACK fails (MQTT_ERR_NO_CONN) → retried from on_connect."""
+    sink, mock_instance = _make_sink(host="127.0.0.1", port=1883, prefix="isi/v1/node")
+    mock_instance.subscribe.return_value = (4, None)   # MQTT_ERR_NO_CONN
+
+    sink.advertise_zones([("Loading Bay", "zp_live")])
+    assert mock_instance.subscribe.call_count == 1
+    assert sink._reconcile_started is False
+
+    # Broker comes up; on_connect must retry the subscription.
+    mock_instance.subscribe.return_value = (0, 1)
+    sink._on_connect(mock_instance, None, {}, 0)
+    assert mock_instance.subscribe.call_count == 2
+    assert sink._reconcile_started is True
+    sink.close()
+
+
+def test_reconcile_finish_is_idempotent() -> None:
+    """A second _finish (e.g. the timer firing after a manual run) is a no-op."""
+    sink, mock_instance = _make_sink(host="127.0.0.1", port=1883, prefix="isi/v1/node")
+    mock_instance.subscribe.return_value = (0, 1)
+    sink.advertise_zones([])
+    sink._on_reconcile_message(mock_instance, None, _retained_msg("isi/v1/node/zone/zp_a"))
+    sink._finish_zone_reconcile()
+    clears_after_first = [
+        c for c in mock_instance.publish.call_args_list if c[0][1] == b""
+    ]
+    sink._finish_zone_reconcile()
+    clears_after_second = [
+        c for c in mock_instance.publish.call_args_list if c[0][1] == b""
+    ]
+    assert clears_after_first == clears_after_second
+    mock_instance.unsubscribe.assert_called_once()
+    sink.close()
+
+
+def test_reconcile_respects_topic_zone_name_mode() -> None:
+    """topic_zone='name' → the active set is keyed by sanitised zone NAME."""
+    sink, mock_instance = _make_sink(
+        host="127.0.0.1", port=1883, prefix="isi/v1/node", topic_zone="name"
+    )
+    mock_instance.subscribe.return_value = (0, 1)
+    sink.advertise_zones([("Loading Bay", "zp_live")])
+    mock_instance.publish.reset_mock()
+
+    sink._on_reconcile_message(
+        mock_instance, None, _retained_msg("isi/v1/node/zone/Loading Bay")
+    )
+    sink._on_reconcile_message(
+        mock_instance, None, _retained_msg("isi/v1/node/zone/zp_live")
+    )
+    sink._finish_zone_reconcile()
+
+    cleared = {c[0][0] for c in mock_instance.publish.call_args_list if c[0][1] == b""}
+    # Name-keyed topic is active; the id-keyed one is a stale leftover.
+    assert cleared == {"isi/v1/node/zone/zp_live"}
+    sink.close()
+
+
 def test_topic_zone_id_falls_back_to_name_when_id_absent() -> None:
     """topic_zone='id' but a legacy payload lacks zone_id → name segment (never blank)."""
     with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:

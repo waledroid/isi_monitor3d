@@ -228,11 +228,9 @@ class Orchestrator:
             return self._build_metric_stack()
 
         det_cfg = dict(cfg["detection"])
-        # TensorRT default-on — same env-var seam as isistream (ort_session).
-        # Written BOTH ways ("1"/"0") so a rebuild never inherits a stale
-        # value from an earlier config in the same process (tests!).
-        import os
-        os.environ["ISI3D_TRT"] = "1" if bool(det_cfg.pop("trt_enabled", True)) else "0"
+        # trt_enabled is retired (TensorRT = native .engine paths only); pop it
+        # so configs that still carry the key don't crash detector constructors.
+        det_cfg.pop("trt_enabled", None)
         det_plugin = det_cfg.pop("plugin")
         # `pose_onnx_path` configures a separate person-pose model (consumed by the
         # dashboard overlay today; the S5.5 `yolo_onnx_pose` plugin later) — it is
@@ -623,6 +621,15 @@ class Orchestrator:
             self._publisher.publish_config(self._build_config_message())
         except Exception:
             logger.warning("orchestrator: failed to publish config advertisement", exc_info=True)
+        # Announce the ACTIVE zone set so the MQTT sink can clear retained
+        # zone topics left behind by zones deleted from config (an empty set
+        # purges them all — a zoneless config leaves no ghost zone state).
+        try:
+            self._publisher.advertise_zones(
+                [(self._zones[n].name, self._zones[n].id) for n in self._zones.names]
+            )
+        except Exception:
+            logger.warning("orchestrator: failed to advertise zone set", exc_info=True)
         # Retained empty state for every configured zone, so the whole zone/
         # folder is discoverable by subscription before anything moves.
         if self._zone_state is not None:

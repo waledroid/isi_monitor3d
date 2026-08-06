@@ -255,3 +255,33 @@ def test_publish_zone_state_noop_after_close() -> None:
     pub.close()
     pub.publish_zone_state(_make_zone_state())
     assert sink.zone_states == []
+
+
+# ---------------------------------------------------------------------------
+# advertise_zones fan-out
+# ---------------------------------------------------------------------------
+
+def test_advertise_zones_fan_out() -> None:
+    class _ZoneRecordingSink(_RecordingSink):
+        def __init__(self) -> None:
+            super().__init__()
+            self.advertised: list[list[tuple[str, str]]] = []
+
+        def advertise_zones(self, zones: list[tuple[str, str]]) -> None:
+            self.advertised.append(zones)
+
+    a, b = _ZoneRecordingSink(), _ZoneRecordingSink()
+    pub = Publisher([a, b])
+    pub.advertise_zones([("Loading Bay", "z1")])
+    assert a.advertised == [[("Loading Bay", "z1")]]
+    assert b.advertised == [[("Loading Bay", "z1")]]
+
+
+def test_advertise_zones_default_noop_and_raising_sink_swallowed() -> None:
+    class _BadAdvertiser(_RecordingSink):
+        def advertise_zones(self, zones: list[tuple[str, str]]) -> None:
+            raise RuntimeError("simulated advertise failure")
+
+    good = _RecordingSink()   # exercises the ABC's default no-op
+    pub = Publisher([_BadAdvertiser(), good])
+    pub.advertise_zones([("Loading Bay", "z1")])   # must not raise

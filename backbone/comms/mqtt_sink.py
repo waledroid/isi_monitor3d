@@ -34,11 +34,19 @@ the STABLE zone id so a rename never moves the topic (nor orphans retained
 zone-state), ``"name"`` restores the legacy operator-label segment. Rollback for
 existing name-keyed subscribers: set ``metadata.mqtt_topic_zone: name`` and
 restart. Either way the id AND name are both inside the JSON payload.
+
+**Retained-topic hygiene.** Zone-state (and, with ``retain: true``, image-ref)
+topics are retained, so a zone deleted from config would leave a ghost retained
+message on the broker forever. ``advertise_zones`` — called once at startup by
+the orchestrator via the ``Publisher`` — reconciles ``{prefix}/zone/#`` against
+the active zone set and clears every stale retained topic with a retained-empty
+publish. Strictly scoped to this sink's own prefix.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 
 import paho.mqtt.client as mqtt
 
@@ -94,6 +102,7 @@ class MqttSink(MetadataSink):
         diag_topic: str = "{prefix}/diagnostics/heartbeat",
         config_topic: str = "{prefix}/config",
         topic_zone: str = "id",
+        zone_reconcile_window_s: float = 1.5,
     ) -> None:
         """Initialise and start the MQTT client background thread.
 
@@ -157,6 +166,11 @@ class MqttSink(MetadataSink):
                            segment (rollback for existing subscribers). The id
                            and name are always both in the JSON payload. When an
                            id is missing (legacy payload) it falls back to name.
+            zone_reconcile_window_s: How long ``advertise_zones`` collects
+                           retained messages under ``{prefix}/zone/#`` before
+                           purging topics whose zone is no longer configured
+                           (default 1.5 s; runs on the paho loop + a timer
+                           thread, never blocking the pipeline).
 
         Raises:
             ValueError: If ``port`` is outside (0, 65536), ``qos`` is not one of
@@ -197,6 +211,21 @@ class MqttSink(MetadataSink):
         # (re)connect also restores the advert after a broker restart wipes
         # retained state.
         self._retained_config: tuple[str, bytes] | None = None
+
+        # Retained zone-topic reconciliation state (see advertise_zones).
+        # ``_zone_topic_head`` is the literal topic text preceding the {zone}
+        # segment (e.g. "isi/node/zone/") — it scopes the reconcile strictly
+        # to THIS sink's own prefix.
+        head, _, _ = zone_state_topic.format(prefix=prefix, zone="\x00").partition("\x00")
+        self._zone_topic_head = head
+        self._zone_reconcile_window_s = float(zone_reconcile_window_s)
+        self._active_zone_segments: frozenset[str] = frozenset()
+        self._reconcile_pending = False
+        self._reconcile_started = False
+        self._reconcile_finished = False
+        self._reconcile_topics: set[str] = set()
+        self._reconcile_lock = threading.Lock()
+        self._reconcile_timer: threading.Timer | None = None
 
         self._client = mqtt.Client(
             mqtt.CallbackAPIVersion.VERSION1,
@@ -355,6 +384,27 @@ class MqttSink(MetadataSink):
         self._retained_config = (topic, payload)
         self._publish_retained(topic, payload)
 
+    def advertise_zones(self, zones: list[tuple[str, str]]) -> None:
+        """Reconcile retained zone topics against the ACTIVE ``(name, id)`` set.
+
+        Zones only change across a Backbone restart, so a one-shot startup
+        reconciliation suffices: subscribe once to ``{prefix}/zone/#``, collect
+        retained messages for ``zone_reconcile_window_s``, then publish a
+        retained-empty payload to every collected topic whose zone segment is
+        not in the active set (clearing the broker's retained copy), and
+        unsubscribe. An empty ``zones`` list purges ALL retained zone topics —
+        a zoneless config must leave no ghost zone state behind.
+
+        Non-blocking with respect to the pipeline: collection happens on the
+        paho network loop, the purge on a daemon timer thread. If the broker
+        is not yet connected, the reconcile is deferred to ``_on_connect``.
+        """
+        self._active_zone_segments = frozenset(
+            self._zone_segment(name, zid) for name, zid in zones
+        )
+        self._reconcile_pending = True
+        self._start_zone_reconcile()
+
     def close(self) -> None:
         """Disconnect then stop the MQTT loop. Idempotent.
 
@@ -367,6 +417,8 @@ class MqttSink(MetadataSink):
         if self._closed:
             return
         self._closed = True
+        if self._reconcile_timer is not None:
+            self._reconcile_timer.cancel()
         try:
             self._client.disconnect()
         except Exception:
@@ -398,6 +450,93 @@ class MqttSink(MetadataSink):
                 "MqttSink._publish_retained failed on topic %r", topic, exc_info=True
             )
 
+    @property
+    def _zone_wildcard(self) -> str:
+        """The single subscription filter covering every zone subtopic."""
+        return self._zone_topic_head + "#"
+
+    def _start_zone_reconcile(self) -> None:
+        """Subscribe to ``{prefix}/zone/#`` and arm the purge timer. One-shot.
+
+        A subscribe issued before the CONNACK returns MQTT_ERR_NO_CONN and is
+        not queued by paho, so a failed attempt stays *pending* and is retried
+        from ``_on_connect``. Swallow-and-log like every other broker touch.
+        """
+        if not self._reconcile_pending or self._reconcile_started or self._closed:
+            return
+        if not self._zone_topic_head.endswith("/"):
+            # A custom zone_state_topic where the {zone} token is not a whole
+            # topic level can't be wildcard-matched — skip rather than guess.
+            logger.warning(
+                "MqttSink: zone_state_topic %r does not isolate {zone} as a "
+                "topic level — skipping retained zone-topic reconcile",
+                self._zone_state_topic,
+            )
+            self._reconcile_pending = False
+            return
+        try:
+            self._client.on_message = self._on_reconcile_message
+            rc = self._client.subscribe(self._zone_wildcard, qos=1)[0]
+            if rc != mqtt.MQTT_ERR_SUCCESS:
+                return  # not connected yet — _on_connect retries
+            self._reconcile_started = True
+            self._reconcile_timer = threading.Timer(
+                self._zone_reconcile_window_s, self._finish_zone_reconcile
+            )
+            self._reconcile_timer.daemon = True
+            self._reconcile_timer.start()
+        except Exception:
+            logger.warning(
+                "MqttSink: retained zone-topic reconcile could not start", exc_info=True
+            )
+
+    def _on_reconcile_message(self, client: mqtt.Client, userdata: object, m: object) -> None:
+        """Collect retained topics under our own zone root during the window."""
+        try:
+            if not getattr(m, "retain", False) or not m.payload:
+                return  # live traffic or an already-cleared topic
+            if not m.topic.startswith(self._zone_topic_head):
+                return  # never touch other prefixes
+            with self._reconcile_lock:
+                self._reconcile_topics.add(m.topic)
+        except Exception:
+            logger.warning("MqttSink: reconcile message handling failed", exc_info=True)
+
+    def _finish_zone_reconcile(self) -> None:
+        """Purge collected topics whose zone segment is not active. Idempotent."""
+        if self._reconcile_finished:
+            return
+        self._reconcile_finished = True
+        self._reconcile_pending = False
+        try:
+            with self._reconcile_lock:
+                collected = sorted(self._reconcile_topics)
+            head_len = len(self._zone_topic_head)
+            stale_topics: list[str] = []
+            stale_zones: set[str] = set()
+            for topic in collected:
+                segment = topic[head_len:].split("/", 1)[0]
+                if segment and segment not in self._active_zone_segments:
+                    stale_topics.append(topic)
+                    stale_zones.add(segment)
+            for topic in stale_topics:
+                # Retained-empty payload deletes the broker's retained copy.
+                self._client.publish(topic, b"", qos=1, retain=True)
+            self._client.unsubscribe(self._zone_wildcard)
+            self._client.on_message = None
+            if stale_topics:
+                logger.info(
+                    "MqttSink: purged %d stale retained zone topic(s): %s",
+                    len(stale_topics),
+                    ", ".join(sorted(stale_zones)),
+                )
+            else:
+                logger.debug("MqttSink: no stale retained zone topics found")
+        except Exception:
+            logger.warning(
+                "MqttSink: retained zone-topic reconcile failed", exc_info=True
+            )
+
     def _on_connect(self, client: mqtt.Client, userdata: object, flags: dict, rc: int) -> None:
         if rc == 0:
             logger.info("MqttSink: connected to %s:%s", self._host, self._port)
@@ -407,6 +546,9 @@ class MqttSink(MetadataSink):
             if self._retained_config is not None:
                 topic, payload = self._retained_config
                 self._publish_retained(topic, payload)
+            # A reconcile requested before the CONNACK could not subscribe —
+            # start it now (self-guarded one-shot).
+            self._start_zone_reconcile()
         else:
             logger.warning(
                 "MqttSink: connection refused by %s:%s (rc=%s)",

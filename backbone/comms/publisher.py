@@ -138,6 +138,18 @@ class Publisher:
                     "sink %s failed on publish_config", type(sink).__name__, exc_info=True
                 )
 
+    def advertise_zones(self, zones: list[tuple[str, str]]) -> None:
+        """Fan-out the ACTIVE ``(name, zone_id)`` set (MQTT sinks reconcile retained topics)."""
+        if self._closed:
+            return
+        for sink in self._sinks:
+            try:
+                sink.advertise_zones(zones)
+            except Exception:
+                logger.warning(
+                    "sink %s failed on advertise_zones", type(sink).__name__, exc_info=True
+                )
+
     def close(self) -> None:
         if self._closed:
             return
