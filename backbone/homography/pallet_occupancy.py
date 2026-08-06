@@ -227,17 +227,27 @@ class PalletOccupancy:
             states.extend(self._frame_states(dets))
         pallet_tracks = [t for t in tracks_2d
                          if str(t.cls).lower() in PALLET_CLASSES]
-        # Per-camera pass (primary): nearest same-camera A+B state per track.
+        # Per-camera pass (primary): gather EVERY camera's A+B state within
+        # track_match of the track and let "full" win. Nearest-single-state
+        # picking made the answer depend on which camera's projection
+        # happened to jitter closest — live 2026-08-06 this flapped a loaded
+        # palette between cam_a's "empty" (it never saw the carton from its
+        # angle) and cam_b's correct "full" ~50/50. Positive evidence from
+        # any camera outranks another viewpoint's "empty" (an "empty" only
+        # claims absence from that angle), matching the fallback's rule.
         chosen: dict[int, tuple | None] = {}
         for t in pallet_tracks:
-            best, best_d = None, self._track_match
+            best_full, best_full_d = None, self._track_match
+            best_any, best_any_d = None, self._track_match
             for (pm, st, content, conf) in states:
                 if pm is None:
                     continue
                 d = float(np.hypot(t.xy_m[0] - pm[0], t.xy_m[1] - pm[1]))
-                if d < best_d:
-                    best_d, best = d, (st, content, conf)
-            chosen[t.track_id] = best
+                if d < best_any_d:
+                    best_any_d, best_any = d, (st, content, conf)
+                if st == "full" and d < best_full_d:
+                    best_full_d, best_full = d, (st, content, conf)
+            chosen[t.track_id] = best_full or best_any
         # Metric occupancy fallback — cross-camera fusion for the DECISION:
         # per-camera association is structurally blind to the split view
         # (cam_a sees only the pallet, cam_b only the carton on it). The

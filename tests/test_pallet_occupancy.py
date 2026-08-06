@@ -209,3 +209,43 @@ def test_stabilizer_startup_behaves_like_majority():
     s = OccupancyStabilizer(window=6, flip_ratio=0.7)
     state, content = s.vote(7, "full", "carton")
     assert state == "full" and content == "carton"
+
+
+# ---------- full-wins across cameras (2026-08-06 live regression) ----------
+
+def test_one_cameras_full_outranks_other_cameras_nearer_empty():
+    """Live case: cam_a saw the palette EMPTY (it never detects the carton
+    from its angle), cam_b saw the SAME palette FULL with a carton
+    (A_overlap=1.0), and the elevated carton's parallax projected it 0.86 m
+    away — outside the pooling radius, so the fallback couldn't help. The
+    primary pass picked the NEAREST single per-camera state, so whichever
+    projection jittered closest won (~50/50 flap; hysteresis then froze
+    'empty'). Positive evidence within track_match must ALWAYS outrank a
+    nearer 'empty' — per this module's own docstring."""
+    occ = PalletOccupancy(_FakeProjector())
+    tracks = [_pallet_track(1, (2.0, 3.6))]          # fused position
+    # cam_a: bare palette whose projection lands NEARER the fused position...
+    pallet_a = _det("palette", (100, 300, 300, 358))     # foot (200,358) → (2.0, 3.58)
+    # cam_b: same physical palette, slightly farther projection, WITH carton
+    pallet_b = _det("palette", (110, 300, 310, 370))     # foot (210,370) → (2.1, 3.7)
+    # carton on top (A_overlap = 1.0 in cam_b pixels) whose PROJECTED foot
+    # lands 0.81 m from the fused track — outside the 0.7 m pooling radius,
+    # exactly like the live parallax case (0.86 m): the fallback cannot help.
+    carton_b = _det("carton", (160, 230, 260, 280), conf=0.9)
+    occ.enrich(tracks, {"cam_a": [pallet_a], "cam_b": [pallet_b, carton_b]})
+    assert tracks[0].occupancy_state == "full"
+    assert tracks[0].occupancy_content == "carton"
+
+
+def test_full_wins_is_stable_over_repeated_frames():
+    """The same split view repeated must publish 'full' EVERY frame — no
+    dependence on which camera's projection happens to be nearest."""
+    occ = PalletOccupancy(_FakeProjector())
+    tracks = [_pallet_track(1, (2.0, 3.6))]
+    pallet_a = _det("palette", (100, 300, 300, 358))
+    pallet_b = _det("palette", (110, 300, 310, 370))
+    carton_b = _det("carton", (160, 230, 260, 280))
+    for _ in range(20):
+        occ.enrich(tracks, {"cam_a": [pallet_a], "cam_b": [pallet_b, carton_b]})
+        assert tracks[0].occupancy_state == "full"
+        assert tracks[0].occupancy_content == "carton"
