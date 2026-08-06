@@ -235,3 +235,32 @@ def test_capture_ts_monotonic_across_degrade_and_recovery() -> None:
     push("cam_a", 1.233)          # buffers (flag cleared)
     assert emitted == sorted(emitted), f"capture_ts went backwards: {emitted}"
     assert len(emitted) >= 4
+
+
+def test_both_cameras_degraded_recover_to_aligned_pairing() -> None:
+    """Regression: once BOTH cameras were sticky-degraded (e.g. a startup
+    stall), solo emission cleared the buffers on every submit, so the aligned
+    path never saw two heads at once and pairing never resumed — permanent
+    solo mode (live 2026-08-06: cameras_seeing never reached 2, so no
+    Track3D despite both cameras detecting). A periodic probe must
+    un-degrade one camera so alignment can re-form."""
+    sync = FrameSynchronizer(
+        camera_ids=["cam_a", "cam_b"], max_skew_ms=33.0, degraded_emit_after_ms=80.0,
+    )
+    # Degrade cam_a (partner never shows), then cam_b the same way.
+    sync.submit(_frame("cam_a", 1.000))
+    solo_a = sync.submit(_frame("cam_a", 1.100))
+    assert solo_a is not None and set(solo_a.frames) == {"cam_a"}
+    sync.submit(_frame("cam_b", 1.150))
+    solo_b = sync.submit(_frame("cam_b", 1.250))
+    assert solo_b is not None and set(solo_b.frames) == {"cam_b"}
+    # Both degraded. Feed perfectly aligned frames: pairing must resume.
+    fused = False
+    ts = 3.0
+    for _ in range(50):
+        for pair in (sync.submit(_frame("cam_a", ts)),
+                     sync.submit(_frame("cam_b", ts + 0.005))):
+            if pair is not None and set(pair.frames) == {"cam_a", "cam_b"}:
+                fused = True
+        ts += 0.070
+    assert fused, "both-degraded state never recovered to aligned pairing"

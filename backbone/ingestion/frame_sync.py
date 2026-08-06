@@ -66,6 +66,14 @@ class FrameSynchronizer:
         # is degraded from the start: there is no partner to wait for, so
         # every frame emits immediately.
         self._degraded: dict[str, bool] = {cid: len(ids) == 1 for cid in ids}
+        # All-degraded recovery probe: once EVERY camera is sticky-degraded,
+        # solo emission clears the buffers on each submit, so the aligned
+        # path never sees two heads at once and the flags can never clear.
+        # Every probe interval, one camera is un-degraded so it buffers
+        # briefly and gives alignment a chance to re-form; a truly dead
+        # partner just re-degrades after ``degraded_emit_after_ms``.
+        self._probe_interval_s = self._degraded_after_s * 10.0
+        self._last_probe_ts = 0.0
         self._lock = threading.Lock()
         self._pair_counter = 0
         self._latest_capture_ts: float = 0.0
@@ -147,6 +155,12 @@ class FrameSynchronizer:
         consumer or a dead partner never causes a stale-frame backlog drain.
         Emitting newest-only keeps ``capture_ts`` monotonic per camera.
         """
+        if (len(self._camera_ids) >= 2
+                and all(self._degraded.values())
+                and self._latest_capture_ts - self._last_probe_ts
+                >= self._probe_interval_s):
+            self._last_probe_ts = self._latest_capture_ts
+            self._degraded[self._camera_ids[0]] = False
         for cid in self._camera_ids:
             buf = self._buffers[cid]
             if not buf:
