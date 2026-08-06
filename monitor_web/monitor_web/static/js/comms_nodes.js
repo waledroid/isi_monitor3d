@@ -199,13 +199,8 @@ function _renderZoneCards(patches, patchStates, zonesList, localState, gwData) {
   // which works identically in Mode 1 and Mode 2. TWINS are skipped: they are
   // the same zone seen from the other camera (same name — listing them showed
   // every zone twice) and their contents are already merged into the base id.
-  const userPatches = (patches || []).filter((p) => !p.twin_of);
-  const patchCards = userPatches.map((p) => {
-    const st = patchStates && patchStates.states ? patchStates.states[p.id] : null;
-    return _cardHtml(p.name || p.id, p.color || "#ff3b3b", st || null);
-  });
-
-  // Metric FLOOR zones (zones.yaml) — live via gateway (MQTT) or local bus.
+  // Aggregated floor-zone state by NAME via gateway (MQTT) — built first:
+  // both patch cards and floor cards consume it.
   const gwByName = {};
   if (gwData && gwData.configured && !gwData.error) {
     for (const z of gwData.zones || []) {
@@ -214,6 +209,22 @@ function _renderZoneCards(patches, patchStates, zonesList, localState, gwData) {
       }
     }
   }
+
+  const userPatches = (patches || []).filter((p) => !p.twin_of);
+  const patchCards = userPatches.map((p) => {
+    // Prefer the Backbone's AGGREGATED zone state (cross-camera union +
+    // occupancy voting — the same robust decision isicomms shows) over the
+    // single-camera worker snapshot: one camera can miss the carton or vote
+    // "empty" from its angle while the combined state correctly says "full".
+    // The per-camera snapshot remains the fallback so cards stay live in
+    // frames mode / pre-START preview when no aggregated state flows.
+    const agg = _stateForZone(p.name || p.id, gwByName, localState);
+    const st = agg
+      || (patchStates && patchStates.states ? patchStates.states[p.id] : null);
+    return _cardHtml(p.name || p.id, p.color || "#ff3b3b", st || null);
+  });
+
+  // Metric FLOOR zones (zones.yaml) — live via gateway (MQTT) or local bus.
   // Skip floor zones that share a name with a camera zone — one card per
   // physical zone, whichever system it was defined in.
   const patchNames = new Set(userPatches.map((p) => p.name || p.id));
