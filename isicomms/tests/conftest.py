@@ -164,6 +164,7 @@ def make_zone_state(
     zone: str = "rack_a",
     objects: list | None = None,
     ts: float | None = None,
+    decision=None,
 ):
     from backbone.comms.schemas import ZoneObject, ZoneStateMessage
     if objects is None:
@@ -175,4 +176,18 @@ def make_zone_state(
         zone=zone,
         objects=tuple(objects),
         count=len(objects),
+        decision=decision,
+    )
+
+
+def make_zone_decision(
+    palette_state: str = "palette_loaded",
+    content: tuple = ("carton",),
+    counts: dict | None = None,
+):
+    from backbone.comms.schemas import ZoneDecisionModel
+    return ZoneDecisionModel(
+        palette_state=palette_state,
+        content=content,
+        counts=counts if counts is not None else {"palette": 1, "carton": 1},
     )

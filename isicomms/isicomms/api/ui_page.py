@@ -244,8 +244,11 @@ function renderZones(d){
     (z.objects||[]).map(o=>'<span class="tag">'+esc(o.cls)+
       (o.occupancy_state?" · "+esc(o.occupancy_state):"")+"</span>").join("")||
       '<span class="mut">empty</span>',
+    z.palette_state?'<span class="tag">'+esc(z.palette_state)+
+      ((z.content||[]).length?" · "+z.content.map(esc).join("+"):"")+"</span>"
+      :'<span class="mut">–</span>',
     z.state_ts?'<span class="mut">'+ago(z.state_ts)+"</span>":'<span class="mut">–</span>',
-  ]),["zone","node","count","objects","state"]);
+  ]),["zone","node","count","objects","palette","state"]);
 }
 function renderTracks(d){
   if(bad(d))return;

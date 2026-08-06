@@ -147,6 +147,14 @@ def test_ui_contains_test_cards_and_consumers():
         assert 'id="feed"' not in html
 
 
+def test_ui_zones_table_renders_palette_state():
+    """The zones table shows the PalletStateManager decision when present
+    (string smoke: the render code references the /zones palette_state field)."""
+    with _client() as c:
+        html = c.get("/ui").text
+        assert "palette_state" in html
+
+
 def test_ui_contains_tracks3d_card_and_dim_column():
     """The 3D-localization test card (REST ?type=track_3d + track3d topic) is
     present, and the Tracks card renders a dimension column."""

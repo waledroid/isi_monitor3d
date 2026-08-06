@@ -96,6 +96,35 @@ def test_zones_without_state_have_null_objects(client):
     assert z["objects"] is None
     assert z["count"] is None
     assert z["state_ts"] is None
+    assert z["palette_state"] is None
+    assert z["content"] is None
+
+
+def test_zones_expose_palette_state_when_decision_present(client):
+    """A zone state carrying the PalletStateManager decision surfaces its
+    enum + content on the REST row; a decision-less state stays null."""
+    from tests.conftest import make_zone_decision, make_zone_state
+    sub = client.app.state.subscriber
+    sub.update_from_message("node_a", make_config("node_a"))
+    sub.update_from_message("node_a", make_zone_state(
+        zone="rack_a",
+        decision=make_zone_decision(palette_state="palette_loaded",
+                                    content=("carton",),
+                                    counts={"palette": 1, "carton": 2})))
+
+    r = client.get("/zones")
+    z = r.json()["zones"][0]
+    assert z["palette_state"] == "palette_loaded"
+    assert z["content"] == ["carton"]
+    # Existing enrichment untouched.
+    assert z["count"] == 1
+    assert z["objects"][0]["cls"] == "palette"
+
+    # State present but no decision (older Backbone) → nulls, not a crash.
+    sub.update_from_message("node_a", make_zone_state(zone="rack_a"))
+    z = client.get("/zones").json()["zones"][0]
+    assert z["palette_state"] is None
+    assert z["content"] is None
 
 
 def test_zone_by_name_returns_spec_and_state(client):

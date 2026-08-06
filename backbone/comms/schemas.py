@@ -70,7 +70,12 @@ identity) added to ``ZoneStateMessage``, ``PassingEventMessage``,
 ``ImageRefMessage`` and ``ZoneSpec``. Consumers MUST key zone semantics on
 ``zone_id`` (immutable), not ``zone`` (the renamable operator label). It
 defaults to "" so a payload from a pre-id Backbone still parses; the current
-Backbone always populates it."""
+Backbone always populates it.
+
+Within v6 (no bump — additive + default-valued): optional ``decision``
+(``ZoneDecisionModel`` — the PalletStateManager enum + content + counts) added
+to ``ZoneStateMessage``. Defaults to None so a decision-less payload from an
+older Backbone still parses everywhere."""
 
 _ACCEPTED_VERSIONS = frozenset({3, 4, 5, 6})
 
@@ -248,6 +253,36 @@ class ZoneObject(BaseModel):
     occupancy_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
+class ZoneDecisionModel(BaseModel):
+    """The ``PalletStateManager`` verdict for one zone (additive within v6).
+
+    ``palette_state`` is the communication enum —
+    ``no_data | no_palette | palette_empty | palette_loaded`` — decided from
+    per-camera detection evidence (any camera's positive detection is proof),
+    with hysteresis so it cannot flap. ``content`` lists the load classes when
+    loaded (e.g. ``("carton",)``); ``counts`` is the per-class in-zone count
+    (max across cameras, never summed). Renderers map the enum to text and
+    stop re-deriving zone state from the occupants list.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    palette_state: str          # no_data|no_palette|palette_empty|palette_loaded
+    content: tuple[str, ...] = ()
+    counts: dict[str, int] = Field(default_factory=dict)
+
+    @classmethod
+    def from_decision(cls, decision: object) -> ZoneDecisionModel:
+        """Construct from a ``ZoneDecision`` (avoid hard import of the
+        homography module — same duck-typed bridge as ``from_state``)."""
+        return cls(
+            palette_state=str(decision.palette_state),   # type: ignore[attr-defined]
+            content=tuple(str(c) for c in decision.content),  # type: ignore[attr-defined]
+            counts={str(k): int(v)
+                    for k, v in decision.counts.items()},  # type: ignore[attr-defined]
+        )
+
+
 class ZoneStateMessage(BaseModel):
     """Wire format for the current contents of one zone (the WMS/FMS signal).
 
@@ -275,6 +310,10 @@ class ZoneStateMessage(BaseModel):
     zone_id: str = ""
     objects: tuple[ZoneObject, ...]
     count: int = Field(..., ge=0, description="len(objects) — consumer convenience")
+    # OPTIONAL PalletStateManager verdict (additive within v6, default None so
+    # a payload from a pre-decision Backbone still parses — mixed-version
+    # rollout: gateway rebuilds BEFORE the Backbone starts emitting it).
+    decision: ZoneDecisionModel | None = None
 
     @classmethod
     def from_state(cls, state: object) -> ZoneStateMessage:

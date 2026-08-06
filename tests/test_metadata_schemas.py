@@ -478,6 +478,71 @@ def test_zone_state_bad_version_raises() -> None:
         parse_envelope(data)
 
 
+# ---- ZoneDecisionModel — the PalletStateManager verdict (additive in v6) ----
+
+
+def test_zone_state_with_decision_round_trip() -> None:
+    """New payload: the optional ``decision`` object survives the wire."""
+    from backbone.comms.schemas import ZoneDecisionModel, ZoneStateMessage
+    msg = ZoneStateMessage(
+        **{**_make_zone_state().model_dump(),
+           "decision": ZoneDecisionModel(
+               palette_state="palette_loaded",
+               content=("carton",),
+               counts={"palette": 1, "carton": 2},
+           )})
+    data = json.loads(msg.model_dump_json())
+    back = parse_envelope(data)
+    assert isinstance(back, ZoneStateMessage)
+    assert back.decision is not None
+    assert back.decision.palette_state == "palette_loaded"
+    assert back.decision.content == ("carton",)
+    assert back.decision.counts == {"palette": 1, "carton": 2}
+
+
+def test_zone_state_without_decision_still_parses() -> None:
+    """Old payload (pre-decision Backbone) has no ``decision`` key — the
+    mixed-version rollout requires it to parse, defaulting to None."""
+    data = json.loads(_make_zone_state().model_dump_json())
+    data.pop("decision", None)
+    back = parse_envelope(data)
+    assert back.decision is None
+
+
+def test_zone_decision_defaults() -> None:
+    from backbone.comms.schemas import ZoneDecisionModel
+    d = ZoneDecisionModel(palette_state="no_data")
+    assert d.content == ()
+    assert d.counts == {}
+
+
+def test_zone_decision_extra_fields_rejected() -> None:
+    from backbone.comms.schemas import ZoneDecisionModel
+    with pytest.raises(ValidationError):
+        ZoneDecisionModel.model_validate(
+            {"palette_state": "no_palette", "rogue_key": 1})
+    # And an unknown key nested under decision inside a full message too.
+    from backbone.comms.schemas import ZoneStateMessage
+    data = json.loads(_make_zone_state().model_dump_json())
+    data["decision"] = {"palette_state": "no_palette", "rogue_key": 1}
+    with pytest.raises(ValidationError):
+        ZoneStateMessage.model_validate(data)
+
+
+def test_zone_decision_from_backbone_dataclass() -> None:
+    """``from_decision`` bridges the homography-side ``ZoneDecision`` without
+    the schema module importing it (process-boundary style, like from_state)."""
+    from backbone.comms.schemas import ZoneDecisionModel
+    from backbone.homography.pallet_state_manager import ZoneDecision
+    d = ZoneDecision(zone_id="zp_a", zone_name="rack_a",
+                     palette_state="palette_empty", content=(),
+                     counts={"palette": 1})
+    m = ZoneDecisionModel.from_decision(d)
+    assert m.palette_state == "palette_empty"
+    assert m.content == ()
+    assert m.counts == {"palette": 1}
+
+
 def test_proximity_message_round_trip() -> None:
     """v5 ProximityMessage — the person↔object distance signal — survives the
     wire and parse_envelope discriminates it."""

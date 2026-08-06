@@ -249,6 +249,25 @@ def test_zone_state_without_id_falls_back_to_name_key(sub):
     assert list(zs.keys()) == ["rack_a"]
 
 
+def test_zone_state_decision_stored_and_absent_is_none(sub):
+    """The latest PalletStateManager ``decision`` rides the cached zone state;
+    a decision-less payload (older Backbone) yields decision=None."""
+    from tests.conftest import make_zone_decision
+    sub.update_from_message("node_a", make_zone_state(
+        zone="rack_a", decision=make_zone_decision(palette_state="palette_loaded")))
+    sub.update_from_message("node_a", make_zone_state(zone="rack_b"))
+    zs = sub.snapshot_nodes()["node_a"].zone_state_by_zone
+    assert zs["rack_a"].decision.palette_state == "palette_loaded"
+    assert zs["rack_a"].decision.content == ("carton",)
+    assert zs["rack_b"].decision is None
+    # A newer state for the same zone replaces the decision (latest wins).
+    sub.update_from_message("node_a", make_zone_state(
+        zone="rack_a", decision=make_zone_decision(
+            palette_state="palette_empty", content=(), counts={"palette": 1})))
+    zs = sub.snapshot_nodes()["node_a"].zone_state_by_zone
+    assert zs["rack_a"].decision.palette_state == "palette_empty"
+
+
 def test_stale_node_evicted_after_timeout(monkeypatch):
     """A node silent beyond evict_after_s disappears from the store entirely
     (display-staleness at 15 s is unchanged; eviction is the long timeout)."""
