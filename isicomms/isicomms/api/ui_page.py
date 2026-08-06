@@ -303,7 +303,12 @@ function buildTree(topics){
   });
   // Zone-id topic segments get their display name appended ("zp_x — “Sortie_1”"),
   // resolved from the /zones pairing (config adverts) — topics stay id-keyed.
-  const label=seg=>esc(seg)+(zoneNames[seg]
+  // FR display aliases for the AGV engineers: shown label only — the real
+  // topic segment stays in data-topic/copy lines (frozen wire interface).
+  const SEG_FR={passings:"passages"};
+  const label=seg=>(SEG_FR[seg]
+      ?'<span title="'+esc(seg)+'">'+esc(SEG_FR[seg])+"</span>"
+      :esc(seg))+(zoneNames[seg]
     ?'<span class="zname">— “'+esc(zoneNames[seg])+'”</span>':"");
   const render=(nodes,path)=>Object.keys(nodes).map(seg=>{
     const node=nodes[seg],p=path?path+"/"+seg:seg;
@@ -312,7 +317,8 @@ function buildTree(topics){
              '<span class="cnt" data-cnt="'+esc(node.topic)+'"></span>'+
              '<span class="age" data-age="'+esc(node.topic)+'"></span></div>';
     const inner=(node.children?render(node.children,p):"")+
-      (node.topic?'<div class="leaf" data-topic="'+esc(node.topic)+'">(this level)'+
+      (node.topic?'<div class="leaf" data-topic="'+esc(node.topic)+
+        '"><span title="messages on this exact topic (zone state)">état</span>'+
         '<span class="cnt" data-cnt="'+esc(node.topic)+'"></span></div>':"");
     return '<details data-path="'+esc(p)+'"'+(openPaths.has(p)?" open":"")+
            "><summary>"+label(seg)+"</summary>"+inner+"</details>";
@@ -409,7 +415,7 @@ const CHECKS=[
       t.slice(-6).map(x=>"#"+x.track_id+" <b>"+esc(x.cls)+"</b> ["+
         (x.xyz_m||[]).map(v=>v.toFixed(2)).join(", ")+"] m"+
         (x.single_view?' <span class="mut">(single-view)</span>':"")).join("<br>")];}},
- {id:"pass",title:"Passings",rest:"/v1/passings",topic:"isiMonitor3D/v1/+/zone/+/passings",
+ {id:"pass",title:"Passages",rest:"/v1/passings",topic:"isiMonitor3D/v1/+/zone/+/passings",
   interpret:d=>{
     const p=(d.passings||[]).slice(-5).reverse();
     if(!p.length)return[st("neutral","NONE"),"No boundary crossings recorded."];
