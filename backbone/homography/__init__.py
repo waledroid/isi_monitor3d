@@ -27,6 +27,7 @@ from .cross_cam_fusion import CrossCamFusion, FusedObservation
 from .disagreement_gate import DisagreementGate
 from .foot_projector import FootProjector
 from .pallet_occupancy import OccupancyStabilizer, PalletOccupancy
+from .pallet_state_manager import PalletStateManager, ZoneDecision
 from .temporal_stabilizer import TemporalStabilizer
 from .track import InternalTrack, TrackConfig, TrackState
 
@@ -39,7 +40,9 @@ __all__ = [
     "InternalTrack",
     "OccupancyStabilizer",
     "PalletOccupancy",
+    "PalletStateManager",
     "TemporalStabilizer",
     "TrackConfig",
     "TrackState",
+    "ZoneDecision",
 ]
