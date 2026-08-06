@@ -47,11 +47,31 @@ UI/wire state before the first detection batch arrives. Once ``step()`` has
 run at least once, a zone with no held presence reads ``no_palette``
 (evidence WAS observed — the palette class in particular just wasn't found),
 never ``no_data``.
+
+**Camera-loss gate (partial-frame protection).** A degraded Mode-2 pair (one
+camera down) only carries the survivor's detections. Without a gate, a zone
+covered only by the MISSING camera would accumulate consecutive "absent"
+evidence every step and eventually exit presence — camera loss reading as
+proof of absence, which is exactly the failure ``fail honestly`` (CLAUDE.md
+principle 6) forbids. ``step()`` accepts ``reporting_cameras`` — the set of
+cameras that actually reported *this* frame (defaults to the keys of
+``detections_by_camera``, so callers who never pass it see today's
+behaviour unchanged). The manager is constructed with the FULL configured
+camera set (``camera_ids``); whenever ``reporting_cameras`` is a strict
+subset of it, the frame is "partial" and each class's raw evidence is
+unioned with that class's currently-held presence before it reaches the
+hysteresis (see ``ZoneMembershipHysteresis.update``: a zid present in
+``raw`` never advances its exit streak). Fresh evidence can still ENTER a
+new zone on a partial frame (a surviving camera seeing a NEW palette is
+real evidence); only EXIT is blocked. Occupancy needs no equivalent gate:
+a zone with no detections this frame (partial OR a true single-frame
+occlusion) already falls through to ``OccupancyStabilizer.last()`` — see
+the ``zone_occ`` loop below.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 
 from backbone.core.types import Detection
@@ -88,7 +108,15 @@ def _norm_cls(cls: str) -> str:
 def _in_zone(zone: Zone, xy: tuple[float, float], tol: float) -> bool:
     """Tolerant containment: a 5-point cross (center ± tol on each axis),
     the same mechanic ``zone_scope.build_zone_membership_filter`` samples so
-    a detection straddling the boundary by projection error is still kept."""
+    a detection straddling the boundary by projection error is still kept.
+
+    Spec-approved trade-off: for two zones sharing a boundary, a detection
+    within ``tol`` of that shared edge can satisfy BOTH zones' cross at once
+    (double-counted into the adjacent zone), because the cross is centered
+    on the detection, not clipped to a single zone's polygon. Losing a
+    boundary detection entirely (no tolerance) was judged worse than the
+    occasional double count in two neighbours.
+    """
     x, y = xy
     for dx, dy in ((0.0, 0.0), (tol, 0.0), (-tol, 0.0), (0.0, tol), (0.0, -tol)):
         if zone.contains((x + dx, y + dy)):
@@ -108,6 +136,7 @@ class PalletStateManager:
         projector,
         occupancy: PalletOccupancy,
         *,
+        camera_ids: Collection[str] = (),
         tol_m: float = 0.15,
         enter_after: int = 2,
         exit_after: int = 15,
@@ -115,11 +144,21 @@ class PalletStateManager:
         self._zones = zones
         self._projector = projector
         self._occupancy = occupancy
+        # The FULL configured camera set — compared against each step's
+        # `reporting_cameras` to detect a partial (degraded) frame. Empty
+        # (the default) disables the camera-loss gate entirely, so callers
+        # that never pass it keep pre-Finding-2 behaviour.
+        self._camera_ids = frozenset(camera_ids)
         self._tol = float(tol_m)
         self._enter_after = int(enter_after)
         self._exit_after = int(exit_after)
         self._hyst: dict[str, ZoneMembershipHysteresis] = {}
         self._occ_stabilizer = OccupancyStabilizer()
+        # Last step's post-hysteresis presence per class — the "currently
+        # held" set fed into the camera-loss union, and the before/after
+        # comparison that detects a palette zone's presence EXIT (to forget
+        # its stale occupancy history; see OccupancyStabilizer.forget).
+        self._present_prev: dict[str, set[str]] = {}
 
     def initial(self) -> list[ZoneDecision]:
         """Decisions before ``step`` has ever run: every zone reads
@@ -131,8 +170,33 @@ class PalletStateManager:
             for zid in self._zones.ids
         ]
 
-    def step(self, detections_by_camera: Mapping[str, list[Detection]]) -> list[ZoneDecision]:
+    def step(
+        self,
+        detections_by_camera: Mapping[str, list[Detection]],
+        *,
+        reporting_cameras: Collection[str] | None = None,
+    ) -> list[ZoneDecision]:
+        """Decide every zone's state from this frame's per-camera detections.
+
+        Args:
+            detections_by_camera: This frame's detections, per camera.
+            reporting_cameras: Cameras that actually reported this frame —
+                defaults to ``detections_by_camera``'s keys. Pass the
+                synchronizer's ``FramePair.frames`` keys explicitly (the
+                orchestrator does) so a camera that reported zero detections
+                still counts as "reporting" and one that's simply absent
+                from the pair (degraded Mode 2) does not. See the module
+                docstring's "Camera-loss gate" section.
+        """
         zone_ids = self._zones.ids
+        if reporting_cameras is None:
+            reporting_cameras = detections_by_camera.keys()
+        # A "partial" frame is missing at least one CONFIGURED camera. With
+        # camera_ids unset (single-cam callers, most unit tests) the gate is
+        # inert — every frame is treated as full, matching pre-Finding-2
+        # behaviour exactly.
+        partial = bool(self._camera_ids) and not self._camera_ids.issubset(
+            set(reporting_cameras))
 
         # ---- per-zone per-class counts (raw, max-across-cameras) + this
         # frame's evidence set per class (union across cameras — OR).
@@ -163,8 +227,24 @@ class PalletStateManager:
             hyst = self._hyst.setdefault(
                 cls, ZoneMembershipHysteresis(exit_after=self._exit_after,
                                               enter_after=self._enter_after))
-            raw = tuple(sorted(evidence.get(cls, ())))
-            present[cls] = set(hyst.update(_PSEUDO_TRACK, raw))
+            raw_set = set(evidence.get(cls, ()))
+            if partial:
+                # Camera loss must not read as evidence of absence: union in
+                # the zones this class already holds so ZoneMembershipHysteresis
+                # sees them as still-raw-present and cannot advance their exit
+                # streak. Fresh evidence (a zone NOT already held) still enters
+                # normally — only exiting is blocked on a partial view.
+                raw_set |= self._present_prev.get(cls, set())
+            present[cls] = set(hyst.update(_PSEUDO_TRACK, tuple(sorted(raw_set))))
+
+        # A palette zone's presence just EXITED (full-frame absence, never
+        # blocked above) ⇒ its occupancy vote history is now about a pallet
+        # that's gone; forget it so a later, unrelated pallet doesn't inherit
+        # a stale loaded/empty verdict (Finding 5 — see OccupancyStabilizer.forget).
+        exited_palette = self._present_prev.get("palette", set()) - present.get("palette", set())
+        for zid in exited_palette:
+            self._occ_stabilizer.forget(zid)
+        self._present_prev = present
 
         # ---- occupancy: per-camera A+B classification, bucketed into zones
         # by pallet floor position, full-wins-across-cameras this frame.
@@ -182,6 +262,12 @@ class PalletStateManager:
                         frame_occ[zid] = (state, content)
 
         # ---- temporal vote of the fused occupancy, keyed by ZONE id.
+        # A zone absent from `frame_occ` this step — whether from a true
+        # single-frame occlusion OR a partial/degraded frame that simply
+        # carried no detections for it — already carries forward via
+        # `last()` rather than voting fresh "empty" evidence. This is the
+        # same mechanism that protects presence above; occupancy needs no
+        # separate camera-loss gate (Finding 2, verified).
         zone_occ: dict[str, tuple[str, str | None] | None] = {}
         for zid in zone_ids:
             if zid in frame_occ:

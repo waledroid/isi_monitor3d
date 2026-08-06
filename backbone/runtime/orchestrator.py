@@ -139,6 +139,10 @@ class Orchestrator:
                 f"ingestion.mode={self._ingest_mode!r}, expected 'frames' or 'points'")
 
         camera_ids = list(cfg["cameras"])
+        # Kept for _build_metric_stack: the FULL configured camera set, used
+        # by PalletStateManager's camera-loss gate to detect a partial
+        # (degraded Mode 2) frame.
+        self._camera_ids = camera_ids
 
         # Frame sources — frames mode only. In points mode the cameras block
         # remains the camera-identity declaration (ids, count → operational
@@ -379,6 +383,7 @@ class Orchestrator:
         # one A+B estimator, two consumers.
         self._pallet_state = PalletStateManager(
             self._zones, self._projector, self._occupancy,
+            camera_ids=self._camera_ids,
             **hg_cfg.get("pallet_state", {}),
         )
 
@@ -1014,13 +1019,24 @@ class Orchestrator:
             # PalletStateManager verdict — decided from this frame's per-camera
             # detections (the same dict the occupancy enrichment consumed);
             # tracks are enrichment only, never a presence input.
+            # `reporting_cameras=set(pair.frames)` is the cameras that ACTUALLY
+            # reported this frame (frames or points mode alike — both key
+            # FramePair.frames by camera id): a degraded Mode-2 solo pair
+            # naturally has only the survivor here, so the manager's
+            # camera-loss gate can tell "the other camera saw nothing" apart
+            # from "the other camera isn't reporting at all".
             decisions = {d.zone_id: d
-                         for d in self._pallet_state.step(detections_by_camera)}
+                         for d in self._pallet_state.step(
+                             detections_by_camera, reporting_cameras=set(pair.frames))}
             zone_states = self._zone_state.update(
                 [(t, memberships.get(t.track_id, ())) for t in tracks_2d],
                 pair.capture_ts,
+                # Counts still ride every published message (below), but they
+                # are NOT part of the republish TRIGGER: raw per-frame counts
+                # flap (duplicate boxes, a dropout frame) and would otherwise
+                # cause frame-rate republishes on UDP + MQTT-retained topics.
                 decisions={
-                    zid: (d.palette_state, d.content, tuple(sorted(d.counts.items())))
+                    zid: (d.palette_state, d.content)
                     for zid, d in decisions.items()
                 },
             )

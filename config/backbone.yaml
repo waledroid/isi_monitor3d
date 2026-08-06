@@ -70,6 +70,10 @@ detection:
     enabled: false
     gamma: 0.75
 homography:
+  # pallet_state:                # PalletStateManager tunables (defaults shown)
+  #   tol_m: 0.15                 # zone-cross tolerance, metres (see pallet_state_manager._in_zone)
+  #   enter_after: 2               # consecutive evidence frames to ENTER presence
+  #   exit_after: 15                # consecutive absent frames to EXIT presence
   cross_cam_fusion:
     match_distance_m:
       palette_vide: 0.8

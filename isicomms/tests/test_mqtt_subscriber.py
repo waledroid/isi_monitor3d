@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -293,3 +294,70 @@ def test_node_within_evict_window_is_kept(monkeypatch):
     monkeypatch.setattr(m.time, "time", lambda: t0 + 100.0)
     s.update_from_message("node_b", make_zone_state(zone="z", ts=t0 + 100.0))
     assert set(s.snapshot_nodes()) == {"node_a", "node_b"}
+
+
+# ---- $SYS broker stats ------------------------------------------------------
+
+
+# ---- loud schema-mismatch drops (2026-08-06) --------------------------
+
+
+def test_schema_mismatch_drop_increments_counter_and_warns(sub, caplog):
+    """A payload that parses as JSON but fails ``parse_envelope`` (e.g. an
+    unknown/old-shape ``type``) must both bump ``dropped_malformed`` AND emit
+    a ``logger.warning`` (throttle freshly reset — first drop always warns),
+    so a mis-ordered rollout fails loudly instead of vanishing at debug."""
+    from types import SimpleNamespace
+
+    payload = json.dumps({"schema_version": 6, "type": "not_a_real_type"}).encode()
+    with caplog.at_level("WARNING", logger="isicomms.mqtt_subscriber"):
+        sub._on_message(None, None, SimpleNamespace(
+            topic="isiMonitor3D/v1/node_a/bogus", payload=payload))
+    assert sub.stats()["dropped_malformed"] == 1
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("dropped malformed message" in r.message for r in warnings)
+
+
+def test_schema_mismatch_drop_is_throttled_per_topic_family(sub, caplog, monkeypatch):
+    """A SUSTAINED mismatch on the same topic-family warns once, then stays
+    quiet until the throttle window elapses — loud on onset, not spammy."""
+    from types import SimpleNamespace
+
+    import isicomms.mqtt_subscriber as m
+
+    t0 = 1_000_000.0
+    monkeypatch.setattr(m.time, "time", lambda: t0)
+    payload = json.dumps({"schema_version": 6, "type": "not_a_real_type"}).encode()
+    msg = SimpleNamespace(topic="isiMonitor3D/v1/node_a/bogus", payload=payload)
+
+    with caplog.at_level("WARNING", logger="isicomms.mqtt_subscriber"):
+        sub._on_message(None, None, msg)                 # 1st: warns
+        sub._on_message(None, None, msg)                 # 2nd, same instant: throttled
+    assert sub.stats()["dropped_malformed"] == 2
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+
+    caplog.clear()
+    monkeypatch.setattr(m.time, "time", lambda: t0 + 31.0)   # throttle window elapsed
+    with caplog.at_level("WARNING", logger="isicomms.mqtt_subscriber"):
+        sub._on_message(None, None, msg)
+    assert sub.stats()["dropped_malformed"] == 3
+    assert len([r for r in caplog.records if r.levelname == "WARNING"]) == 1
+
+
+def test_sys_connected_clients_count(sub):
+    """$SYS/broker/clients/connected (plain-int payload) sets the count and
+    stays out of the tail / tree / received-dropped counters."""
+    from types import SimpleNamespace
+
+    assert sub.mqtt_connected() is None
+    sub._on_message(None, None, SimpleNamespace(
+        topic="$SYS/broker/clients/connected", payload=b"3"))
+    assert sub.mqtt_connected() == 3
+    assert sub.stats() == {
+        "received": 0, "dropped_malformed": 0, "dropped_version": 0}
+    assert sub.topics() == {}
+    assert sub.recent() == []
+    # a malformed $SYS payload is ignored, keeping the last good count
+    sub._on_message(None, None, SimpleNamespace(
+        topic="$SYS/broker/clients/connected", payload=b"not-a-number"))
+    assert sub.mqtt_connected() == 3

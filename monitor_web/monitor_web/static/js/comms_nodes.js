@@ -162,7 +162,13 @@ function _paletteLine(st) {
         : t("zone_an_object", "an object");
       return `${t("zone_palette_with", "Palette present with")} ${what}`;
     }
-    // "no_data" (or an unknown future enum) → fall through to the heuristic.
+    if (dec.palette_state === "no_data") {
+      // The manager has never stepped yet — honest "no live data" rather
+      // than falling into the objects heuristic below (which would read an
+      // empty objects list as "no palette", a claim no evidence supports).
+      return t("zone_no_data", "no live data");
+    }
+    // Unknown future enum → fall through to the heuristic.
   }
   // Fallback heuristic. Detection quirks are resolved here, not displayed: a
   // single physical pallet can be detected twice with different occupancy

@@ -51,6 +51,9 @@ def _zone_dec(decisions: list[ZoneDecision], zone_id: str = "zone_a") -> ZoneDec
     return next(d for d in decisions if d.zone_id == zone_id)
 
 
+_CAMS = ("cam_a", "cam_b")
+
+
 # ---------- presence = detection evidence (decision 2) ----------
 
 
@@ -166,3 +169,88 @@ def test_decision_is_stable_over_repeated_identical_frames():
         if i >= 1:  # frame 0 is the hysteresis warm-up (enter_after=2)
             seen.add((dec.palette_state, dec.content, tuple(sorted(dec.counts.items()))))
     assert len(seen) == 1
+
+
+# ---------- camera-loss gate (Finding 2): partial frames must not read as
+# ---------- evidence of absence ----------
+
+
+def test_partial_frame_absence_does_not_exit_presence_over_30_frames():
+    """cam_a goes dark (only cam_b reports, and it has nothing) — 30 straight
+    partial frames must NOT exit presence (vs. the pre-fix 15-out default,
+    which would have exited by frame 15)."""
+    mgr = _manager(camera_ids=_CAMS)
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a")  # (2.0, 3.6)
+    for _ in range(2):  # enter_after=2, both cameras reporting
+        mgr.step({"cam_a": [pallet], "cam_b": []}, reporting_cameras=_CAMS)
+    for _ in range(30):
+        dec = _zone_dec(mgr.step({"cam_b": []}, reporting_cameras=("cam_b",)))
+        assert dec.palette_state == "palette_empty"
+
+
+def test_full_frame_absence_still_exits_after_15():
+    """Both configured cameras reporting (not partial) + genuine absence still
+    exits presence at the documented 15th absent frame — the gate must not
+    disable exiting altogether."""
+    mgr = _manager(camera_ids=_CAMS)
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a")
+    for _ in range(2):
+        mgr.step({"cam_a": [pallet], "cam_b": []}, reporting_cameras=_CAMS)
+    for _ in range(14):
+        dec = _zone_dec(mgr.step({"cam_a": [], "cam_b": []}, reporting_cameras=_CAMS))
+        assert dec.palette_state == "palette_empty"
+    dec = _zone_dec(mgr.step({"cam_a": [], "cam_b": []}, reporting_cameras=_CAMS))
+    assert dec.palette_state == "no_palette"
+
+
+def test_entering_evidence_on_partial_frame_still_enters():
+    """A partial frame's SURVIVING camera seeing a brand-new palette is real
+    evidence — entering must not be blocked, only exiting."""
+    mgr = _manager(camera_ids=_CAMS)
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_b")
+    decisions = []
+    for _ in range(2):  # enter_after=2; cam_a is down the whole time
+        decisions = mgr.step({"cam_b": [pallet]}, reporting_cameras=("cam_b",))
+    assert _zone_dec(decisions).palette_state == "palette_empty"
+
+
+def test_no_camera_loss_gate_when_camera_ids_unset():
+    """Back-compat: a manager built without camera_ids (most tests above)
+    gates nothing — partial-looking frames behave exactly as before Finding 2."""
+    mgr = _manager()  # camera_ids defaults to () — gate inert
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a")
+    for _ in range(2):
+        mgr.step({"cam_a": [pallet]})
+    for _ in range(14):
+        dec = _zone_dec(mgr.step({"cam_a": []}))
+        assert dec.palette_state == "palette_empty"
+    dec = _zone_dec(mgr.step({"cam_a": []}))
+    assert dec.palette_state == "no_palette"
+
+
+# ---------- stale occupancy history (Finding 5) ----------
+
+
+def test_stale_occupancy_forgotten_when_presence_exits():
+    """A loaded palette leaves (15 absent frames exits presence); a NEW,
+    unrelated palette then enters ⇒ the zone reads palette_empty immediately
+    — it must not inherit the departed pallet's "loaded" vote history."""
+    mgr = _manager()
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a")  # (2.0, 3.6)
+    carton = _det("carton", (150, 250, 250, 300), camera_id="cam_a")   # loads it
+    dec = None
+    for _ in range(2):
+        dec = _zone_dec(mgr.step({"cam_a": [pallet, carton]}))
+    assert dec.palette_state == "palette_loaded"
+
+    # The palette leaves entirely — 15 consecutive absent frames exits presence.
+    for _ in range(15):
+        dec = _zone_dec(mgr.step({"cam_a": []}))
+    assert dec.palette_state == "no_palette"
+
+    # A NEW, empty palette enters at the same spot — must read empty right
+    # away, not resurrect the departed pallet's "loaded" verdict.
+    new_pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a")
+    for _ in range(2):  # enter_after=2
+        dec = _zone_dec(mgr.step({"cam_a": [new_pallet]}))
+    assert dec.palette_state == "palette_empty"

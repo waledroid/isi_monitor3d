@@ -40,6 +40,13 @@ logger = logging.getLogger(__name__)
 # between <base> and <node_id> in <base>/<version>/<node_id>/<suffix>.
 _VERSION_RE = re.compile(r"^v\d+$")
 
+# Schema-mismatch drops were previously only `logger.debug` — invisible in
+# production, so a mis-ordered rollout (an old gateway against a newer
+# Backbone schema, or vice versa) silently ate every message with no signal.
+# Rate-limited to one `logger.warning` per topic-family per this window so a
+# sustained mismatch is LOUD without spamming the log at message rate.
+_DROP_WARN_THROTTLE_S = 30.0
+
 
 @dataclass
 class NodeState:
@@ -114,6 +121,15 @@ class MqttSubscriber:
         # Safety-capped; in practice the topic set is small and bounded.
         self._latest_by_topic: dict[str, dict] = {}
         self._topics_cap = 1000
+        # Broker-reported connected-client count ($SYS/broker/clients/connected).
+        # None until the broker's first $SYS publish (sys_interval, ~10 s).
+        self._mqtt_connected_clients: int | None = None
+
+        # Last time a "dropped malformed" warning was actually emitted, per
+        # topic-family (the topic's final segment — the message-type suffix,
+        # e.g. "zone_state", "track2d/person" — so throttling groups by KIND
+        # of failure across every node rather than per raw topic string).
+        self._drop_warn_last: dict[str, float] = {}
 
         self._client: mqtt.Client | None = None
         self._started = False
@@ -177,7 +193,9 @@ class MqttSubscriber:
     ) -> None:
         if rc == 0:
             topic = f"{self._base}/#"
-            client.subscribe(topic)
+            # $SYS gives the broker's connected-client COUNT (client identities
+            # are not exposed to ordinary clients) — surfaced via /clients.
+            client.subscribe([(topic, 0), ("$SYS/broker/clients/connected", 0)])
             logger.info("mqtt_subscriber: subscribed to %s", topic)
         else:
             logger.warning("mqtt_subscriber: connect result code %d — will retry", rc)
@@ -202,6 +220,32 @@ class MqttSubscriber:
         # legacy unversioned: <base>/<node_id>/...
         return parts[1], "v0"
 
+    def _topic_family(self, topic: str) -> str:
+        """Group a topic for drop-warning throttling — its final segment
+        (the message-type suffix), or the whole topic if it has none."""
+        return topic.rsplit("/", 1)[-1] if "/" in topic else topic
+
+    def _warn_dropped(self, topic: str, exc: Exception) -> None:
+        """Rate-limited ``logger.warning`` for a schema-mismatch drop.
+
+        At most one warning per topic-family per ``_DROP_WARN_THROTTLE_S``
+        (default 30 s) — loud enough to catch a mis-ordered rollout, quiet
+        enough not to spam the log while it's happening.
+        """
+        family = self._topic_family(topic)
+        now = time.time()
+        with self._lock:
+            last = self._drop_warn_last.get(family, 0.0)
+            should_warn = (now - last) >= _DROP_WARN_THROTTLE_S
+            if should_warn:
+                self._drop_warn_last[family] = now
+        if should_warn:
+            logger.warning(
+                "mqtt_subscriber: dropped malformed message on %r (%s: %s) "
+                "— further drops on topic-family %r throttled to 1/%.0fs",
+                topic, type(exc).__name__, exc, family, _DROP_WARN_THROTTLE_S,
+            )
+
     def _on_message(
         self,
         client: mqtt.Client,
@@ -209,6 +253,16 @@ class MqttSubscriber:
         m: mqtt.MQTTMessage,
     ) -> None:
         topic: str = m.topic
+        if topic.startswith("$SYS/"):
+            # Broker housekeeping, plain-int payload — kept out of the tail,
+            # the schema tree, and the received/dropped counters.
+            try:
+                n = int(m.payload.decode("utf-8").strip())
+            except (UnicodeDecodeError, ValueError):
+                return
+            with self._lock:
+                self._mqtt_connected_clients = n
+            return
         with self._lock:
             entry = {
                 "ts": time.time(),
@@ -255,6 +309,7 @@ class MqttSubscriber:
                 "mqtt_subscriber: parse error on %r (%s): %s",
                 topic, type(exc).__name__, exc,
             )
+            self._warn_dropped(topic, exc)
             return
 
         self.update_from_message(node_id, msg, topic_version=topic_version)
@@ -366,6 +421,13 @@ class MqttSubscriber:
         with self._lock:
             msgs = list(self._recent)
         return msgs[-max(1, int(limit)):]
+
+    def mqtt_connected(self) -> int | None:
+        """Broker-reported connected-client count, or None before the first
+        $SYS publish. Includes the gateway's own connection and every
+        Backbone node — Mosquitto does not expose per-client identities."""
+        with self._lock:
+            return self._mqtt_connected_clients
 
     def stats(self) -> dict[str, int]:
         """Return a copy of the ingestion counters."""

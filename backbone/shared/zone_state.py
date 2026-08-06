@@ -144,11 +144,16 @@ class ZoneStateTracker:
             ts:     Frame capture timestamp.
             decisions: Optional per-zone-id decision signature (an opaque
                 comparable tuple — the orchestrator passes the
-                ``PalletStateManager`` verdict as
-                ``(palette_state, content, sorted counts)``). When present for
-                a zone it joins the change signature, so a decision flip
-                republishes even with identical occupants. ``None`` (the
-                default) keeps the pre-decision occupants-only semantics.
+                ``PalletStateManager`` verdict as ``(palette_state,
+                content)``, deliberately WITHOUT counts: raw per-frame counts
+                flap (1↔2 duplicate boxes, a dropout frame) and counts riding
+                the trigger would republish at frame rate on UDP +
+                MQTT-retained topics. Counts still ride every PUBLISHED
+                message via ``ZoneDecisionModel`` — they're just not part of
+                what decides whether to publish). When present for a zone it
+                joins the change signature, so a decision flip republishes
+                even with identical occupants. ``None`` (the default) keeps
+                the pre-decision occupants-only semantics.
         """
         occupants: dict[str, list[ZoneOccupant]] = {zid: [] for zid in self._zones.ids}
         for track, member_zones in tracks:

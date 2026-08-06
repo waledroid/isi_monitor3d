@@ -919,6 +919,48 @@ def test_orchestrator_zone_state_disabled_via_config(tmp_path: Path) -> None:
         sock.close()
 
 
+def test_orchestrator_wires_pallet_state_camera_loss_gate(tmp_path: Path) -> None:
+    """Finding 2 wiring: PalletStateManager is built with the orchestrator's
+    FULL configured camera set, and every ``step()`` call threads
+    ``reporting_cameras=set(pair.frames)`` through — the signal its
+    camera-loss gate needs to tell "the other camera saw nothing" apart from
+    "the other camera isn't reporting" (a degraded Mode-2 solo pair)."""
+    cal_path = _write_calibration(tmp_path)
+    onnx_path = _write_stub_onnx(tmp_path)
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = _write_config(
+            tmp_path, calibration_path=cal_path, onnx_path=onnx_path,
+            udp_port=port, zones_path=_write_zones(tmp_path),
+        )
+        orch = Orchestrator(cfg_path)
+        assert set(orch._pallet_state._camera_ids) == {"cam_a", "cam_b"}
+
+        seen_reporting: list[set[str] | None] = []
+        original_step = orch._pallet_state.step
+
+        def _spy_step(detections_by_camera, *, reporting_cameras=None):
+            seen_reporting.append(
+                set(reporting_cameras) if reporting_cameras is not None else None)
+            return original_step(detections_by_camera, reporting_cameras=reporting_cameras)
+
+        orch._pallet_state.step = _spy_step
+
+        # Aligned pair: both cameras present in the FramePair.
+        orch.step(_make_frame_pair(orch.rig, capture_ts=0.0))
+        assert seen_reporting[-1] == {"cam_a", "cam_b"}
+
+        # Degraded solo pair: only cam_a survives.
+        img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        frame = Frame(camera_id="cam_a", capture_ts=1.0, frame_idx=1, image=img)
+        solo_pair = FramePair(capture_ts=1.0, frame_idx=1, frames={"cam_a": frame})
+        orch.step(solo_pair)
+        assert seen_reporting[-1] == {"cam_a"}
+        orch.publisher.close()
+    finally:
+        sock.close()
+
+
 def test_pose_every_n_amortises_person_detector(tmp_path: Path) -> None:
     """``detection.pose_every_n`` runs the person-pose detector on every Nth
     pair only — person tracks coast on the Kalman between (the pose model's

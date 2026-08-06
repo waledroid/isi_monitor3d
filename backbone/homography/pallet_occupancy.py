@@ -100,6 +100,22 @@ class OccupancyStabilizer:
         return (self._voted(hist, None, self._held.get(track_id))
                 if hist else None)
 
+    def forget(self, key) -> None:
+        """Drop a key's vote history and held state.
+
+        Without this, a departed pallet's "full" hold lingers in the window
+        (flip hysteresis needs ``flip_ratio`` of the window to challenge a
+        held state) — a fresh, unrelated pallet entering the same zone would
+        then read stale "loaded" for several frames before its own "empty"
+        votes accumulate enough weight to flip. Called by
+        ``PalletStateManager`` when a zone's palette PRESENCE exits (see its
+        docstring on "stale occupancy history"). ``key`` is opaque (a
+        ``track_id`` int in ``PalletOccupancy.enrich``'s own usage, a zone id
+        string when ``PalletStateManager`` keys its own stabilizer instance).
+        """
+        self._hist.pop(key, None)
+        self._held.pop(key, None)
+
 
 class PalletOccupancy:
     """Associate load objects to pallets (A+B fusion) and vote a stable state."""

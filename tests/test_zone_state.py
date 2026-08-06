@@ -232,20 +232,43 @@ def test_decision_only_change_triggers_publish() -> None:
     """The PalletStateManager decision is part of the change signature: a zone
     whose occupants did NOT change still republishes when its decision flips
     (e.g. palette_empty → palette_loaded), so the wire always carries the
-    latest verdict. Same decision + same occupants stays silent."""
+    latest verdict. Same decision + same occupants stays silent.
+
+    The decision signature is ``(palette_state, content)`` ONLY — see
+    ``test_counts_only_change_does_not_republish`` below for why counts are
+    deliberately excluded (Finding 1)."""
     tracker = ZoneStateTracker(_zones(), refresh_interval_s=100.0)
     tracker.initial_states(ts=0.0)
     zones = _zones()
     tracks = [(_track(7), zones.which_ids((1.0, 1.0)))]
-    dec_empty = {"dock": ("palette_empty", (), (("palette", 1),))}
+    dec_empty = {"dock": ("palette_empty", ())}
     tracker.update(tracks, ts=1.0, decisions=dec_empty)
     # Unchanged occupants + unchanged decision → nothing republished.
     assert tracker.update(tracks, ts=1.5, decisions=dec_empty) == []
     # Occupants identical, decision flips → the zone republishes.
-    dec_loaded = {"dock": ("palette_loaded", ("carton",),
-                           (("carton", 1), ("palette", 1)))}
+    dec_loaded = {"dock": ("palette_loaded", ("carton",))}
     states = tracker.update(tracks, ts=2.0, decisions=dec_loaded)
     assert [s.zone for s in states] == ["dock"]
+
+
+def test_counts_only_change_does_not_republish() -> None:
+    """Finding 1 — counts are NOT part of the decision change-signature: a
+    raw per-frame count flap (1↔2 duplicate boxes, a dropout frame) with the
+    SAME ``palette_state``/``content`` must not trigger a republish, even
+    though the orchestrator's ``ZoneDecision.counts`` differs frame to frame.
+    The tracker only ever sees the 2-tuple the orchestrator hands it, so a
+    counts change can't reach the signature at all — this pins that contract
+    at the call boundary the orchestrator uses."""
+    tracker = ZoneStateTracker(_zones(), refresh_interval_s=100.0)
+    tracker.initial_states(ts=0.0)
+    zones = _zones()
+    tracks = [(_track(7), zones.which_ids((1.0, 1.0)))]
+    # Same (palette_state, content) every step — the orchestrator would build
+    # exactly this whether the frame carried 1 or 2 duplicate palette boxes.
+    dec = {"dock": ("palette_empty", ())}
+    tracker.update(tracks, ts=1.0, decisions=dec)
+    assert tracker.update(tracks, ts=1.5, decisions=dec) == []
+    assert tracker.update(tracks, ts=2.0, decisions=dec) == []
 
 
 def test_update_without_decisions_keeps_old_behavior() -> None:
