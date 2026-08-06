@@ -34,4 +34,4 @@ capture:
   tag_clahe_clip: 2.0
   tag_clahe_grid: 8
   tag_quad_decimate: 1.5
-extrinsic_method: targetless
+extrinsic_method: aprilgrid
