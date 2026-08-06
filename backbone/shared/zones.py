@@ -216,7 +216,7 @@ class ZoneMembershipHysteresis:
     exit still registers fast while boundary jitter cannot flap the state.
     """
 
-    def __init__(self, exit_after: int = 8, enter_after: int = 1) -> None:
+    def __init__(self, exit_after: int = 15, enter_after: int = 1) -> None:
         self._exit_after = int(exit_after)
         self._enter_after = int(enter_after)
         self._member: dict[int, set[str]] = {}
