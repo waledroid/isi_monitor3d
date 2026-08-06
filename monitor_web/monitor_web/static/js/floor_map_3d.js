@@ -197,16 +197,24 @@ async function init() {
   }
 
   // ---------- text billboards (canvas-texture sprites) ----------
-  function makeLabel(text, color = 0xffffff) {
-    const pad = 8, fs = 48;
+  // Default look = dark tag. Pass {bg, radius} for the WHITE ROUNDED BADGE the
+  // cam-view distance lines use (mirrors overlay.py::_draw_distance's badge).
+  function makeLabel(text, color = 0xffffff, { bg = "rgba(5,8,11,0.72)", radius = 0 } = {}) {
+    const pad = radius > 0 ? 14 : 8, fs = 48;
     const c = document.createElement("canvas");
     const ctx = c.getContext("2d");
     ctx.font = `500 ${fs}px monospace`;
     const w = Math.ceil(ctx.measureText(text).width) + pad * 2;
     c.width = w; c.height = fs + pad * 2;
     ctx.font = `500 ${fs}px monospace`;
-    ctx.fillStyle = "rgba(5,8,11,0.72)";
-    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillStyle = bg;
+    if (radius > 0 && ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(0, 0, c.width, c.height, radius);
+      ctx.fill();
+    } else {
+      ctx.fillRect(0, 0, c.width, c.height);
+    }
     ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
     ctx.textBaseline = "middle";
     ctx.fillText(text, pad, c.height / 2);
@@ -387,6 +395,7 @@ async function init() {
     if (twinAvailable && performance.now() - twinAt < 2000) {
       for (const [id, view] of views) {
         if (typeof id === "string" && id.startsWith("twin:")) continue;
+        removeGizmo(view);
         objectGroup.remove(view.group);
         view.mesh.geometry.dispose(); view.mat.dispose();
         view.label.material.map.dispose(); view.label.material.dispose();
@@ -409,14 +418,18 @@ async function init() {
       view.lastMsg = msg;
 
       // Triangulated base height (Mode-2 proof): a REAL 2-view Track3D lifts
-      // the body off the floor by xyz_m[2] and shows h=…m in the label.
-      // single_view Z is floor-pinned by design — stays flat, no h label.
+      // the body off the floor by xyz_m[2] and grows an XYZ axis gizmo whose
+      // Z arrow carries the height badge (the label no longer repeats it).
+      // single_view Z is floor-pinned by design — stays flat, no gizmo.
       const t3 = window.__tracks?.byId3D?.get(msg.track_id);
       const sv = !!(t3 && t3.single_view);
-      const z = (t3 && !sv) ? (t3.xyz_m?.[2] ?? 0) : 0;
-      view.target = w2t(msg.xy_m[0], msg.xy_m[1], Math.max(0, z));
-      const hTxt = (t3 && !sv) ? `  h=${z.toFixed(2)}m` : "";
-      const lbl = `#${msg.track_id}${occupancyText(msg)}${hTxt}${sv ? "  ·1cam" : ""}`;
+      // Fresh = the 3D fix keeps pace with the 2D track (same capture clock);
+      // a stale byId3D leftover (subscription lapsed) must not keep the gizmo.
+      const fresh3d = !!(t3 && !sv && (msg.ts - t3.ts) < 1.5);
+      const z = fresh3d ? Math.max(0, t3.xyz_m?.[2] ?? 0) : 0;
+      view.target = w2t(msg.xy_m[0], msg.xy_m[1], z);
+      updateGizmo(view, fresh3d, z);
+      const lbl = `#${msg.track_id}${occupancyText(msg)}${sv ? "  ·1cam" : ""}`;
       if (view._lbl !== lbl) { setLabel(view, lbl, occupancyColor(msg) ?? COLORS.text); view._lbl = lbl; }
       view.mat.opacity = sv ? 0.5 : 1.0;
       view.mat.transparent = sv;
@@ -435,6 +448,7 @@ async function init() {
     // GC
     for (const [id, view] of views) {
       if (!live.has(id) && now - view.lastSeen > GC_MS) {
+        removeGizmo(view);
         objectGroup.remove(view.group);
         view.mesh.geometry.dispose(); view.mat.dispose();
         view.label.material.map.dispose(); view.label.material.dispose();
@@ -454,6 +468,52 @@ async function init() {
     view.group.add(view.mesh);
     view.cls = cls; view.topH = h; view.baseY = y; view.color = color;
     view.label.position.y = h + 0.18;
+  }
+
+  // ---------- 3D-localization axis gizmo ----------
+  // A classic 3-arrow XYZ marker at the object's base while the track has a
+  // FRESH 2-view Track3D fix: X (red) / Y (green) in the floor plane, Z (blue)
+  // up, with the measured height on the Z tip in the same white rounded badge
+  // the cam-view distance lines use. Built once per view; transforms + badge
+  // text update only when the height moves > 1 cm.
+  const GIZMO_AXIS = 0.45;   // metres — X/Y arrow length
+  const GIZMO_HEAD = 0.10, GIZMO_HEAD_W = 0.05;
+  function updateGizmo(view, fresh3d, z) {
+    if (!fresh3d) { removeGizmo(view); return; }
+    if (!view.gizmo) {
+      const g = new THREE.Group();
+      const o = new THREE.Vector3(0, 0.01, 0);
+      const ax = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), o, GIZMO_AXIS, 0xef4444, GIZMO_HEAD, GIZMO_HEAD_W);   // world +X
+      const ay = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), o, GIZMO_AXIS, 0x22c55e, GIZMO_HEAD, GIZMO_HEAD_W);  // world +Y (three -z)
+      const az = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), o, GIZMO_AXIS, 0x3b82f6, GIZMO_HEAD, GIZMO_HEAD_W);   // up
+      g.add(ax, ay, az);
+      view.group.add(g);
+      view.gizmo = { group: g, arrows: [ax, ay, az], zArrow: az, label: null, h: NaN };
+    }
+    const gz = view.gizmo;
+    if (!(Math.abs(z - gz.h) > 0.01)) return;
+    gz.h = z;
+    const zLen = Math.max(0.3, Math.min(2.5, z));   // visible even at z≈0
+    gz.zArrow.setLength(zLen, GIZMO_HEAD, GIZMO_HEAD_W);
+    const next = makeLabel(`${z.toFixed(2)} m`, 0x0b0e11, { bg: "#ffffff", radius: 18 });
+    next.position.set(0, zLen + 0.14, 0);
+    if (gz.label) {
+      gz.group.remove(gz.label);
+      gz.label.material.map.dispose(); gz.label.material.dispose();
+    }
+    gz.group.add(next);
+    gz.label = next;
+  }
+
+  function removeGizmo(view) {
+    const gz = view.gizmo;
+    if (!gz) return;
+    view.group.remove(gz.group);
+    // ArrowHelper geometries are shared module-level in three — dispose only
+    // the per-instance materials (same spirit as the view-purge pattern).
+    for (const a of gz.arrows) { a.line.material.dispose(); a.cone.material.dispose(); }
+    if (gz.label) { gz.label.material.map.dispose(); gz.label.material.dispose(); }
+    view.gizmo = null;
   }
 
   // ---------- camera framing (wide default, ~80% fill) ----------
