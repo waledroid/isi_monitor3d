@@ -817,14 +817,17 @@ def test_orchestrator_step_emits_zone_state_over_udp(tmp_path: Path) -> None:
 
         # Scan the datagrams for a zone_state message (track_2d and passing
         # messages share the same UDP channel).
+        # The startup pass publishes an explicit EMPTY state for every zone
+        # (count 0) before the debounced entry lands — scan for the occupied
+        # one instead of trusting stream order.
         zone_state = None
-        for _ in range(20):
+        for _ in range(40):
             payload, _ = sock.recvfrom(8192)
             msg = json.loads(payload.decode("utf-8"))
-            if msg["type"] == "zone_state":
+            if msg["type"] == "zone_state" and msg.get("count"):
                 zone_state = msg
                 break
-        assert zone_state is not None, "no zone_state message on the bus"
+        assert zone_state is not None, "no occupied zone_state on the bus"
         assert zone_state["zone"] == "dock"
         assert zone_state["count"] == 1
         obj = zone_state["objects"][0]
