@@ -305,9 +305,10 @@ function buildTree(topics){
   // resolved from the /zones pairing (config adverts) — topics stay id-keyed.
   // FR display aliases for the AGV engineers: shown label only — the real
   // topic segment stays in data-topic/copy lines (frozen wire interface).
+  // Both namings stay visible: FR first, wire name muted beside it.
   const SEG_FR={passings:"passages"};
   const label=seg=>(SEG_FR[seg]
-      ?'<span title="'+esc(seg)+'">'+esc(SEG_FR[seg])+"</span>"
+      ?esc(SEG_FR[seg])+' <span class="cnt">('+esc(seg)+")</span>"
       :esc(seg))+(zoneNames[seg]
     ?'<span class="zname">— “'+esc(zoneNames[seg])+'”</span>':"");
   const render=(nodes,path)=>Object.keys(nodes).map(seg=>{
@@ -318,7 +319,7 @@ function buildTree(topics){
              '<span class="age" data-age="'+esc(node.topic)+'"></span></div>';
     const inner=(node.children?render(node.children,p):"")+
       (node.topic?'<div class="leaf" data-topic="'+esc(node.topic)+
-        '"><span title="messages on this exact topic (zone state)">état</span>'+
+        '"><span title="messages on this exact topic (zone state)">état <span class="cnt">(this level)</span></span>'+
         '<span class="cnt" data-cnt="'+esc(node.topic)+'"></span></div>':"");
     return '<details data-path="'+esc(p)+'"'+(openPaths.has(p)?" open":"")+
            "><summary>"+label(seg)+"</summary>"+inner+"</details>";
