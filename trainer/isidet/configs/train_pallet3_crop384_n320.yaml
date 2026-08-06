@@ -35,6 +35,10 @@ export_model: true
 export_formats: ["onnx", "openvino"]
 export_nms: false
 export_opset: 17
+export_dynamic: true          # REQUIRED for zone-scoped inference: crops from both
+                              # cameras ride ONE batched detect() call, so the ONNX
+                              # must accept batch N (static batch=1 fails live with
+                              # "Got: 2 Expected: 1" — hit 2026-08-06)
 
 # === Augmentations — tuned for the crop domain ===
 # Color: lighting is still the dominant variable (the 356 synthetic lighting
