@@ -202,3 +202,56 @@ class ZoneRegistry:
         zone rename: ids are immutable, names are not.
         """
         return tuple(zid for zid, z in self._by_id.items() if z.contains(xy_m))
+
+
+class ZoneMembershipHysteresis:
+    """Debounce per-track zone membership at polygon boundaries.
+
+    Raw point-in-polygon flips every few frames for an object sitting ON a
+    zone edge (live 2026-08-06: a carton at the Sortie_1 boundary flapped
+    the zone's object list and spammed passings although nothing moved). A
+    track ENTERS a zone after ``enter_after`` consecutive inside frames
+    (1 = immediately) and LEAVES only after ``exit_after`` consecutive
+    outside frames (~0.6 s at 13 fps with the default 8) — so a genuine
+    exit still registers fast while boundary jitter cannot flap the state.
+    """
+
+    def __init__(self, exit_after: int = 8, enter_after: int = 1) -> None:
+        self._exit_after = int(exit_after)
+        self._enter_after = int(enter_after)
+        self._member: dict[int, set[str]] = {}
+        self._in_streak: dict[tuple[int, str], int] = {}
+        self._out_streak: dict[tuple[int, str], int] = {}
+
+    def update(self, track_id: int, raw: tuple[str, ...]) -> tuple[str, ...]:
+        """Fold this frame's raw membership into the debounced one."""
+        raw_set = set(raw)
+        member = self._member.setdefault(track_id, set())
+        for zid in raw_set - member:
+            key = (track_id, zid)
+            self._in_streak[key] = self._in_streak.get(key, 0) + 1
+            if self._in_streak[key] >= self._enter_after:
+                member.add(zid)
+                self._in_streak.pop(key, None)
+        for key in [k for k in self._in_streak
+                    if k[0] == track_id and k[1] not in raw_set]:
+            self._in_streak.pop(key, None)
+        for zid in list(member):
+            key = (track_id, zid)
+            if zid in raw_set:
+                self._out_streak.pop(key, None)
+            else:
+                self._out_streak[key] = self._out_streak.get(key, 0) + 1
+                if self._out_streak[key] >= self._exit_after:
+                    member.discard(zid)
+                    self._out_streak.pop(key, None)
+        return tuple(sorted(member))
+
+    def forget(self, live_ids: set[int]) -> None:
+        """Drop state for tracks that no longer exist."""
+        for tid in [t for t in self._member if t not in live_ids]:
+            del self._member[tid]
+        self._in_streak = {k: v for k, v in self._in_streak.items()
+                           if k[0] in live_ids}
+        self._out_streak = {k: v for k, v in self._out_streak.items()
+                            if k[0] in live_ids}

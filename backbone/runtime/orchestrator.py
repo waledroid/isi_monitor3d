@@ -94,7 +94,7 @@ from backbone.shared.snapshot_writer import SnapshotWriter
 from backbone.shared.timestamps import LatencyMeter, elapsed_ms, now
 from backbone.shared.zone_state import ZoneStateTracker
 from backbone.shared.zone_transitions import ZoneTransitionDetector
-from backbone.shared.zones import ZoneRegistry
+from backbone.shared.zones import ZoneMembershipHysteresis, ZoneRegistry
 from backbone.triangulation import (
     KeypointAssociator,
     ReprojectionGate,
@@ -415,6 +415,9 @@ class Orchestrator:
         # Zone transitions (enter/leave events). Enabled by default; opt-out via
         # ``metadata.passings.enabled: false`` in backbone.yaml.
         self._transitions = ZoneTransitionDetector(self._zones)
+        # Debounced point-in-polygon: boundary objects must not flap the zone
+        # object lists / passings (see ZoneMembershipHysteresis).
+        self._membership_hyst = ZoneMembershipHysteresis()
         self._passings_enabled: bool = bool(
             meta_cfg.get("passings", {}).get("enabled", True)
         )
@@ -956,7 +959,8 @@ class Orchestrator:
             self._publisher.publish_track_2d(track)
             if not need_membership:
                 continue
-            membership = self._zones.which_ids(track.xy_m)
+            membership = self._membership_hyst.update(
+                track.track_id, self._zones.which_ids(track.xy_m))
             memberships[track.track_id] = membership
             if self._passings_enabled:
                 for ev in self._transitions.update(
@@ -981,7 +985,9 @@ class Orchestrator:
                                 zone_id=ev.zone_id,
                             )
         if self._passings_enabled:
-            self._transitions.forget({t.track_id for t in tracks_2d})
+            live = {t.track_id for t in tracks_2d}
+            self._transitions.forget(live)
+            self._membership_hyst.forget(live)
 
         # --- zone state (retained per-zone object list) ---
         if self._zone_state is not None:

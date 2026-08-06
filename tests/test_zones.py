@@ -229,3 +229,37 @@ def test_registry_load_reads_kind_and_severity(tmp_path: Path) -> None:
     reg = ZoneRegistry.load(path)
     assert reg["press"].kind == "danger"
     assert reg["press"].severity == "critical"
+
+
+# ---------- membership hysteresis (2026-08-06: boundary flap regression) ----------
+
+from backbone.shared.zones import ZoneMembershipHysteresis  # noqa: E402
+
+
+def test_membership_hysteresis_holds_through_boundary_flap():
+    """Live regression: a carton sitting ON the Sortie_1 polygon edge flipped
+    raw point-in-polygon membership every few frames — the zone's object
+    list (and passings) flapped although the object never moved. Once a
+    member, a track must survive short outside bursts."""
+    h = ZoneMembershipHysteresis(exit_after=8, enter_after=1)
+    assert h.update(31, ("z1",)) == ("z1",)              # enters immediately
+    for i in range(20):                                   # in/out oscillation
+        raw = () if i % 2 == 0 else ("z1",)
+        assert h.update(31, raw) == ("z1",), f"dropped at flap {i}"
+
+
+def test_membership_hysteresis_real_exit_after_sustained_outside():
+    h = ZoneMembershipHysteresis(exit_after=4, enter_after=1)
+    h.update(5, ("z1",))
+    results = [h.update(5, ()) for _ in range(6)]
+    assert results[2] == ("z1",)                          # still held (3rd outside)
+    assert results[3] == ()                               # released on 4th
+    assert results[5] == ()
+
+
+def test_membership_hysteresis_forget_dead_tracks():
+    h = ZoneMembershipHysteresis(exit_after=4, enter_after=1)
+    h.update(5, ("z1",))
+    h.forget({99})                                        # 5 not live anymore
+    # re-appearing track starts fresh: enters immediately, no stale hold
+    assert h.update(5, ()) == ()
