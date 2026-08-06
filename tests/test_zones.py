@@ -242,7 +242,7 @@ def test_membership_hysteresis_holds_through_boundary_flap():
     list (and passings) flapped although the object never moved. Once a
     member, a track must survive short outside bursts."""
     h = ZoneMembershipHysteresis(exit_after=8, enter_after=1)
-    assert h.update(31, ("z1",)) == ("z1",)              # enters immediately
+    assert h.update(31, ("z1",)) == ("z1",)              # enter_after=1: immediate
     for i in range(20):                                   # in/out oscillation
         raw = () if i % 2 == 0 else ("z1",)
         assert h.update(31, raw) == ("z1",), f"dropped at flap {i}"
@@ -263,3 +263,17 @@ def test_membership_hysteresis_forget_dead_tracks():
     h.forget({99})                                        # 5 not live anymore
     # re-appearing track starts fresh: enters immediately, no stale hold
     assert h.update(5, ()) == ()
+
+
+def test_membership_hysteresis_enter_confirm_filters_ghost_tracks():
+    """A short-lived duplicate track (parallax jitter momentarily defeating
+    fusion) must not enter zone lists: entry requires enter_after
+    consecutive inside frames."""
+    h = ZoneMembershipHysteresis(exit_after=15, enter_after=3)
+    assert h.update(5, ("z1",)) == ()                    # 1st frame: not yet
+    assert h.update(5, ("z1",)) == ()                    # 2nd: not yet
+    assert h.update(5, ("z1",)) == ("z1",)               # 3rd: in
+    # a 2-frame ghost never makes it
+    h2 = ZoneMembershipHysteresis(exit_after=15, enter_after=3)
+    h2.update(9, ("z1",)); h2.update(9, ("z1",))
+    assert h2.update(9, ()) == ()

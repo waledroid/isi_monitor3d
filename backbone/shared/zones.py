@@ -211,12 +211,13 @@ class ZoneMembershipHysteresis:
     zone edge (live 2026-08-06: a carton at the Sortie_1 boundary flapped
     the zone's object list and spammed passings although nothing moved). A
     track ENTERS a zone after ``enter_after`` consecutive inside frames
-    (1 = immediately) and LEAVES only after ``exit_after`` consecutive
+    (default 3 ≈ 0.23 s — keeps sub-second ghost tracks out of the
+    zone lists) and LEAVES only after ``exit_after`` consecutive
     outside frames (~0.6 s at 13 fps with the default 8) — so a genuine
     exit still registers fast while boundary jitter cannot flap the state.
     """
 
-    def __init__(self, exit_after: int = 15, enter_after: int = 1) -> None:
+    def __init__(self, exit_after: int = 15, enter_after: int = 3) -> None:
         self._exit_after = int(exit_after)
         self._enter_after = int(enter_after)
         self._member: dict[int, set[str]] = {}
