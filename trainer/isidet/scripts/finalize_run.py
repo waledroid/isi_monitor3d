@@ -69,7 +69,7 @@ step("3/5  ONNX export (opset 17, nms off, raw head)")
 onnx_path = None
 try:
     onnx_path = model.export(
-        format="onnx", imgsz=IMGSZ, opset=OPSET, nms=NMS, simplify=True, dynamic=False,
+        format="onnx", imgsz=IMGSZ, opset=OPSET, nms=NMS, simplify=True, dynamic=True,
     )
     print(f"  ✅ {onnx_path}", flush=True)
 except Exception as e:

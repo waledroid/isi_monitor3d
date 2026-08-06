@@ -117,7 +117,7 @@ def _export_yolo(weights_path: Path, imgsz: int = None) -> Path:
         opset=12,
         nms=True,
         simplify=True,
-        dynamic=False,
+        dynamic=True,
     )
     onnx_path = Path(export_path)
     logger.info(f"YOLO ONNX exported: {onnx_path} ({onnx_path.stat().st_size / 1024**2:.1f} MB, imgsz={imgsz})")

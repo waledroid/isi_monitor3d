@@ -393,12 +393,14 @@ class YOLOTrainer(BaseTrainer):
         if format == 'onnx':
             nms = self.config.get('export_nms', True)
             opset = self.config.get('export_opset', 12)
-            # dynamic=False → input locked to imgsz (fastest, but inference size is
-            # fixed). dynamic=True → the ONNX accepts any 32-multiple size, letting
-            # the runtime pick the inference resolution (the dashboard's imgsz
-            # slider) to trade speed for accuracy. Slightly slower at imgsz than a
-            # static export, but far more flexible.
-            dynamic = bool(self.config.get('export_dynamic', False))
+            # dynamic=True (the default) → the ONNX accepts any batch and any
+            # 32-multiple size. REQUIRED for the Backbone's zone-scoped path,
+            # which batches crops from both cameras into one detect() call —
+            # a static batch=1 export fails live with "Got: 2 Expected: 1"
+            # (hit 2026-08-06). It also unlocks the dashboard's imgsz slider.
+            # Set export_dynamic: false only for a single-image consumer that
+            # wants the marginally faster static graph.
+            dynamic = bool(self.config.get('export_dynamic', True))
             logger.info(f"   ONNX flags: imgsz={img_size}, nms={nms}, opset={opset}, "
                         f"dynamic={dynamic} "
                         f"({'self-contained' if nms else 'raw head — Backbone yolo_onnx compatible'})")
