@@ -1,5 +1,5 @@
 node_id: Sortie_Machine_4
-calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
+calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration.json
 cameras:
   cam_a:
     source:
@@ -46,34 +46,28 @@ ingestion:
     degraded_emit_after_ms: 200.0
 detection:
   plugin: yolo_onnx_seg
-  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/yolo26l-seg_e200_640px_09-06-2026_00-24-57/weights/best.fp16.onnx
+  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/pallet/weights/pallet.onnx
   class_names:
   - palette
   - carton
   - polybag
-  confidence_threshold: 0.1
+  confidence_threshold: 0.3
   pose_confidence_threshold: 0.5
-  iou_threshold: 0.45
   inference_imgsz: 640
   pose_every_n: 1
-  pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.onnx
+  pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.engine
   pose_imgsz: 640
-  decode_masks: true
   pose_enabled: true
-  trt_enabled: true
   zone_imgsz: 320
+  zone_membership_tol_m: 0.5
   sahi:
     enabled: false
     tile: 2
     overlap: 0.2
   enhance:
-    enabled: false
-    gamma: 0.75
+    enabled: true
+    gamma: 0.88
 homography:
-  # pallet_state:                # PalletStateManager tunables (defaults shown)
-  #   tol_m: 0.15                 # zone-cross tolerance, metres (see pallet_state_manager._in_zone)
-  #   enter_after: 2               # consecutive evidence frames to ENTER presence
-  #   exit_after: 15                # consecutive absent frames to EXIT presence
   cross_cam_fusion:
     match_distance_m:
       palette_vide: 0.8
@@ -120,3 +114,6 @@ isistream:
   fps: 15.0
   motion_gate: true
   detect_substream: false
+triangulation:
+  reprojection_gate:
+    max_error_px: 60.0
