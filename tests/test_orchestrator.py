@@ -810,7 +810,9 @@ def test_orchestrator_step_emits_zone_state_over_udp(tmp_path: Path) -> None:
         )
         orch = Orchestrator(cfg_path)
         assert orch._zone_state is not None
-        for i in range(3):
+        # ZoneMembershipHysteresis needs enter_after (3) consecutive in-zone
+        # frames before the track joins the zone list — step past that.
+        for i in range(6):
             orch.step(_make_frame_pair(orch.rig, capture_ts=i * 0.033))
 
         # Scan the datagrams for a zone_state message (track_2d and passing
