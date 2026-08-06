@@ -143,7 +143,8 @@ def grab_real_frame(camera_id: str, source_cfg: dict, timeout: float = 4.0):
 
 
 def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
-                 get_zone_dets=None, wire_pose=None, zone_ctx=None) -> Iterator:
+                 get_zone_dets=None, wire_pose=None, zone_ctx=None,
+                 axis_overlay=None) -> Iterator:
     """Annotate each cam frame before MJPEG-encoding.
 
     Gated by ``is_running`` (the Backbone-running check): until START, yields the RAW
@@ -234,6 +235,11 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
         # zone-based system never shows detections outside the zones.
         if scaled_zones and floor_zones_enabled(cfg):
             draw_zone_outlines(out, scaled_zones)
+        # 3D-localization axis + height badge at every FRESH two-view Track3D
+        # fix on the bus (the cam-view twin of the floor map's gizmo). The
+        # overlay is a no-op for Mode-1/uncalibrated cameras and never raises.
+        if axis_overlay is not None:
+            axis_overlay.draw(out)
         # No fused-track ring markers here (the '#id cls' amber/green circles
         # were retired as clutter, like the mirrored rings before them): every
         # zone has a detecting TWIN on the other camera, so boxes/masks appear
@@ -631,12 +637,20 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         elif manager is not None:
             def get_zone_dets(_img, _m=manager, _c=camera_id):
                 return _m.camera_dets(_c)
+        # 3D axis + height badge from the bus's Track3D fixes (Mode 2 only in
+        # practice — the overlay self-disables on Mode-1 placeholder
+        # extrinsics). Built once per stream build so rvec/tvec are cached.
+        from ..track3d_overlay import CamAxisOverlay
+        axis_bus = getattr(state, "bus", None)
+        axis_overlay = CamAxisOverlay(_warp_camera(cfg, camera_id),
+                                      lambda: axis_bus)
         frames = _detect_iter(
             frames, cfg, camera_id,
             is_running=is_running,
             get_zone_dets=get_zone_dets,
             wire_pose=wire_pose,
             zone_ctx=zone_ctx,
+            axis_overlay=axis_overlay,
         )
     return frames
 

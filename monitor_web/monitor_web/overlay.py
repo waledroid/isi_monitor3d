@@ -162,6 +162,23 @@ def _filled_rounded_rect(img, x1, y1, x2, y2, r, color) -> None:
         cv2.circle(img, (ccx, ccy), r, color, -1, cv2.LINE_AA)
 
 
+def _draw_text_badge(image, center, text: str) -> None:
+    """THE white rounded-rect badge with black text, centred at ``center`` —
+    the one badge style shared by the distance lines and the 3D-axis height
+    label (``track3d_overlay``). Font/padding scale with the frame."""
+    h, w = image.shape[:2]
+    fs = max(0.4, min(h, w) / 1400.0)            # font scales with frame
+    th = max(1, round(min(h, w) / 720.0))
+    (tw, tht), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
+    cx, cy = int(center[0]), int(center[1])
+    pad = max(3, round(min(h, w) / 360.0))
+    rad = max(4, round(min(h, w) / 220.0))
+    _filled_rounded_rect(image, cx - tw // 2 - pad, cy - tht // 2 - pad,
+                         cx + tw // 2 + pad, cy + tht // 2 + pad, rad, (255, 255, 255))
+    cv2.putText(image, text, (cx - tw // 2, cy + tht // 2),
+                cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0), th, cv2.LINE_AA)
+
+
 def _draw_distance(image, p1, p2, d_m: float, *, style=None) -> None:
     """Elastic line ``p1→p2`` + a white rounded centre badge with black ``'X.X m'``
     text. Line look (opacity / colour / thickness) comes from ``style`` (UI-settings
@@ -169,23 +186,12 @@ def _draw_distance(image, p1, p2, d_m: float, *, style=None) -> None:
     opacity = float((style or {}).get("opacity", 0.25))
     color = (style or {}).get("color", (255, 255, 255))
     thickness = int((style or {}).get("thickness", 2))
-    h, w = image.shape[:2]
     # Blend the line over the frame at `opacity` (line drawn on a copy → only its
     # pixels are blended).
     overlay = image.copy()
     cv2.line(overlay, p1, p2, color, thickness, cv2.LINE_AA)
     cv2.addWeighted(overlay, opacity, image, 1.0 - opacity, 0, dst=image)
-    fs = max(0.4, min(h, w) / 1400.0)            # font scales with frame
-    th = max(1, round(min(h, w) / 720.0))
-    text = f"{d_m:.1f} m"
-    (tw, tht), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
-    cx, cy = (p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2
-    pad = max(3, round(min(h, w) / 360.0))
-    rad = max(4, round(min(h, w) / 220.0))
-    _filled_rounded_rect(image, cx - tw // 2 - pad, cy - tht // 2 - pad,
-                         cx + tw // 2 + pad, cy + tht // 2 + pad, rad, (255, 255, 255))
-    cv2.putText(image, text, (cx - tw // 2, cy + tht // 2),
-                cv2.FONT_HERSHEY_SIMPLEX, fs, (0, 0, 0), th, cv2.LINE_AA)
+    _draw_text_badge(image, ((p1[0] + p2[0]) // 2, (p1[1] + p2[1]) // 2), f"{d_m:.1f} m")
 
 
 def _bbox_edge_nodes(bbox) -> list[tuple[float, float]]:
