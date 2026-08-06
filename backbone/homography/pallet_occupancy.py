@@ -14,9 +14,13 @@ model, whole-frame) to pallets. **Two independent estimators** vote per
 
 Their blind spots are complementary, so a small gate fuses them (agree → use;
 disagree → defer to whichever is in the other's blind spot; one signal missing →
-the other decides alone) — the same shape as ``DisagreementGate``. The
-``OccupancyStabilizer`` then majority-votes the per-pallet state over each track's
-recent window so the published empty/full state doesn't flicker.
+the other decides alone) — the same shape as ``DisagreementGate``. Both
+estimators associate WITHIN one camera; a third, cross-camera pass in
+``enrich`` (the metric occupancy fallback) pools load objects from every
+camera against the FUSED track position, so a pallet only cam_a saw still
+reads "full" from the carton only cam_b saw. The ``OccupancyStabilizer`` then
+majority-votes the per-pallet state over each track's recent window so the
+published empty/full state doesn't flicker.
 
 This is the cahier-des-charges "pallet empty/full" KPI deliverable. Pure +
 unit-testable (only the floor projection touches calibration).
@@ -24,6 +28,7 @@ unit-testable (only the floor projection touches calibration).
 
 from __future__ import annotations
 
+import math
 from collections import Counter, deque
 from dataclasses import dataclass
 
@@ -54,15 +59,29 @@ class _Verdict:
 
 
 class OccupancyStabilizer:
-    """Majority-vote the empty/full state (and content) per pallet ``track_id``
-    over a sliding window — mirrors ``TemporalStabilizer``'s class vote."""
+    """Vote the empty/full state (and content) per pallet ``track_id`` over a
+    sliding window, with FLIP HYSTERESIS: the first observation establishes
+    the state immediately, but once held it only flips when the challenger
+    state wins at least ``flip_ratio`` of the window. A plain 5-frame
+    majority flapped the published state every few seconds live (2026-08-06:
+    a carton hovering at both estimators' thresholds alternated the
+    per-frame verdict ~50/50); a real load/unload still flips within ~one
+    window because sustained verdicts reach the supermajority fast."""
 
-    def __init__(self, window: int = 5) -> None:
+    def __init__(self, window: int = 15, flip_ratio: float = 0.7) -> None:
         self._hist: dict[int, deque] = {}
         self._window = int(window)
+        self._flip_ratio = float(flip_ratio)
+        self._held: dict[int, str] = {}
 
-    def _voted(self, hist: deque, fallback_content: str | None):
-        state = Counter(s for s, _ in hist).most_common(1)[0][0]
+    def _voted(self, hist: deque, fallback_content: str | None, held: str | None):
+        counts = Counter(s for s, _ in hist)
+        if held is None:
+            state = counts.most_common(1)[0][0]
+        else:
+            challenger = "empty" if held == "full" else "full"
+            need = math.ceil(self._flip_ratio * len(hist))
+            state = challenger if counts.get(challenger, 0) >= need else held
         if state != "full":
             return "empty", None
         contents = Counter(c for s, c in hist if s == "full" and c)
@@ -71,12 +90,15 @@ class OccupancyStabilizer:
     def vote(self, track_id: int, state: str, content: str | None):
         hist = self._hist.setdefault(track_id, deque(maxlen=self._window))
         hist.append((state, content))
-        return self._voted(hist, content)
+        voted = self._voted(hist, content, self._held.get(track_id))
+        self._held[track_id] = voted[0]
+        return voted
 
     def last(self, track_id: int):
         """Current voted (state, content) without a new observation, or None."""
         hist = self._hist.get(track_id)
-        return self._voted(hist, None) if hist else None
+        return (self._voted(hist, None, self._held.get(track_id))
+                if hist else None)
 
 
 class PalletOccupancy:
@@ -91,7 +113,8 @@ class PalletOccupancy:
         metric_radius_m: float = 0.7,
         drift_band_m: float = 0.2,
         track_match_distance_m: float = 0.8,
-        window: int = 5,
+        window: int = 15,
+        flip_ratio: float = 0.7,
     ) -> None:
         self._projector = projector
         self._k = float(occupancy_box_k)
@@ -99,7 +122,7 @@ class PalletOccupancy:
         self._radius = float(metric_radius_m)
         self._band = float(drift_band_m)
         self._track_match = float(track_match_distance_m)
-        self._stabilizer = OccupancyStabilizer(window=window)
+        self._stabilizer = OccupancyStabilizer(window=window, flip_ratio=flip_ratio)
 
     # ---- A: image overlap ----
 
@@ -202,9 +225,11 @@ class PalletOccupancy:
         states = []
         for dets in detections_by_camera.values():
             states.extend(self._frame_states(dets))
-        for t in tracks_2d:
-            if str(t.cls).lower() not in PALLET_CLASSES:
-                continue
+        pallet_tracks = [t for t in tracks_2d
+                         if str(t.cls).lower() in PALLET_CLASSES]
+        # Per-camera pass (primary): nearest same-camera A+B state per track.
+        chosen: dict[int, tuple | None] = {}
+        for t in pallet_tracks:
             best, best_d = None, self._track_match
             for (pm, st, content, conf) in states:
                 if pm is None:
@@ -212,9 +237,43 @@ class PalletOccupancy:
                 d = float(np.hypot(t.xy_m[0] - pm[0], t.xy_m[1] - pm[1]))
                 if d < best_d:
                     best_d, best = d, (st, content, conf)
-            if best is not None:
-                st, content, conf = best
-                t.occupancy_state, t.occupancy_content = self._stabilizer.vote(t.track_id, st, content)
+            chosen[t.track_id] = best
+        # Metric occupancy fallback — cross-camera fusion for the DECISION:
+        # per-camera association is structurally blind to the split view
+        # (cam_a sees only the pallet, cam_b only the carton on it). The
+        # track's xy_m IS the fused cross-camera pallet position, so pool the
+        # load objects from EVERY camera and attach each to its nearest pallet
+        # track within the metric radius (winner-takes-all keeps one object on
+        # one pallet, mirroring the per-camera exclusivity). Positive evidence
+        # from any camera outranks one viewpoint's "empty" — an "empty" only
+        # claims absence from that angle; a per-camera "full" is never
+        # overridden.
+        loads: dict[int, list[Detection]] = {}
+        if pallet_tracks:
+            for dets in detections_by_camera.values():
+                for o in dets:
+                    if str(o.cls).lower() not in OBJECT_CLASSES:
+                        continue
+                    om = self._project(o)
+                    if om is None:
+                        continue
+                    best_t, best_d = None, self._radius
+                    for t in pallet_tracks:
+                        d = float(np.hypot(om[0] - t.xy_m[0], om[1] - t.xy_m[1]))
+                        if d <= best_d:
+                            best_d, best_t = d, t
+                    if best_t is not None:
+                        loads.setdefault(best_t.track_id, []).append(o)
+        for t in pallet_tracks:
+            best = chosen[t.track_id]
+            st, content, conf = best if best is not None else (None, None, None)
+            if st != "full" and t.track_id in loads:
+                dom = max(loads[t.track_id], key=_load_area)
+                st, content = "full", str(dom.cls).lower()
+                conf = float(dom.confidence)
+            if st is not None:
+                t.occupancy_state, t.occupancy_content = self._stabilizer.vote(
+                    t.track_id, st, content)
                 t.occupancy_confidence = conf
             else:
                 last = self._stabilizer.last(t.track_id)   # occluded this frame → carry last vote
