@@ -65,6 +65,9 @@ h1 b{color:var(--accent)}
 .card h2{font-size:11px;text-transform:uppercase;letter-spacing:.12em;
   color:var(--accent);margin-bottom:8px;display:flex;align-items:center;gap:8px}
 .card h2 .n{color:var(--muted);font-weight:400;letter-spacing:0;text-transform:none}
+/* Tracks/Consumers: cap at ~10 visible rows; the rest scrolls (busy sites
+   were growing these cards past a screenful). */
+#tracks,#consumers{max-height:290px;overflow-y:auto}
 table{width:100%;border-collapse:collapse;font-size:12.5px}
 th{color:var(--muted);text-align:left;font-weight:500;padding:3px 8px 5px 0;
   border-bottom:1px solid var(--border);white-space:nowrap}
@@ -247,7 +250,7 @@ function renderZones(d){
 function renderTracks(d){
   if(bad(d))return;
   $("n-tracks").textContent=d.count;
-  $("tracks").innerHTML=table((d.tracks||[]).slice(-14).map(t=>[
+  $("tracks").innerHTML=table((d.tracks||[]).slice(-50).map(t=>[
     "#"+t.track_id,esc(t.cls),
     t.xyz_m?'<span class="tag" style="color:var(--accent);border-color:var(--accent)">3D</span>'+
       (t.single_view?'<span class="mut" title="single-view fallback — Z pinned to 0">sv</span>':"")
@@ -267,7 +270,7 @@ function renderConsumers(d){
     '<div class="mut" style="font-size:12px;margin-bottom:6px">MQTT clients connected: <b style="color:var(--text)">'+
     (d.mqtt_connected!=null?d.mqtt_connected:"–")+
     "</b> <span>(broker total — gateway + nodes + AGVs; identities not exposed)</span></div>"+
-    table(cl.slice(0,10).map(c=>[
+    table(cl.slice(0,50).map(c=>[
       c.name?"<b>"+esc(c.name)+'</b> <span class="tag">'+esc(c.ip)+"</span>"
             :"<b>"+esc(c.ip)+"</b>",
       c.active?'<span class="ok">active</span>':'<span class="mut">idle</span>',
