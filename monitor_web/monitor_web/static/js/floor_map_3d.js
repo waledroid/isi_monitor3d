@@ -287,8 +287,27 @@ async function init() {
   let twinSeq = 0;
   let twinTracks = [];                  // [{id, cls, x, y, conf}] — matched frame-to-frame
   let twinZoneSig = "";                 // change detector for the zone outlines
+  let lastGizmoReason = "init";         // window.__floor_map.gizmoStats() diagnostic
   const twinZoneGroup = new THREE.Group();
   scene.add(twinZoneGroup);
+
+  // Nearest FRESH 2-view Track3D fix to a floor point — the twin-mode gizmo
+  // source. Twin objects carry no backbone track_id, so we match by class +
+  // proximity (≤1 m in floor XY). Cheap: byId3D holds a handful of tracks.
+  // Freshness is wall-clock vs capture_ts (same host; pipeline latency ≪ 1.5 s).
+  function fresh3DFor(cls, x, y, maxDist = 1.0) {
+    const by3 = window.__tracks?.byId3D;
+    if (!by3 || by3.size === 0) return null;
+    const now = Date.now() / 1000;
+    let best = null, bestD = maxDist;
+    for (const t3 of by3.values()) {
+      if (t3.single_view || t3.cls !== cls) continue;
+      if (!(now - t3.ts < 1.5)) continue;
+      const d = Math.hypot((t3.xyz_m?.[0] ?? 1e9) - x, (t3.xyz_m?.[1] ?? 1e9) - y);
+      if (d < bestD) { best = t3; bestD = d; }
+    }
+    return best;
+  }
 
   // Greedy nearest-neighbour id matching so twin objects keep a stable identity
   // (and therefore smooth lerp motion) across polls — same class within 1.5 m.
@@ -360,6 +379,7 @@ async function init() {
       ];
       const now = performance.now();
       const seen = new Set();
+      let g3 = 0, gTot = 0;
       for (const t of matchTwin(dets)) {
         const id = `twin:${t.id}`;
         seen.add(id);
@@ -369,14 +389,25 @@ async function init() {
         let view = views.get(id);
         if (!view) { view = buildView(msg); views.set(id, view); }
         else if (t.cls !== view.cls) rebuildBody(view, t.cls);
-        view.target = w2t(t.x, t.y);
+        // 3D gizmo in twin mode: the twin drives the map while the Backbone-track
+        // layer is off, so attach the axis gizmo + height badge by matching the
+        // nearest fresh 2-view Track3D fix instead of by track_id.
+        const t3 = fresh3DFor(t.cls, t.x, t.y);
+        const z = t3 ? Math.max(0, t3.xyz_m?.[2] ?? 0) : 0;
+        view.target = w2t(t.x, t.y, z);
+        updateGizmo(view, !!t3, z);
+        gTot++; if (t3) g3++;
         view.lastSeen = now;
         if (view._lbl !== msg.label) { setLabel(view, msg.label, COLORS.text); view._lbl = msg.label; }
         view.arrow.visible = false;
       }
+      lastGizmoReason = (window.__tracks?.byId3D?.size ?? 0) === 0
+        ? "twin: byId3D empty (no Track3D on /ws/tracks)"
+        : `twin: ${g3}/${gTot} objects matched a fresh 3D fix`;
       // Drop twin objects that vanished (faster GC than tracks — detections flicker).
       for (const [id, view] of views) {
         if (id.startsWith?.("twin:") && !seen.has(id) && now - view.lastSeen > 1200) {
+          removeGizmo(view);
           objectGroup.remove(view.group);
           view.mesh.geometry.dispose(); view.mat.dispose();
           view.label.material.map.dispose(); view.label.material.dispose();
@@ -405,7 +436,8 @@ async function init() {
     }
     const now = performance.now();
     const live = window.__tracks?.byId2D;
-    if (!live) return;
+    if (!live) { lastGizmoReason = "tracks: no __tracks store"; return; }
+    let g3 = 0, gTot = 0, miss = "";
     for (const msg of live.values()) {
       let view = views.get(msg.track_id);
       if (!view) {
@@ -429,6 +461,9 @@ async function init() {
       const z = fresh3d ? Math.max(0, t3.xyz_m?.[2] ?? 0) : 0;
       view.target = w2t(msg.xy_m[0], msg.xy_m[1], z);
       updateGizmo(view, fresh3d, z);
+      gTot++;
+      if (fresh3d) g3++;
+      else miss = !t3 ? "no 3D fix" : sv ? "single_view" : `stale (Δ${(msg.ts - t3.ts).toFixed(1)}s)`;
       const lbl = `#${msg.track_id}${occupancyText(msg)}${sv ? "  ·1cam" : ""}`;
       if (view._lbl !== lbl) { setLabel(view, lbl, occupancyColor(msg) ?? COLORS.text); view._lbl = lbl; }
       view.mat.opacity = sv ? 0.5 : 1.0;
@@ -445,6 +480,7 @@ async function init() {
         view.arrow.visible = false;
       }
     }
+    lastGizmoReason = `tracks: ${g3}/${gTot} gizmo${miss ? ` (last miss: ${miss})` : ""}`;
     // GC
     for (const [id, view] of views) {
       if (!live.has(id) && now - view.lastSeen > GC_MS) {
@@ -822,6 +858,12 @@ async function init() {
     drawOutline,
     reloadLayout,
     fitCamera,
+    // Console diagnostic: why is the axis gizmo (not) showing right now?
+    gizmoStats: () => {
+      let gizmos = 0;
+      for (const v of views.values()) if (v.gizmo) gizmos++;
+      return { views: views.size, gizmos, lastReason: lastGizmoReason };
+    },
   };
   window.__floor_map = Object.assign(window.__floor_map || {}, fm);
 
