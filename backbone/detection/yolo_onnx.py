@@ -92,6 +92,7 @@ class YoloOnnxDetector(Detector):
         # Largest batch fed so far (sticky) — solo pairs are padded up to this
         # so the CUDA session never sees a shape change (each one costs ~2.5 s).
         self._max_batch_seen = 1
+        self._warned_static_batch = False
         # Adopt the model's own input spatial size when it's FIXED (e.g. a YOLO
         # exported with dynamic=False imgsz=1024). The shape is [batch, 3, H, W];
         # H/W are ints when static, strings/-1 when dynamic. Letterboxing to a
@@ -183,13 +184,28 @@ class YoloOnnxDetector(Detector):
         images = [pair.frames[cid].image for cid in cam_ids]
 
         batch_tensor, lb_results = batch_letterbox(images, target=self._input_size)
-        # Sticky batch: never let the input shape shrink back after an aligned
-        # pair — pad solo pairs with zero images instead (see ``pad_batch``).
-        if self.supports_batch:
-            self._max_batch_seen = max(self._max_batch_seen, batch_tensor.shape[0])
-            batch_tensor = pad_batch(batch_tensor, self._max_batch_seen)
-
-        outputs = self._session.run(None, {self._input_name: batch_tensor})
+        if self.supports_batch or batch_tensor.shape[0] == 1:
+            # Sticky batch: never let the input shape shrink back after an
+            # aligned pair — pad solo pairs with zero images instead (see
+            # ``pad_batch``).
+            if self.supports_batch:
+                self._max_batch_seen = max(self._max_batch_seen, batch_tensor.shape[0])
+                batch_tensor = pad_batch(batch_tensor, self._max_batch_seen)
+            outputs = self._session.run(None, {self._input_name: batch_tensor})
+        else:
+            # Static-batch export fed a multi-image batch: per-image fallback,
+            # same as yolo_onnx_pose/yolo_onnx_seg (see the seg plugin for the
+            # full rationale; re-export with dynamic=True for real batching).
+            if not self._warned_static_batch:
+                self._warned_static_batch = True
+                logger.warning(
+                    "YoloOnnxDetector: static-batch ONNX under a batching "
+                    "consumer — falling back to per-image inference. "
+                    "Re-export with dynamic=True for one-call batching.")
+            per = [self._session.run(None, {self._input_name: batch_tensor[i:i + 1]})
+                   for i in range(batch_tensor.shape[0])]
+            outputs = [np.concatenate([p[j] for p in per], axis=0)
+                       for j in range(len(per[0]))]
         if not outputs:
             raise RuntimeError("YoloOnnxDetector: ORT session returned no outputs")
         raw = outputs[0]

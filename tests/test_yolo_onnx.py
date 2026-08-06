@@ -356,3 +356,23 @@ def test_sticky_batch_not_applied_before_first_aligned_pair(tmp_path: Path) -> N
     det.detect(_make_pair_with_one_image())
     det.detect(_make_pair_with_one_image())
     assert rec.shapes == [(1, 3, 640, 640), (1, 3, 640, 640)]
+
+
+def test_static_batch_model_survives_multi_camera_pair(tmp_path: Path) -> None:
+    """Regression (2026-08-06): a ``dynamic=False`` export under a batching
+    consumer (zone scope rides every camera's crops in ONE ``detect()``) used
+    to crash every call with ORT InvalidArgument "Got: 2 Expected: 1". A
+    static-batch model must fall back to per-image runs (like
+    ``yolo_onnx_pose`` already did) instead of failing the tick."""
+    out = np.zeros((1, 4 + NC, NUM_ANCHORS), dtype=np.float32)
+    model_path = tmp_path / "fixed.onnx"
+    _build_constant_yolo_onnx(out, model_path, batch_dim=1)
+    det = YoloOnnxDetector(onnx_path=model_path, class_names=CLASS_NAMES,
+                           providers=["CPUExecutionProvider"])
+    img = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    pair = FramePair(
+        capture_ts=10.0, frame_idx=0,
+        frames={cid: Frame(camera_id=cid, capture_ts=10.0, frame_idx=0, image=img)
+                for cid in ("cam_a", "cam_b")})
+    result = det.detect(pair)
+    assert set(result) == {"cam_a", "cam_b"}

@@ -180,3 +180,22 @@ def test_detect_empty_yields_no_detections(tmp_path: Path) -> None:
         providers=["CPUExecutionProvider"],
     )
     assert det.detect(_make_pair_with_one_image()) == {"cam_a": []}
+
+
+def test_static_batch_seg_model_survives_multi_camera_pair(tmp_path: Path) -> None:
+    """Regression (2026-08-06): same static-batch fallback as ``yolo_onnx`` —
+    the seg plugin is what zone scope actually wraps, so a ``dynamic=False``
+    seg export crashed every live tick until re-exported."""
+    head = np.zeros((1, 4 + NC + NM, NUM_ANCHORS), dtype=np.float32)
+    protos = np.zeros((1, NM, 160, 160), dtype=np.float32)
+    model_path = tmp_path / "fixed.onnx"
+    _build_constant_seg_onnx(head, protos, model_path, batch_dim=1)
+    det = YoloOnnxSegDetector(onnx_path=model_path, class_names=CLASS_NAMES,
+                              providers=["CPUExecutionProvider"])
+    img = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    pair = FramePair(
+        capture_ts=10.0, frame_idx=0,
+        frames={cid: Frame(camera_id=cid, capture_ts=10.0, frame_idx=0, image=img)
+                for cid in ("cam_a", "cam_b")})
+    result = det.detect(pair)
+    assert set(result) == {"cam_a", "cam_b"}
