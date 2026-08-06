@@ -175,7 +175,7 @@ td{padding:4px 8px 4px 0;border-bottom:1px solid rgba(255,255,255,.04);
 
   <div id="testsec">
     <div class="testhead">
-      <h2>AGV system test</h2>
+      <h2>AGV TEST</h2>
       <span class="n">each card answers one state the pick-and-place test needs —
         RUN shows the live answer + the exact REST / MQTT address to use</span>
       <button class="runall" id="runall">Run all checks</button>
@@ -352,12 +352,10 @@ const CH={good:["good","●"],warn:["warn","▲"],bad:["bad","✕"],neutral:["ne
 const st=(k,label)=>chip(CH[k][0],CH[k][1],label);
 
 const CHECKS=[
- {id:"gw",title:"Gateway",q:"Is the REST gateway reachable?",
-  rest:"/healthz",topic:null,
+ {id:"gw",title:"Gateway",rest:"/healthz",topic:null,
   interpret:d=>d&&d.ok?[st("good","REACHABLE"),"Gateway answering at "+location.host+"."]
                       :[st("bad","UNREACHABLE"),"No answer from the gateway."]},
- {id:"node",title:"Node",q:"Is the vision node alive?",
-  rest:"/v1/nodes",topic:"isiMonitor3D/v1/+/diagnostics/heartbeat",
+ {id:"node",title:"Node",rest:"/v1/nodes",topic:"isiMonitor3D/v1/+/diagnostics/heartbeat",
   interpret:d=>{
     const n=(d.nodes||[]);
     if(!n.length)return[st("bad","NO NODE"),"No Backbone node discovered yet."];
@@ -365,8 +363,7 @@ const CHECKS=[
       n.map(x=>"<b>"+esc(x.node_id)+"</b> — "+esc(x.status)+", "+
         (x.cameras||[]).length+" cam, "+(x.fps?x.fps.toFixed(1):"?")+" fps, "+
         (x.latency_ms?Math.round(x.latency_ms):"?")+" ms").join("<br>")];}},
- {id:"cfg",title:"Zones configured",q:"Which zones does the node advertise?",
-  rest:"/v1/config",topic:"isiMonitor3D/v1/+/config",retained:true,
+ {id:"cfg",title:"Zones configured",rest:"/v1/config",topic:"isiMonitor3D/v1/+/config",retained:true,
   interpret:d=>{
     const rows=[];
     for(const c of (d.nodes||[])){
@@ -376,8 +373,7 @@ const CHECKS=[
     }
     if(!rows.length)return[st("neutral","NONE"),"No retained config received."];
     return[st("good","ADVERTISED"),rows.join("<br>")];}},
- {id:"zones",title:"Zone contents",q:"Palette in the zone — and loaded with what?",
-  rest:"/v1/zones",topic:"isiMonitor3D/v1/+/zone/+",retained:true,
+ {id:"zones",title:"Zone contents",rest:"/v1/zones",topic:"isiMonitor3D/v1/+/zone/+",retained:true,
   interpret:d=>{
     const zs=d.zones||[];
     if(!zs.length)return[st("neutral","NO ZONES"),"No zone state on the broker."];
@@ -397,16 +393,14 @@ const CHECKS=[
       return '<div class="zrow"><span class="zname">'+esc(z.name)+"</span>"+c+
              '<span class="zinfo">'+info+"</span></div>";});
     return[null,rows.join("")];}},
- {id:"tracks",title:"Live tracks",q:"What is being tracked right now?",
-  rest:"/v1/tracks",topic:"isiMonitor3D/v1/+/track2d/+",
+ {id:"tracks",title:"Live tracks",rest:"/v1/tracks",topic:"isiMonitor3D/v1/+/track2d/+",
   interpret:d=>{
     const t=d.tracks||[];
     if(!t.length)return[st("neutral","QUIET"),"No active tracks."];
     const by={};t.forEach(x=>by[x.cls]=(by[x.cls]||0)+1);
     return[st("good",t.length+" TRACKED"),
       Object.entries(by).map(([k,v])=>v+"× "+esc(k)).join(" · ")];}},
- {id:"tracks3d",title:"3D localization",q:"Which objects have live XYZ positions?",
-  rest:"/v1/tracks?type=track_3d",topic:"isiMonitor3D/v1/+/track3d/+",
+ {id:"tracks3d",title:"3D localization",rest:"/v1/tracks?type=track_3d",topic:"isiMonitor3D/v1/+/track3d/+",
   interpret:d=>{
     const t=d.tracks||[];
     if(!t.length)return[st("neutral","QUIET"),
@@ -415,8 +409,7 @@ const CHECKS=[
       t.slice(-6).map(x=>"#"+x.track_id+" <b>"+esc(x.cls)+"</b> ["+
         (x.xyz_m||[]).map(v=>v.toFixed(2)).join(", ")+"] m"+
         (x.single_view?' <span class="mut">(single-view)</span>':"")).join("<br>")];}},
- {id:"pass",title:"Passings",q:"Recent zone entries / exits?",
-  rest:"/v1/passings",topic:"isiMonitor3D/v1/+/zone/+/passings",
+ {id:"pass",title:"Passings",rest:"/v1/passings",topic:"isiMonitor3D/v1/+/zone/+/passings",
   interpret:d=>{
     const p=(d.passings||[]).slice(-5).reverse();
     if(!p.length)return[st("neutral","NONE"),"No boundary crossings recorded."];
@@ -438,7 +431,7 @@ function cardHtml(c){
                "mosquitto_sub -h "+host+" -t '"+c.topic+"' -v");
   }
   return '<div class="card tcard" id="card-'+c.id+'">'+
-    "<h2>"+esc(c.title)+' <span class="n">'+esc(c.q)+"</span>"+
+    "<h2>"+esc(c.title)+
     '<span class="sp"></span><span class="spin"></span>'+
     '<button class="run" data-id="'+c.id+'">RUN</button></h2>'+
     '<div class="result" id="res-'+c.id+'">'+

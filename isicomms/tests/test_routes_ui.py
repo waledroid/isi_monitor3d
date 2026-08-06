@@ -140,7 +140,7 @@ def test_ui_contains_test_cards_and_consumers():
     and the removed passings/tail cards are gone."""
     with _client() as c:
         html = c.get("/ui").text
-        for probe in ("AGV system test", "runall", "mosquitto_sub",
+        for probe in ("AGV TEST", "runall", "mosquitto_sub",
                       "Consumers", "/clients"):
             assert probe in html
         assert 'id="passings"' not in html
