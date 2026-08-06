@@ -266,3 +266,35 @@ def test_zones_state_serves_bus_zone_state(app_with_settings) -> None:
     assert dock["count"] == 1
     assert dock["objects"][0]["cls"] == "palette"
     assert dock["objects"][0]["occupancy_state"] == "full"
+    # No PalletStateManager verdict on the message → explicit null (the JS
+    # falls back to its objects heuristic).
+    assert dock["decision"] is None
+
+
+def test_zones_state_forwards_decision(app_with_settings) -> None:
+    """The PalletStateManager verdict riding ZoneStateMessage.decision must be
+    forwarded verbatim so the comms-panel cards render the enum, not the
+    objects heuristic."""
+    import time as _time
+
+    from backbone.comms.schemas import ZoneDecisionModel, ZoneStateMessage
+    from fastapi.testclient import TestClient
+
+    with TestClient(app_with_settings) as client:
+        bus = client.app.state.bus
+        msg = ZoneStateMessage(
+            ts=_time.time(), zone="dock", objects=(), count=0,
+            decision=ZoneDecisionModel(
+                palette_state="palette_loaded", content=("carton",),
+                counts={"palette": 1, "carton": 1},
+            ),
+        )
+        with bus._lock:
+            bus._state.zone_state_by_zone["dock"] = msg
+            bus._state.last_envelope_ts = _time.time()
+        res = client.get("/api/zones/state")
+
+    dock = res.json()["states"]["dock"]
+    assert dock["decision"]["palette_state"] == "palette_loaded"
+    assert dock["decision"]["content"] == ["carton"]
+    assert dock["decision"]["counts"] == {"palette": 1, "carton": 1}

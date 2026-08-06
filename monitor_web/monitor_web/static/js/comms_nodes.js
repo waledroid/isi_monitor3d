@@ -142,12 +142,34 @@ function t(key, fallback) {
   return strings[key] || fallback;
 }
 
-// Human-readable palette summary (i18n via t()). Detection quirks are
-// resolved here, not displayed: a single physical pallet can be detected
-// twice with different occupancy (palette_vide + palette_carton) — any LOADED
-// reading wins and the carried contents are unioned across readings.
-function _paletteLine(objs) {
-  const pals = (objs || []).filter((o) => o.cls === "palette");
+// Human-readable palette summary (i18n via t()) for one zone STATE object.
+// DUMB RENDERER: when the Backbone's PalletStateManager verdict is present
+// (st.decision.palette_state) it is mapped 1:1 to text — no re-derivation.
+// The objects heuristic below survives only as the fallback for decision-less
+// sources (older Backbone payloads, per-camera zone-worker snapshots).
+function _paletteLine(st) {
+  const dec = st && st.decision;
+  if (dec && dec.palette_state) {
+    if (dec.palette_state === "no_palette") {
+      return t("zone_no_palette", "There is no palette available");
+    }
+    if (dec.palette_state === "palette_empty") {
+      return t("zone_palette_empty", "Palette present but empty");
+    }
+    if (dec.palette_state === "palette_loaded") {
+      const what = (dec.content && dec.content.length)
+        ? dec.content.join(` ${t("zone_and", "and")} `)
+        : t("zone_an_object", "an object");
+      return `${t("zone_palette_with", "Palette present with")} ${what}`;
+    }
+    // "no_data" (or an unknown future enum) → fall through to the heuristic.
+  }
+  // Fallback heuristic. Detection quirks are resolved here, not displayed: a
+  // single physical pallet can be detected twice with different occupancy
+  // (palette_vide + palette_carton) — any LOADED reading wins and the carried
+  // contents are unioned across readings.
+  const objs = (st && st.objects) || [];
+  const pals = objs.filter((o) => o.cls === "palette");
   if (!pals.length) return t("zone_no_palette", "There is no palette available");
   const contents = new Set();
   let loaded = false;
@@ -174,7 +196,7 @@ function _cardHtml(name, color, st) {
   const dot = live ? "status-dot status-dot-green" : "status-dot status-dot-grey";
   let body;
   if (live) {
-    body = `<div class="comms-zone-line">${_esc(_paletteLine(st.objects))}</div>`;
+    body = `<div class="comms-zone-line">${_esc(_paletteLine(st))}</div>`;
   } else {
     body = `<div class="comms-zone-line comms-nodes-subtle">${
       _esc(t("zone_no_data", "no live data"))}</div>`;
@@ -205,7 +227,15 @@ function _renderZoneCards(patches, patchStates, zonesList, localState, gwData) {
   if (gwData && gwData.configured && !gwData.error) {
     for (const z of gwData.zones || []) {
       if (z.objects != null) {
-        gwByName[z.name] = { objects: z.objects, count: z.count, ts: z.state_ts };
+        // Gateway rows carry the PalletStateManager verdict FLAT
+        // (palette_state/content); local bus rows nest it under `decision`.
+        // Normalize to the nested shape here so _paletteLine renders both.
+        gwByName[z.name] = {
+          objects: z.objects, count: z.count, ts: z.state_ts,
+          decision: z.palette_state
+            ? { palette_state: z.palette_state, content: z.content || [] }
+            : null,
+        };
       }
     }
   }

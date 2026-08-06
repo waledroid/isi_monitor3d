@@ -332,6 +332,10 @@ async def zones_state(request: Request) -> JSONResponse:
                 "objects": [o.model_dump(mode="json") for o in msg.objects],
                 "count": msg.count,
                 "ts": msg.ts,
+                # PalletStateManager verdict (None from a pre-decision
+                # Backbone — the JS then falls back to its objects heuristic).
+                "decision": (msg.decision.model_dump(mode="json")
+                             if msg.decision else None),
             }
             for msg in snap.zone_state_by_zone.values()
         },

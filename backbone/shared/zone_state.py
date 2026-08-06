@@ -132,6 +132,7 @@ class ZoneStateTracker:
         self,
         tracks: list[tuple[Track2D, tuple[str, ...]]],
         ts: float,
+        decisions: dict[str, tuple] | None = None,
     ) -> list[ZoneState]:
         """Recompute every zone's contents; return the states to publish now.
 
@@ -141,6 +142,13 @@ class ZoneStateTracker:
                 IDS) so point-in-polygon runs once per track for both this
                 tracker and the transition detector.
             ts:     Frame capture timestamp.
+            decisions: Optional per-zone-id decision signature (an opaque
+                comparable tuple — the orchestrator passes the
+                ``PalletStateManager`` verdict as
+                ``(palette_state, content, sorted counts)``). When present for
+                a zone it joins the change signature, so a decision flip
+                republishes even with identical occupants. ``None`` (the
+                default) keeps the pre-decision occupants-only semantics.
         """
         occupants: dict[str, list[ZoneOccupant]] = {zid: [] for zid in self._zones.ids}
         for track, member_zones in tracks:
@@ -152,7 +160,10 @@ class ZoneStateTracker:
         for zid, occ in occupants.items():
             occ = _resolve_pallet_conflicts(occ)
             occ.sort(key=lambda o: o.track_id)   # deterministic payload ordering
-            sig = tuple((o.track_id, o.cls, o.occupancy_state) for o in occ)
+            sig: tuple = tuple((o.track_id, o.cls, o.occupancy_state) for o in occ)
+            dec_sig = decisions.get(zid) if decisions else None
+            if dec_sig is not None:
+                sig = (sig, dec_sig)
             changed = sig != self._prev_sig.get(zid)
             refresh_due = bool(occ) and (
                 ts - self._last_pub_ts.get(zid, float("-inf")) >= self._refresh_interval_s

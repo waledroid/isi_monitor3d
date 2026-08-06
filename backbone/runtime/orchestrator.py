@@ -67,6 +67,7 @@ from backbone.comms.schemas import (
     ObservationsMessage,
     ProximityMessage,
     ProximityPair,
+    ZoneDecisionModel,
     ZoneSpec,
     ZoneStateMessage,
 )
@@ -84,6 +85,7 @@ from backbone.homography import (
     DisagreementGate,
     FootProjector,
     PalletOccupancy,
+    PalletStateManager,
     TemporalStabilizer,
     TrackConfig,
 )
@@ -370,6 +372,16 @@ class Orchestrator:
         # metric margin fusion). Tunables live under `homography.occupancy`.
         self._occupancy = PalletOccupancy(self._projector, **hg_cfg.get("occupancy", {}))
 
+        # Pallet state manager (the ONE zone-communication decision path):
+        # decides each zone's palette_state enum from per-camera detection
+        # evidence alone (tracks never consulted). Shares the SAME projector
+        # and occupancy instances as the enrichment above — one calibration,
+        # one A+B estimator, two consumers.
+        self._pallet_state = PalletStateManager(
+            self._zones, self._projector, self._occupancy,
+            **hg_cfg.get("pallet_state", {}),
+        )
+
         # Triangulation layer — Mode 2 only. Mode 1 has no second camera, so
         # the entire 3D stack is meaningless and we skip its instantiation.
         if self._mode == "dual_cam_homography_triangulation":
@@ -637,8 +649,16 @@ class Orchestrator:
         # folder is discoverable by subscription before anything moves.
         if self._zone_state is not None:
             try:
+                # Seed the wire with the manager's pre-step verdict (no_data —
+                # evidence not yet observed) alongside the empty occupant list.
+                init_dec = {d.zone_id: d for d in self._pallet_state.initial()}
                 for state in self._zone_state.initial_states(now()):
-                    self._publisher.publish_zone_state(ZoneStateMessage.from_state(state))
+                    msg = ZoneStateMessage.from_state(state)
+                    dec = init_dec.get(state.zone_id)
+                    if dec is not None:
+                        msg = msg.model_copy(
+                            update={"decision": ZoneDecisionModel.from_decision(dec)})
+                    self._publisher.publish_zone_state(msg)
             except Exception:
                 logger.warning("orchestrator: failed to publish initial zone states", exc_info=True)
         if self._diagnostics is not None:
@@ -991,12 +1011,26 @@ class Orchestrator:
 
         # --- zone state (retained per-zone object list) ---
         if self._zone_state is not None:
+            # PalletStateManager verdict — decided from this frame's per-camera
+            # detections (the same dict the occupancy enrichment consumed);
+            # tracks are enrichment only, never a presence input.
+            decisions = {d.zone_id: d
+                         for d in self._pallet_state.step(detections_by_camera)}
             zone_states = self._zone_state.update(
                 [(t, memberships.get(t.track_id, ())) for t in tracks_2d],
                 pair.capture_ts,
+                decisions={
+                    zid: (d.palette_state, d.content, tuple(sorted(d.counts.items())))
+                    for zid, d in decisions.items()
+                },
             )
             for state in zone_states:
-                self._publisher.publish_zone_state(ZoneStateMessage.from_state(state))
+                msg = ZoneStateMessage.from_state(state)
+                dec = decisions.get(state.zone_id)
+                if dec is not None:
+                    msg = msg.model_copy(
+                        update={"decision": ZoneDecisionModel.from_decision(dec)})
+                self._publisher.publish_zone_state(msg)
 
         # --- person↔object proximity (safety/AGV distance on the wire) ---
         # Floor distances between every person track and every object track

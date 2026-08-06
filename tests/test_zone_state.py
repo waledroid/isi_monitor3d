@@ -228,6 +228,35 @@ def test_six_zones_per_node_all_monitored() -> None:
     assert states[0].occupants == ()
 
 
+def test_decision_only_change_triggers_publish() -> None:
+    """The PalletStateManager decision is part of the change signature: a zone
+    whose occupants did NOT change still republishes when its decision flips
+    (e.g. palette_empty → palette_loaded), so the wire always carries the
+    latest verdict. Same decision + same occupants stays silent."""
+    tracker = ZoneStateTracker(_zones(), refresh_interval_s=100.0)
+    tracker.initial_states(ts=0.0)
+    zones = _zones()
+    tracks = [(_track(7), zones.which_ids((1.0, 1.0)))]
+    dec_empty = {"dock": ("palette_empty", (), (("palette", 1),))}
+    tracker.update(tracks, ts=1.0, decisions=dec_empty)
+    # Unchanged occupants + unchanged decision → nothing republished.
+    assert tracker.update(tracks, ts=1.5, decisions=dec_empty) == []
+    # Occupants identical, decision flips → the zone republishes.
+    dec_loaded = {"dock": ("palette_loaded", ("carton",),
+                           (("carton", 1), ("palette", 1)))}
+    states = tracker.update(tracks, ts=2.0, decisions=dec_loaded)
+    assert [s.zone for s in states] == ["dock"]
+
+
+def test_update_without_decisions_keeps_old_behavior() -> None:
+    """Backward compat: callers that never pass ``decisions`` see the exact
+    pre-decision signature semantics (occupants-only change detection)."""
+    tracker = ZoneStateTracker(_zones(), refresh_interval_s=100.0)
+    tracker.initial_states(ts=0.0)
+    _feed(tracker, [_track(7)], ts=1.0)
+    assert _feed(tracker, [_track(7)], ts=1.5) == []
+
+
 def test_conflicting_pallet_readings_resolve_to_loaded() -> None:
     """A double-tracked pallet reading both 'empty' and 'full' in one zone must
     publish only the LOADED reading (the agreed WMS/FMS rule — zones are

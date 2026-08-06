@@ -839,6 +839,65 @@ def test_orchestrator_step_emits_zone_state_over_udp(tmp_path: Path) -> None:
         sock.close()
 
 
+def test_orchestrator_zone_state_carries_pallet_decision(tmp_path: Path) -> None:
+    """E2E: a stepped pallet+carton pair inside a zone yields a zone_state on
+    UDP whose ``decision.palette_state`` is ``palette_loaded`` — the
+    PalletStateManager verdict riding the wire (Mode 1, decision from
+    detection evidence alone; startup no_palette/empty states precede)."""
+    cal_path = _write_single_cam_calibration(tmp_path)
+    onnx_path = _write_stub_pallet_carton_onnx(tmp_path)
+    # The stub pallet's foot (500, 720) maps through the Mode-1 homography to
+    # world (0.0, 2.2) — cover it with one zone.
+    zones_path = tmp_path / "zones_decision.yaml"
+    zones_path.write_text(yaml.safe_dump({
+        "zones": [{
+            "name": "dock", "type": "palette",
+            "polygon": [[-2.0, 0.0], [2.0, 0.0], [2.0, 4.0], [-2.0, 4.0]],
+        }]
+    }))
+    sock, port = _bind_receiver()
+    try:
+        cfg_path = tmp_path / "mode1_decision.yaml"
+        cfg_path.write_text(yaml.safe_dump({
+            "calibration_path": str(cal_path),
+            "zones_path": str(zones_path),
+            "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
+            "detection": {
+                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
+                "class_names": _OCC_CLASSES, "providers": ["CPUExecutionProvider"],
+                "confidence_threshold": 0.25,
+            },
+            "homography": {
+                "tracker": {"plugin": "bytetrack"},
+                "track_config": {"min_hits_to_confirm": 1, "max_lost_frames": 30},
+            },
+            "metadata": {"sinks": [{"plugin": "udp", "host": "127.0.0.1", "port": port}]},
+        }))
+        orch = Orchestrator(cfg_path)
+        img = np.zeros((1000, 1000, 3), dtype=np.uint8)
+        for i in range(6):
+            ts = i * 0.033
+            frame = Frame(camera_id="cam_a", capture_ts=ts, frame_idx=i, image=img)
+            orch.step(FramePair(capture_ts=ts, frame_idx=i, frames={"cam_a": frame}))
+
+        decision = None
+        for _ in range(80):
+            payload, _ = sock.recvfrom(65535)
+            msg = json.loads(payload.decode("utf-8"))
+            if (msg["type"] == "zone_state"
+                    and msg.get("decision")
+                    and msg["decision"]["palette_state"] == "palette_loaded"):
+                decision = msg["decision"]
+                assert msg["zone"] == "dock"
+                break
+        assert decision is not None, "no palette_loaded zone_state decision on the bus"
+        assert decision["content"] == ["carton"]
+        assert decision["counts"].get("palette") == 1
+        orch.publisher.close()
+    finally:
+        sock.close()
+
+
 def test_orchestrator_zone_state_disabled_via_config(tmp_path: Path) -> None:
     cal_path = _write_calibration(tmp_path)
     onnx_path = _write_stub_onnx(tmp_path)
