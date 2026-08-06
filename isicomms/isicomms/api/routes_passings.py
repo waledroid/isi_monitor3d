@@ -1,5 +1,9 @@
 """GET /passings — recent zone-passing events across all nodes.
 
+``GET /passages`` is a French alias for the same endpoint (AGV engineers on
+site work in French); both names stay supported — /passings is the frozen
+canonical, /passages is additive.
+
 Query params:
   ?limit=N    max events to return (clamped to passings_buffer)
   ?node=<id>  filter to a single node
@@ -16,6 +20,8 @@ router = APIRouter()
 
 
 @router.get("/passings", dependencies=[Depends(require_token)])
+@router.get("/passages", dependencies=[Depends(require_token)],
+            include_in_schema=False)   # FR alias — same handler, same shape
 async def passings(
     request: Request,
     limit: int | None = Query(default=None, ge=1),

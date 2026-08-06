@@ -72,3 +72,11 @@ def test_passings_clamped_to_buffer(client):
     data = r.json()
     # The deque itself is capped at 10 (passings_buffer in NodeState).
     assert data["count"] == 10
+
+
+def test_passages_alias_matches_passings(client):
+    """/passages (FR alias) returns exactly what /passings returns."""
+    a = client.get("/v1/passings")
+    b = client.get("/v1/passages")
+    assert a.status_code == b.status_code == 200
+    assert a.json() == b.json()
