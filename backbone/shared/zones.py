@@ -50,6 +50,11 @@ class Zone:
     kind: str = "palette"
     severity: str = "info"
     id: str = ""          # set in __post_init__ when absent (legacy files)
+    # Height (meters) of the plane this zone's polygon lives on — 0.0 is the
+    # floor (back-compat default; absent in YAML ⇒ 0.0). Non-zero for a
+    # raised platform/shelf zone; consumers project into cameras and bucket
+    # membership on THIS plane instead of assuming Z=0 (see pixel_to_plane).
+    z_base_m: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -150,6 +155,7 @@ class ZoneRegistry:
                     kind=entry.get("kind", "palette"),
                     severity=entry.get("severity", "info"),
                     id=str(entry.get("id") or ""),   # "" ⇒ derived from name
+                    z_base_m=float(entry.get("z_base_m", 0.0)),
                 )
             )
         return cls(zones)

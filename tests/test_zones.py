@@ -231,6 +231,44 @@ def test_registry_load_reads_kind_and_severity(tmp_path: Path) -> None:
     assert reg["press"].severity == "critical"
 
 
+# ---- z_base_m: platform/shelf zones off the floor plane (back-compat default) ----
+
+
+def test_zone_defaults_z_base_m_to_zero() -> None:
+    z = Zone("z", "storage", SQUARE)
+    assert z.z_base_m == 0.0
+
+
+def test_zone_accepts_z_base_m() -> None:
+    z = Zone("z", "storage", SQUARE, z_base_m=0.304)
+    assert z.z_base_m == 0.304
+
+
+def test_registry_load_back_compat_without_z_base_m(tmp_path: Path) -> None:
+    """Pre-z_base_m zones.yaml (no key) still loads, defaulting to the floor."""
+    path = tmp_path / "zones.yaml"
+    path.write_text(yaml.safe_dump({
+        "zones": [{"name": "z", "type": "danger",
+                   "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]}],
+    }))
+    reg = ZoneRegistry.load(path)
+    assert reg["z"].z_base_m == 0.0
+
+
+def test_registry_load_reads_z_base_m(tmp_path: Path) -> None:
+    path = tmp_path / "zones.yaml"
+    path.write_text(yaml.safe_dump({
+        "zones": [{
+            "name": "sortie_machine_1",
+            "type": "storage",
+            "z_base_m": 0.304,
+            "polygon": [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]],
+        }],
+    }))
+    reg = ZoneRegistry.load(path)
+    assert reg["sortie_machine_1"].z_base_m == pytest.approx(0.304)
+
+
 # ---------- membership hysteresis (2026-08-06: boundary flap regression) ----------
 
 from backbone.shared.zones import ZoneMembershipHysteresis  # noqa: E402

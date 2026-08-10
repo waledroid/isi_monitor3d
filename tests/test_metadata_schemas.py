@@ -378,6 +378,34 @@ def test_config_message_json_roundtrip() -> None:
     assert back == msg
 
 
+def test_zonespec_z_base_m_defaults_zero() -> None:
+    spec = ZoneSpec(
+        name="rack_b3", kind="etagere", type="storage", severity="info",
+        polygon=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+    )
+    assert spec.z_base_m == 0.0
+
+
+def test_zonespec_parses_without_z_base_m_old_advert() -> None:
+    """A retained ConfigMessage advert from a pre-z_base_m Backbone (no key
+    in the wire payload) must still parse — additive, default-valued."""
+    old_advert = {
+        "name": "rack_b3", "kind": "etagere", "type": "storage", "severity": "info",
+        "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+    }
+    spec = ZoneSpec.model_validate(old_advert)
+    assert spec.z_base_m == 0.0
+
+
+def test_zonespec_z_base_m_roundtrips() -> None:
+    spec = ZoneSpec(
+        name="sortie_machine_1", kind="palette", type="storage", severity="info",
+        polygon=[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], z_base_m=0.304,
+    )
+    back = ZoneSpec.model_validate(json.loads(spec.model_dump_json()))
+    assert back.z_base_m == pytest.approx(0.304)
+
+
 def test_parse_envelope_dispatches_config() -> None:
     msg = _make_config()
     data = json.loads(msg.model_dump_json())

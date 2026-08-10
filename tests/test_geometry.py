@@ -21,6 +21,7 @@ from backbone.shared.geometry import (
     floor_to_pixel,
     fundamental_from_projections,
     pixel_to_floor,
+    pixel_to_plane,
     point_line_distance_px,
     project_world_to_pixel,
     projection_from_K_R_t,
@@ -254,6 +255,65 @@ def test_undistort_points_checked_flags_divergent_border_points() -> None:
 
     _und_b, ok_b = undistort_points_checked(border, K, D)
     assert not ok_b.any(), "divergent border undistortions must be flagged invalid"
+
+
+# ---------- pixel_to_plane: raised-plane generalization of pixel_to_floor ----
+
+
+def test_pixel_to_plane_z0_parity_with_pixel_to_floor() -> None:
+    """z_m=0 must agree with the existing undistort + pixel_to_floor path to
+    <1e-6 m — pixel_to_floor's H IS this same ray/plane intersection, baked
+    into a matrix for Z=0."""
+    K2 = np.array([[1077.0, 0.0, 961.0], [0.0, 1077.0, 550.0], [0.0, 0.0, 1.0]])
+    D2 = np.array([-0.36, 0.162, -0.003, -0.001, -0.069])   # site cam_b lens
+    R2 = np.diag([1.0, -1.0, -1.0])
+    t2 = np.array([0.0, 0.0, 2.5])
+    H2 = floor_homography_from_K_R_t(K2, R2, t2)
+    pts = np.array([
+        [961.0, 550.0],    # principal point
+        [100.0, 100.0],    # near a corner
+        [1800.0, 1000.0],  # near the opposite corner
+        [500.0, 900.0],
+        [1500.0, 200.0],
+    ])
+    via_plane = pixel_to_plane(pts, K2, D2, R2, t2, 0.0)
+    via_floor = pixel_to_floor(undistort_points(pts, K2, D2), H2)
+    assert via_plane is not None
+    np.testing.assert_allclose(via_plane, via_floor, atol=1e-6)
+
+
+def test_pixel_to_plane_analytic_raised_plane_hit() -> None:
+    """A pixel engineered so its ray hits world (1, 2, 0.304) exactly."""
+    K3 = np.eye(3)
+    R3 = np.eye(3)
+    t3 = np.zeros(3)
+    z_target = 0.304
+    uv = np.array([[1.0 / z_target, 2.0 / z_target]])
+    out = pixel_to_plane(uv, K3, ZERO_D, R3, t3, z_target)
+    assert out is not None
+    np.testing.assert_allclose(out, [[1.0, 2.0]], atol=1e-9)
+
+
+def test_pixel_to_plane_degenerate_ray_returns_none() -> None:
+    """A camera looking exactly horizontally: the principal-point ray is
+    parallel to every horizontal plane — no intersection exists."""
+    R_h = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
+    t_h = np.array([0.0, 0.0, 1.0])
+    uv = np.array([[500.0, 500.0]])   # principal point -> straight-ahead ray
+    out = pixel_to_plane(uv, K, ZERO_D, R_h, t_h, 0.0)
+    assert out is None
+
+
+def test_pixel_to_plane_mixed_batch_marks_degenerate_rows_nan() -> None:
+    """One degenerate pixel among valid ones doesn't sink the whole batch —
+    it becomes a NaN row so the caller can tell which input failed."""
+    R_h = np.array([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]])
+    t_h = np.array([0.0, 0.0, 1.0])
+    uv = np.array([[500.0, 500.0], [600.0, 500.0]])
+    out = pixel_to_plane(uv, K, ZERO_D, R_h, t_h, 0.0)
+    assert out is not None
+    assert np.all(np.isnan(out[0]))
+    np.testing.assert_allclose(out[1], [10.0, 0.0], atol=1e-6)
 
 
 def test_floor_to_pixel_distorted_checked_flags_folded_projections() -> None:

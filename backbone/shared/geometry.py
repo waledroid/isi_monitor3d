@@ -96,6 +96,86 @@ def pixel_to_floor(
     return out.reshape(-1, 2)
 
 
+def pixel_to_plane(
+    points_uv: np.ndarray,
+    K: np.ndarray,
+    D: np.ndarray,
+    R: np.ndarray,
+    t: np.ndarray,
+    z_m: float,
+    *,
+    min_ray_z_component: float = 1e-9,
+) -> np.ndarray | None:
+    """Project pixels onto a horizontal plane ``Z = z_m`` via ray/plane intersection.
+
+    Generalizes :func:`pixel_to_floor` (restricted to ``Z = 0`` and driven by
+    the baked-in homography ``H``) to an arbitrary height — the plane a raised
+    zone (a loading platform, a shelf) actually sits on. For ``z_m = 0`` this
+    agrees with ``pixel_to_floor(undistort_points(points_uv, K, D), H)`` to
+    <1e-6 m (pinned by test) — ``H`` IS this same ray/plane intersection,
+    specialized to ``Z = 0`` and folded into a 3x3 matrix at calibration time.
+
+    Unlike :func:`pixel_to_floor`, which expects already-undistorted input,
+    ``points_uv`` here are RAW (distorted) pixel coordinates — undistortion
+    happens internally, once, since there's no plane-specific homography to
+    fold it into.
+
+    ``R, t`` follow this module's camera-POSE convention (world←camera, see
+    :func:`projection_from_K_R_t`): the camera center in world coordinates is
+    ``t``, and a camera-frame ray direction rotates into world with ``R``
+    alone (no translation — directions, not points).
+
+    Args:
+        points_uv: ``(N, 2)`` RAW (distorted) pixel coordinates.
+        K: 3x3 intrinsic matrix.
+        D: distortion coefficients (k1, k2, p1, p2, k3, ...).
+        R: 3x3 rotation, world←camera (camera pose).
+        t: camera center in world coordinates, meters.
+        z_m: height (meters) of the horizontal plane to intersect.
+        min_ray_z_component: a ray whose world-frame Z-direction magnitude is
+            below this (parallel to the plane) is degenerate.
+
+    Returns:
+        ``(N, 2)`` array of world ``(X, Y)`` meters on the plane ``Z = z_m``.
+        Degenerate points (ray parallel to the plane, or the plane lies
+        behind the camera along the ray) come back as a NaN row so callers
+        processing a batch can locate exactly which inputs failed. If EVERY
+        point in the call is degenerate, the whole call returns ``None``
+        instead — the common case is a single-point call (e.g. one detection's
+        foot pixel), where "some rows NaN" and "totally degenerate" coincide
+        and a plain ``None`` is the more useful signal for the caller.
+    """
+    pts = np.asarray(points_uv, dtype=np.float64).reshape(-1, 2)
+    K = np.asarray(K, dtype=np.float64)
+    D = np.asarray(D, dtype=np.float64)
+    R = np.asarray(R, dtype=np.float64)
+    t = np.asarray(t, dtype=np.float64).reshape(3)
+
+    und = undistort_points(pts, K, D)
+    fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
+    dir_cam = np.column_stack([
+        (und[:, 0] - cx) / fx,
+        (und[:, 1] - cy) / fy,
+        np.ones(len(und)),
+    ])
+    dir_world = dir_cam @ R.T   # row i = R @ dir_cam[i] (rotate direction only)
+
+    dz = dir_world[:, 2]
+    valid = np.abs(dz) > min_ray_z_component
+    s = np.full(len(pts), np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        s[valid] = (z_m - t[2]) / dz[valid]
+    valid &= s > 0.0   # plane must be ahead of the camera along the ray
+
+    if not valid.any():
+        return None
+
+    out = np.full((len(pts), 2), np.nan)
+    world = t[np.newaxis, :] + s[:, np.newaxis] * dir_world
+    out[valid] = world[valid, :2]
+    return out
+
+
 def floor_to_pixel(
     points_xy_m: np.ndarray,
     H: np.ndarray,

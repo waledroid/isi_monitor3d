@@ -75,7 +75,12 @@ Backbone always populates it.
 Within v6 (no bump — additive + default-valued): optional ``decision``
 (``ZoneDecisionModel`` — the PalletStateManager enum + content + counts) added
 to ``ZoneStateMessage``. Defaults to None so a decision-less payload from an
-older Backbone still parses everywhere."""
+older Backbone still parses everywhere.
+
+Within v6 (no bump — additive + default-valued): ``z_base_m`` (height in
+meters of the plane a zone's polygon lives on — mirrors ``Zone.z_base_m``)
+added to ``ZoneSpec``. Defaults to 0.0 (the floor) so a legacy retained
+``ConfigMessage`` advert still parses."""
 
 _ACCEPTED_VERSIONS = frozenset({3, 4, 5, 6})
 
@@ -599,6 +604,10 @@ class ZoneSpec(BaseModel):
     type: str
     severity: str
     polygon: list[list[float]]   # [[x, y], ...] in meters
+    # Height (meters) of the plane this zone's polygon lives on — mirrors
+    # ``Zone.z_base_m`` (0.0 = floor). Additive within v6, defaulted so a
+    # legacy retained advert (pre-z_base_m Backbone) still parses.
+    z_base_m: float = 0.0
 
 
 class ConfigMessage(BaseModel):
