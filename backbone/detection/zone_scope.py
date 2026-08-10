@@ -114,7 +114,12 @@ def _project_world3(world3, K, D, R, t, image_size_wh) -> np.ndarray:
 
 def build_zone_membership_filter(rig, zones, tol_m: float = 0.15):
     """A ``filter(cam_id, foot_uv_calibration_px) -> bool`` closure: True when
-    the detection's floor point lies inside ANY zone polygon (± ``tol_m``).
+    the detection's metric point lies inside ANY zone polygon (± ``tol_m``),
+    tested on EACH ZONE'S OWN PLANE (``Zone.z_base_m`` via
+    :class:`~backbone.shared.zones.ZoneAwareProjector`): floor zones keep the
+    exact undistort+H floor path; a raised zone (a platform, a shelf) tests
+    the ray/plane intersection at its own height, so an on-platform object
+    whose FLOOR projection overshoots the polygon is still kept.
 
     The semantic guarantee behind zone-scoped detection: a zone never reports
     an object that is not metrically inside a zone, no matter how far its
@@ -122,27 +127,33 @@ def build_zone_membership_filter(rig, zones, tol_m: float = 0.15):
     sampled as a 5-point cross (center ± tol on each axis) so an object
     straddling the boundary by projection error is kept.
     """
-    from backbone.shared.geometry import pixel_to_floor, undistort_points
+    from backbone.shared.zones import ZoneAwareProjector
 
-    views = {cid: rig[cid] for cid in rig.camera_ids}
+    projector = ZoneAwareProjector(rig)
+    zone_list = [zones[name] for name in zones.names]
     offsets = ((0.0, 0.0), (tol_m, 0.0), (-tol_m, 0.0),
                (0.0, tol_m), (0.0, -tol_m))
 
     def _filter(cam_id: str, foot_uv) -> bool:
-        view = views.get(cam_id)
-        if view is None:
+        if cam_id not in projector:
             return True                       # unknown camera: never drop
         try:
-            px = np.asarray([foot_uv], dtype=np.float64)
-            xy = pixel_to_floor(undistort_points(px, view.K, view.D), view.H)[0]
-            if not np.isfinite(xy).all():
-                return True                   # fail open — never lose a det to NaN
-            for name in zones.names:
-                zone = zones[name]
+            # One projection per distinct plane height (all-floor configs
+            # project exactly once, as before).
+            plane_xy: dict[float, tuple[float, float] | None] = {}
+            degenerate = False
+            for zone in zone_list:
+                z = float(zone.z_base_m)
+                if z not in plane_xy:
+                    plane_xy[z] = projector.position_on_plane(cam_id, foot_uv, z)
+                xy = plane_xy[z]
+                if xy is None:
+                    degenerate = True         # fail open — never lose a det to NaN
+                    continue
                 for dx, dy in offsets:
                     if zone.contains((float(xy[0] + dx), float(xy[1] + dy))):
                         return True
-            return False
+            return degenerate
         except Exception:
             return True                       # fail open on any geometry error
     return _filter
@@ -275,20 +286,23 @@ def zone_crop_boxes(
     """Per-camera crop boxes, CALIBRATION-frame pixels: ``{cam: [(zone, box)]}``.
 
     The box is the tight bbox of the zone polygon's corners projected at the
-    floor (``z=0``), padded by ``margin_px`` and clipped to the frame. Zones
-    whose visible box is smaller than ``min_side_px`` on either side
-    (barely/not visible) are skipped.
+    ZONE'S OWN base plane (``Zone.z_base_m``; 0 = the floor, matching the
+    pre-z_base behavior exactly), padded by ``margin_px`` and clipped to the
+    frame. Zones whose visible box is smaller than ``min_side_px`` on either
+    side (barely/not visible) are skipped.
 
     ``crop_height_m`` default 0 (config ``detection.zone_crop_height_m``):
-    the crop IS the floor-polygon rectangle — no headroom. Nonzero values
-    additionally project the polygon at that height and take the union bbox
-    (for sites whose tall loads must stay fully in-crop). History: 2.0 m
-    ballooned a small floor zone into a frame-spanning strip at low camera
-    angles (2026-07-23 live case: Sortie_1 on cam_b covered (0,0,336,1080)).
+    the crop IS the base-polygon rectangle — no headroom. Nonzero values
+    additionally project the polygon at ``z_base_m + crop_height_m`` and take
+    the union bbox (for sites whose tall loads must stay fully in-crop).
+    History: 2.0 m ballooned a small floor zone into a frame-spanning strip
+    at low camera angles (2026-07-23 live case: Sortie_1 on cam_b covered
+    (0,0,336,1080)).
 
     Mode-1 placeholder extrinsics (only ``H`` is real) can't lift the polygon
-    off the floor: with a nonzero ``crop_height_m`` the floor bbox is extended
-    UPWARD by its own height as a conservative stand-in.
+    off the floor: a raised zone projects at the floor like before, and with a
+    nonzero ``crop_height_m`` the floor bbox is extended UPWARD by its own
+    height as a conservative stand-in.
     """
     boxes: dict[str, list[tuple[str, tuple[int, int, int, int]]]] = {}
     for cam_id in rig.camera_ids:
@@ -296,14 +310,17 @@ def zone_crop_boxes(
         w, h = int(view.image_size_wh[0]), int(view.image_size_wh[1])
         cam_boxes = []
         for name in zones.names:
-            poly = densify_polygon(zones[name].polygon, segments_per_edge=8)
+            zone = zones[name]
+            poly = densify_polygon(zone.polygon, segments_per_edge=8)
+            z0 = float(zone.z_base_m)
             if has_metric_camera_model(view.K, view.R, view.t):
-                floor3 = np.hstack([poly, np.zeros((len(poly), 1))])
-                pts3 = [_project_world3(floor3, view.K, view.D, view.R, view.t,
+                base3 = np.hstack([poly, np.full((len(poly), 1), z0)])
+                pts3 = [_project_world3(base3, view.K, view.D, view.R, view.t,
                                         view.image_size_wh)]
                 if crop_height_m > 0:
                     top3 = np.hstack(
-                        [poly, np.full((len(poly), 1), float(crop_height_m))])
+                        [poly,
+                         np.full((len(poly), 1), z0 + float(crop_height_m))])
                     pts3.append(_project_world3(top3, view.K, view.D, view.R,
                                                 view.t, view.image_size_wh))
                 uv = np.vstack(pts3)
@@ -340,9 +357,11 @@ def zone_fill_polygons(
     ~35-45 % of the area on this rig); with fill on, ``detect()`` blanks those
     pixels to neutral gray so the detector cannot see off-zone objects at all
     (the membership filter then only mops up boundary cases). ``dilate_px`` is
-    ``_FILL_DILATE_M`` metres at the zone's local pixel scale. With
-    ``crop_height_m`` > 0 the fill region is the convex hull of the floor and
-    top projections. A zone whose projection is partially invalid (behind the
+    ``_FILL_DILATE_M`` metres at the zone's local pixel scale. Each zone
+    projects at ITS OWN base plane (``Zone.z_base_m``; Mode-1 H-only rigs
+    fall back to the floor). With ``crop_height_m`` > 0 the fill region is
+    the convex hull of the base and top (``z_base_m + crop_height_m``)
+    projections. A zone whose projection is partially invalid (behind the
     camera / non-finite) gets NO fill entry — its crop stays unfilled
     (fail-open, same spirit as the membership filter).
     """
@@ -351,13 +370,15 @@ def zone_fill_polygons(
         view = rig[cam_id]
         cam_polys: dict[str, tuple[np.ndarray, float]] = {}
         for name in zones.names:
-            poly = densify_polygon(zones[name].polygon, segments_per_edge=8)
+            zone = zones[name]
+            poly = densify_polygon(zone.polygon, segments_per_edge=8)
+            z0 = float(zone.z_base_m)
             metric_area = float(cv2.contourArea(
                 np.asarray(poly, dtype=np.float32)))
             metric = has_metric_camera_model(view.K, view.R, view.t)
             if metric:
-                floor3 = np.hstack([poly, np.zeros((len(poly), 1))])
-                uv = _project_world3(floor3, view.K, view.D, view.R, view.t,
+                base3 = np.hstack([poly, np.full((len(poly), 1), z0)])
+                uv = _project_world3(base3, view.K, view.D, view.R, view.t,
                                      view.image_size_wh)
             else:
                 uv = floor_to_pixel(poly, view.H)
@@ -366,7 +387,7 @@ def zone_fill_polygons(
             fill_uv = uv
             if crop_height_m > 0 and metric:
                 top3 = np.hstack(
-                    [poly, np.full((len(poly), 1), float(crop_height_m))])
+                    [poly, np.full((len(poly), 1), z0 + float(crop_height_m))])
                 top = _project_world3(top3, view.K, view.D, view.R, view.t,
                                       view.image_size_wh)
                 if not np.isfinite(top).all():

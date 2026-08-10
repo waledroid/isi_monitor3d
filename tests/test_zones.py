@@ -313,5 +313,6 @@ def test_membership_hysteresis_enter_confirm_filters_ghost_tracks():
     assert h.update(5, ("z1",)) == ("z1",)               # 3rd: in
     # a 2-frame ghost never makes it
     h2 = ZoneMembershipHysteresis(exit_after=15, enter_after=3)
-    h2.update(9, ("z1",)); h2.update(9, ("z1",))
+    h2.update(9, ("z1",))
+    h2.update(9, ("z1",))
     assert h2.update(9, ()) == ()

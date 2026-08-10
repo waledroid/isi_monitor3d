@@ -210,6 +210,65 @@ class ZoneRegistry:
         return tuple(zid for zid, z in self._by_id.items() if z.contains(xy_m))
 
 
+class ZoneAwareProjector:
+    """Project a camera foot pixel onto a ZONE'S OWN base plane.
+
+    The ONE home for plane-aware zone positioning (z_base_m design, decision
+    5): ``backbone.detection.zone_scope.build_zone_membership_filter`` (the
+    detector-level in-zone guarantee) and ``PalletStateManager`` (bucketing)
+    both consume this instead of assuming Z=0. Semantics:
+
+    * floor zone (``z_base_m == 0``) — the existing undistort + ``H`` floor
+      path, bit-for-bit identical to the pre-z_base behavior;
+    * raised zone on a metric rig — ray/plane intersection at ``z_base_m``
+      (:func:`backbone.shared.geometry.pixel_to_plane`);
+    * raised zone on a Mode-1 H-only rig (placeholder ``K=I, R=I, t=0``) —
+      falls back to the floor path (``H`` cannot lift a ray off the floor).
+
+    ``rig`` is anything with ``camera_ids`` and item access to views carrying
+    ``K, D, R, t, H`` (a ``CameraRig`` or a test stub). Returns ``None`` for
+    an unknown camera or a degenerate/non-finite projection — callers decide
+    their own fail-open policy.
+    """
+
+    def __init__(self, rig) -> None:
+        self._views = {cid: rig[cid] for cid in rig.camera_ids}
+
+    def __contains__(self, cam_id: object) -> bool:
+        return cam_id in self._views
+
+    def position_on_plane(
+        self, cam_id: str, foot_uv: tuple[float, float], z_m: float,
+    ) -> tuple[float, float] | None:
+        """World ``(X, Y)`` metres of a RAW foot pixel on the plane ``Z=z_m``."""
+        from backbone.shared.geometry import (
+            has_metric_camera_model,
+            pixel_to_floor,
+            pixel_to_plane,
+            undistort_points,
+        )
+
+        view = self._views.get(cam_id)
+        if view is None:
+            return None
+        px = np.asarray([foot_uv], dtype=np.float64)
+        if z_m != 0.0 and has_metric_camera_model(view.K, view.R, view.t):
+            xy = pixel_to_plane(px, view.K, view.D, view.R, view.t, float(z_m))
+            if xy is None or not np.isfinite(xy[0]).all():
+                return None
+            return (float(xy[0, 0]), float(xy[0, 1]))
+        xy = pixel_to_floor(undistort_points(px, view.K, view.D), view.H)[0]
+        if not np.isfinite(xy).all():
+            return None
+        return (float(xy[0]), float(xy[1]))
+
+    def position_in_zone(
+        self, cam_id: str, foot_uv: tuple[float, float], zone: Zone,
+    ) -> tuple[float, float] | None:
+        """:meth:`position_on_plane` at ``zone.z_base_m`` — the zone's plane."""
+        return self.position_on_plane(cam_id, foot_uv, float(zone.z_base_m))
+
+
 class ZoneMembershipHysteresis:
     """Debounce per-track zone membership at polygon boundaries.
 

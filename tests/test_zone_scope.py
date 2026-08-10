@@ -597,3 +597,186 @@ def test_zone_filter_accepting_keeps_detections() -> None:
                              zone_filter=lambda cid, foot: True)
     out = det.detect(_pair({"cam_a": np.zeros((1000, 1000, 3), np.uint8)}))
     assert len(out["cam_a"]) == 1
+
+
+# ---- plane-aware zone projection & membership (z_base_m) --------------------
+#
+# Rig geometry used throughout: look-down camera at the origin, z=3, f=1000,
+# c=(500, 500) — a world point (X, Y, z) projects to u = 1000*X/(3-z) + 500.
+# Raising the plane brings it closer to the camera, so a raised zone's
+# footprint MAGNIFIES outward vs its z=0 projection.
+
+_PLATFORM_Z = 0.304          # the live sortie_machine_1 platform height
+_POLY_1M = [[0.8, -0.2], [1.2, -0.2], [1.2, 0.2], [0.8, 0.2]]
+
+
+def _zones_at(polygon, z_base_m, name="Z1") -> ZoneRegistry:
+    return ZoneRegistry.from_dict({"zones": [{
+        "name": name, "type": "palette", "polygon": polygon,
+        "z_base_m": z_base_m}]})
+
+
+class _ViewH:
+    """Mode-1 placeholder extrinsics — only ``H`` is real (K=I, R=I, t=0)."""
+
+    def __init__(self, image_size_wh=(1000, 1000)):
+        self.K = np.eye(3)
+        self.D = np.zeros(5)
+        self.R = np.eye(3)
+        self.t = np.zeros(3)
+        self.H = floor_homography_from_K_R_t(
+            K, R_LOOK_DOWN, np.array([0.0, 0.0, 3.0]))
+        self.image_size_wh = image_size_wh
+
+
+def test_raised_zone_crop_box_shifts_outward() -> None:
+    """A zone on a 0.304 m platform projects at ITS plane: the footprint
+    magnifies outward (u = 1000*X/(3-0.304)+500 vs /3). Floor x-range
+    [766.7, 900] → raised [796.8, 945.1] before margins."""
+    rig = _FakeRig({"cam_a": _View()})
+    floor_box = zone_crop_boxes(rig, _zones(_POLY_1M))["cam_a"][0][1]
+    raised_box = zone_crop_boxes(
+        rig, _zones_at(_POLY_1M, _PLATFORM_Z))["cam_a"][0][1]
+    assert raised_box[0] > floor_box[0]        # near edge moves outward too
+    assert raised_box[2] > floor_box[2]        # far edge moves further out
+    assert 20 < raised_box[0] - floor_box[0] < 40    # ≈ 30 px at X=0.8
+    assert 35 < raised_box[2] - floor_box[2] < 55    # ≈ 45 px at X=1.2
+    # Headroom stacks ON TOP of the base plane: top at z_base + crop_height.
+    lifted = zone_crop_boxes(rig, _zones_at(_POLY_1M, _PLATFORM_Z),
+                             crop_height_m=1.0)["cam_a"][0][1]
+    assert lifted[2] > raised_box[2]
+
+
+def test_z_base_zero_crop_boxes_identical_to_old_way() -> None:
+    """Parity: z_base_m=0 zones produce EXACTLY the boxes the pre-z_base code
+    produced — pinned by replicating the old projection math here."""
+    import math
+
+    from backbone.detection.zone_scope import _project_world3
+    from backbone.shared.geometry import densify_polygon
+
+    rig = _FakeRig({"cam_a": _View()})
+    view = rig["cam_a"]
+    for crop_h in (0.0, 2.0):
+        got = zone_crop_boxes(rig, _zones(_POLY_1M),
+                              crop_height_m=crop_h)["cam_a"][0][1]
+        poly = densify_polygon(np.asarray(_POLY_1M, dtype=np.float64),
+                               segments_per_edge=8)
+        pts3 = [_project_world3(np.hstack([poly, np.zeros((len(poly), 1))]),
+                                view.K, view.D, view.R, view.t,
+                                view.image_size_wh)]
+        if crop_h > 0:
+            pts3.append(_project_world3(
+                np.hstack([poly, np.full((len(poly), 1), crop_h)]),
+                view.K, view.D, view.R, view.t, view.image_size_wh))
+        uv = np.vstack(pts3)
+        uv = uv[~np.isnan(uv).any(axis=1)]
+        expected = (max(0, math.floor(uv[:, 0].min()) - 16),
+                    max(0, math.floor(uv[:, 1].min()) - 16),
+                    min(1000, math.ceil(uv[:, 0].max()) + 16),
+                    min(1000, math.ceil(uv[:, 1].max()) + 16))
+        assert got == expected
+
+
+def test_raised_zone_fill_polygon_projects_at_base_plane() -> None:
+    from backbone.detection.zone_scope import zone_fill_polygons
+
+    rig = _FakeRig({"cam_a": _View()})
+    floor_px = zone_fill_polygons(rig, _zones(_POLY_1M))["cam_a"]["Z1"][0]
+    raised_px = zone_fill_polygons(
+        rig, _zones_at(_POLY_1M, _PLATFORM_Z))["cam_a"]["Z1"][0]
+    # Exact plane: max u = 1000*1.2/(3-0.304) + 500.
+    assert abs(raised_px[:, 0].max() - (1000 * 1.2 / 2.696 + 500)) < 1e-6
+    assert raised_px[:, 0].max() > floor_px[:, 0].max() + 20
+
+
+def test_membership_accepts_platform_detection_floor_would_misplace() -> None:
+    """The live platform case, synthesized: an object at (3, 0) ON a 0.304 m
+    platform. Its foot pixel floor-projects to X≈3.34 — outside the zone even
+    with the ±0.15 m cross — but plane-projects to exactly (3.0, 0), inside.
+    The z_base-aware filter keeps it; a floor (z=0) zone still drops it."""
+    from backbone.detection.zone_scope import build_zone_membership_filter
+
+    rig = _FakeRig({"cam_a": _View()})
+    poly = [[2.9, -0.1], [3.1, -0.1], [3.1, 0.1], [2.9, 0.1]]
+    foot = (1000.0 * 3.0 / (3.0 - _PLATFORM_Z) + 500.0, 500.0)
+    raised = build_zone_membership_filter(rig, _zones_at(poly, _PLATFORM_Z))
+    assert raised("cam_a", foot) is True
+    floor = build_zone_membership_filter(rig, _zones(poly))
+    assert floor("cam_a", foot) is False
+
+
+def test_membership_floor_zones_bit_identical_to_old_way() -> None:
+    """z_base_m=0 zones keep the EXACT old filter semantics — replicated here
+    (undistort + H floor projection + 5-point ±tol cross) over a pixel grid
+    spanning inside/boundary/outside/off-frame cases."""
+    from backbone.detection.zone_scope import build_zone_membership_filter
+    from backbone.shared.geometry import pixel_to_floor, undistort_points
+
+    rig = _FakeRig({"cam_a": _View()})
+    zones = ZoneRegistry.from_dict({"zones": [
+        {"name": "A", "type": "palette", "polygon": _POLY_1M},
+        {"name": "B", "type": "etagere",
+         "polygon": [[-1.5, -1.5], [-0.5, -1.5], [-0.5, -0.5], [-1.5, -0.5]]},
+    ]})
+    filt = build_zone_membership_filter(rig, zones)
+    view = rig["cam_a"]
+    offsets = ((0.0, 0.0), (0.15, 0.0), (-0.15, 0.0), (0.0, 0.15), (0.0, -0.15))
+    for foot in [(833.3, 500.0), (920.0, 500.0), (966.7, 500.0), (970.0, 500.0),
+                 (100.0, 100.0), (160.0, 160.0), (500.0, 500.0), (0.0, 0.0),
+                 (999.0, 999.0)]:
+        px = np.asarray([foot], dtype=np.float64)
+        xy = pixel_to_floor(undistort_points(px, view.K, view.D), view.H)[0]
+        if not np.isfinite(xy).all():
+            expected = True
+        else:
+            expected = any(
+                zones[name].contains((float(xy[0] + dx), float(xy[1] + dy)))
+                for name in zones.names for dx, dy in offsets)
+        assert filt("cam_a", foot) is expected, f"diverged at {foot}"
+    # Unknown camera still fails open (never drop).
+    assert filt("cam_x", (10.0, 10.0)) is True
+
+
+def test_mode1_h_only_raised_zone_keeps_floor_behavior() -> None:
+    """Mode-1 rigs (H only) cannot lift a ray off the floor: a raised zone
+    projects/filters exactly like a floor zone — boxes (incl. the crop_height
+    upward stand-in) and membership all keep today's behavior, no crash."""
+    from backbone.detection.zone_scope import build_zone_membership_filter
+
+    rig = _FakeRig({"cam_a": _ViewH()})
+    for crop_h in (0.0, 2.0):
+        floor_boxes = zone_crop_boxes(rig, _zones(_POLY_1M),
+                                      crop_height_m=crop_h)
+        raised_boxes = zone_crop_boxes(rig, _zones_at(_POLY_1M, _PLATFORM_Z),
+                                       crop_height_m=crop_h)
+        assert raised_boxes == floor_boxes
+    filt_r = build_zone_membership_filter(rig, _zones_at(_POLY_1M, _PLATFORM_Z))
+    filt_f = build_zone_membership_filter(rig, _zones(_POLY_1M))
+    for foot in [(850.0, 500.0), (990.0, 500.0), (100.0, 100.0)]:
+        assert filt_r("cam_a", foot) is filt_f("cam_a", foot)
+
+
+def test_zone_aware_projector_position_in_zone() -> None:
+    """The helper Task 3's PalletStateManager consumes: raised zone → exact
+    world point on the zone's plane; floor zone → bit-identical to the
+    undistort+H path; unknown camera → None."""
+    from backbone.shared.geometry import pixel_to_floor, undistort_points
+    from backbone.shared.zones import ZoneAwareProjector
+
+    rig = _FakeRig({"cam_a": _View()})
+    proj = ZoneAwareProjector(rig)
+    foot = (1000.0 * 3.0 / (3.0 - _PLATFORM_Z) + 500.0, 500.0)
+    raised = _zones_at([[2.9, -0.1], [3.1, -0.1], [3.1, 0.1], [2.9, 0.1]],
+                       _PLATFORM_Z)["Z1"]
+    xy = proj.position_in_zone("cam_a", foot, raised)
+    assert xy is not None
+    assert abs(xy[0] - 3.0) < 1e-6 and abs(xy[1]) < 1e-6
+    flat = _zones(_POLY_1M)["Z1"]
+    view = rig["cam_a"]
+    exp = pixel_to_floor(undistort_points(
+        np.asarray([foot], dtype=np.float64), view.K, view.D), view.H)[0]
+    assert proj.position_in_zone("cam_a", foot, flat) == (float(exp[0]),
+                                                          float(exp[1]))
+    assert proj.position_in_zone("cam_x", foot, flat) is None
+    assert "cam_a" in proj and "cam_x" not in proj
