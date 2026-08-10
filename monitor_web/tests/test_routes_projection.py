@@ -206,3 +206,91 @@ def test_calibration_cache_invalidates_on_mtime_change(tmp_path: Path) -> None:
             "camera_id": "cam_a", "points": [[500.0, 500.0]],
         }).json()["points"][0]
         assert np.allclose(second, [5.0, 5.0])
+
+
+# ---- plane decode (z_m — raised platform/shelf zones) ----
+
+
+def _write_mode2_calibration(path: Path, camera_id: str = "cam_a") -> None:
+    """A metric look-down camera at (0, 0, 3): f=1000, c=(500, 500), no
+    distortion. Pose (world←camera) R=diag(1,-1,-1), t=(0,0,3). A world
+    point (X, Y, z) projects to u = 1000*X/(3-z) + 500, v = 500 - 1000*Y/(3-z);
+    H is that mapping folded for z=0."""
+    R_pose = np.diag([1.0, -1.0, -1.0])
+    t_pose = np.array([0.0, 0.0, 3.0])
+    K = np.array([[1000.0, 0.0, 500.0], [0.0, 1000.0, 500.0], [0.0, 0.0, 1.0]])
+    R_cw = R_pose.T
+    t_cw = -R_cw @ t_pose
+    P = K @ np.hstack([R_cw, t_cw.reshape(3, 1)])
+    H = np.array([[3 / 1000.0, 0.0, -1.5], [0.0, -3 / 1000.0, 1.5], [0.0, 0.0, 1.0]])
+    data = {
+        "version": 1,
+        "created_at": "2026-08-10T00:00:00+00:00",
+        "floor_anchor_method": "charuco_floor",
+        "floor_origin_note": "Test fixture (Mode 2)",
+        "calibration_mode": "multical_full",
+        "cameras": {
+            camera_id: {
+                "camera_id": camera_id,
+                "image_size_wh": [1000, 1000],
+                "K": K.tolist(), "D": [0.0] * 5,
+                "R": R_pose.tolist(), "t": t_pose.tolist(),
+                "H": H.tolist(), "P": P.tolist(),
+                "reprojection_rms_px": 0.0,
+            },
+        },
+    }
+    path.write_text(json.dumps(data))
+
+
+def _build_app_mode2(tmp_path: Path):
+    cal_path = tmp_path / "calibration.json"
+    _write_mode2_calibration(cal_path)
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
+        "calibration_path": str(cal_path),
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    return create_app(cfg)
+
+
+def test_pixel_to_plane_decodes_platform_edge_true_footprint(tmp_path: Path) -> None:
+    """A click on a raised edge decoded at z_m recovers the TRUE world point;
+    the same click decoded at the floor stores the displaced shadow."""
+    app = _build_app_mode2(tmp_path)
+    z = 0.304
+    # pixel of world (1, 1, 0.304) through the fixture camera
+    u = 1000.0 * 1.0 / (3.0 - z) + 500.0
+    v = 500.0 - 1000.0 * 1.0 / (3.0 - z)
+    with TestClient(app) as client:
+        on_plane = client.post("/api/project/pixel-to-floor", json={
+            "camera_id": "cam_a", "points": [[u, v]], "z_m": z,
+        }).json()["points"][0]
+        assert np.allclose(on_plane, [1.0, 1.0], atol=1e-6)
+
+        shadow = client.post("/api/project/pixel-to-floor", json={
+            "camera_id": "cam_a", "points": [[u, v]],
+        }).json()["points"][0]
+        expected_shadow = 3.0 / (3.0 - z)          # ray continued to the floor
+        assert np.allclose(shadow, [expected_shadow, expected_shadow], atol=1e-6)
+        assert not np.allclose(shadow, on_plane, atol=0.05)
+
+
+def test_pixel_to_plane_mode1_falls_back_to_floor(tmp_path: Path) -> None:
+    """Mode-1 placeholder extrinsics can't lift a ray — z_m is ignored."""
+    app, _ = _build_app_with_calibration(tmp_path, np.eye(3))
+    with TestClient(app) as client:
+        got = client.post("/api/project/pixel-to-floor", json={
+            "camera_id": "cam_a", "points": [[10.0, 20.0]], "z_m": 0.5,
+        }).json()["points"][0]
+        assert np.allclose(got, [10.0, 20.0])
+
+
+def test_pixel_to_plane_z_out_of_range_422(tmp_path: Path) -> None:
+    app = _build_app_mode2(tmp_path)
+    with TestClient(app) as client:
+        res = client.post("/api/project/pixel-to-floor", json={
+            "camera_id": "cam_a", "points": [[500.0, 500.0]], "z_m": 9.0,
+        })
+        assert res.status_code == 422

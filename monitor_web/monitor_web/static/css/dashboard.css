@@ -1502,10 +1502,11 @@ button.btn-stop:hover {
   margin-top: 12px;
 }
 
-/* Floor-zone rows (floor_zones.js) carry one extra control — the base-height
-   field — so they need 6 columns instead of the shared 5-column grid above. */
+/* Floor-zone rows (floor_zones.js) carry two extra controls — the base-height
+   field and the redraw button — so they need 7 columns instead of the shared
+   5-column grid above. */
 .config-link-row.zm-zone-row {
-  grid-template-columns: minmax(100px, 1fr) 100px 90px auto auto auto;
+  grid-template-columns: minmax(100px, 1fr) 100px 90px auto auto auto auto;
   gap: 10px;
 }
 

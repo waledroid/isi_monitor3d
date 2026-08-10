@@ -56,6 +56,13 @@ class PixelToFloorBody(BaseModel):
     # DOWNSCALED copy of the calibrated sensor — e.g. 1280x720 vs 1920x1080).
     # Omitted = points already in the calibration frame.
     frame_wh: tuple[int, int] | None = None
+    # Decode plane height in metres (a raised zone's z_base_m). 0 = the exact
+    # floor path, unchanged. >0 intersects each click's ray with the plane
+    # z = z_m instead of the floor — clicking a platform's visible edges then
+    # stores the platform's TRUE footprint, not its displaced floor shadow.
+    # Mode-1 (H-only) calibrations cannot lift a ray off the floor and fall
+    # back to the floor decode. Same 0..5 range the zones payload enforces.
+    z_m: float = Field(0.0, ge=0.0, le=5.0)
 
 
 class FloorToPixelBody(BaseModel):
@@ -125,13 +132,19 @@ def _camera_view(rig: CameraRig, camera_id: str):
 
 @router.post("/api/project/pixel-to-floor")
 async def pixel_to_floor_endpoint(body: PixelToFloorBody, request: Request) -> JSONResponse:
-    """Undistort + map source-pixel points to world floor metres ``(X, Y)``.
+    """Undistort + map source-pixel points to world metres ``(X, Y)``.
 
     Input pixels are assumed to be in the **source frame** (the camera's
     native resolution, not the dashboard's displayed size). The JS side
     handles the ``object-fit: cover`` display→source mapping.
+
+    ``z_m > 0`` decodes onto the plane ``Z = z_m`` (ray/plane intersection via
+    ``pixel_to_plane`` — same primitive the runtime's raised-zone projection
+    uses) so clicks on a platform's edges store its true footprint. Requires
+    metric extrinsics; Mode-1 (H-only) rigs fall back to the floor decode.
     """
     import numpy as np
+    from backbone.shared.geometry import has_metric_camera_model, pixel_to_plane
 
     cfg = request.app.state.settings
     rig = _resolve_rig(cfg)
@@ -142,8 +155,18 @@ async def pixel_to_floor_endpoint(body: PixelToFloorBody, request: Request) -> J
         fw, fh = body.frame_wh
         if fw and fh and (int(fw), int(fh)) != (int(cw), int(ch)):
             pts_uv = pts_uv * [cw / float(fw), ch / float(fh)]
-    pts_undist = undistort_points(pts_uv, view.K, view.D)
-    pts_world = pixel_to_floor(pts_undist, view.H)
+    if body.z_m > 0.0 and has_metric_camera_model(view.K, view.R, view.t):
+        # pixel_to_plane takes RAW (distorted) pixels — it undistorts itself.
+        pts_world = pixel_to_plane(pts_uv, view.K, view.D, view.R, view.t, body.z_m)
+        if pts_world is None or not np.all(np.isfinite(pts_world)):
+            raise HTTPException(
+                status_code=422,
+                detail=f"a clicked ray does not intersect the plane z={body.z_m} m "
+                       "(degenerate geometry — click closer to the zone)",
+            )
+    else:
+        pts_undist = undistort_points(pts_uv, view.K, view.D)
+        pts_world = pixel_to_floor(pts_undist, view.H)
     return JSONResponse({
         "camera_id": body.camera_id,
         "points": [[float(x), float(y)] for x, y in pts_world],

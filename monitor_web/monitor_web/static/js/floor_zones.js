@@ -13,6 +13,14 @@
 // persists immediately through POST /api/config {cameras, zones} and the
 // Settings modal reopens on the Zones tab. Edits (name/kind/severity) and
 // deletes persist the same way. The Backbone applies zones on next START.
+//
+// Raised zones (platforms/shelves): clicks are decoded ON THE ZONE'S PLANE
+// (z_base_m — the ray/plane intersection, `z_m` on the endpoint), not the
+// floor. A click on a platform edge decoded at z=0 stores the platform's
+// displaced floor SHADOW, which is why each row has a redraw button: set the
+// base height first, then redraw by clicking the platform's edges — the same
+// clicks then store the true footprint. New zones decode at z=0 (their
+// height isn't known yet); for a raised zone, set the height and redraw.
 
 import { promptZoneName, startDraw } from "/static/js/draw_mode.js";
 import { openPicker } from "/static/js/draw_target_picker.js";
@@ -107,11 +115,9 @@ function reopenSettingsOnZonesTab() {
   }, 120);
 }
 
-function drawNewZone() {
-  if (zones.length >= maxZones) {
-    window.alert(t("floor_zones_max", `Maximum of ${maxZones} floor zones reached. Delete one first.`));
-    return;
-  }
+// Shared picker → draw plumbing. `zM` is the decode plane (0 = floor);
+// `onPoints` receives the ≥3 world points and persists them.
+function pickAndDraw({ zM, label, onPoints }) {
   // The cam view must be visible + clickable: hide the Settings overlay first.
   el("zone-manager")?.classList.add("hidden");
   openPicker({
@@ -120,24 +126,13 @@ function drawNewZone() {
       if (store && store.view !== cam) store.select(cam);
       setTimeout(() => startDraw({
         target: cam,
-        mode: "project",     // clicks → world metres via the camera's H
-        label: t("floor_zone_draw_hint", "Floor zone — click ≥3 points on the floor, then Done"),
+        mode: "project",     // clicks → world metres on the plane z = zM
+        zM,
+        label,
         minPoints: 3,
         onDone: async (worldPoints) => {
           if (Array.isArray(worldPoints) && worldPoints.length >= 3) {
-            const name = promptZoneName(
-              zones.map((z) => z.name), nextDefaultName());
-            if (!name) { reopenSettingsOnZonesTab(); return; }
-            zones.push({
-              id: newZoneId(),
-              name,
-              kind: "palette",
-              type: "palette",
-              severity: "info",
-              polygon: worldPoints,
-              z_base_m: 0,
-            });
-            await persist();
+            await onPoints(worldPoints);
           }
           reopenSettingsOnZonesTab();
         },
@@ -145,6 +140,51 @@ function drawNewZone() {
       }), 200);   // let the cam view mount before attaching the draw layer
     },
     onCancel: reopenSettingsOnZonesTab,
+  });
+}
+
+function drawNewZone() {
+  if (zones.length >= maxZones) {
+    window.alert(t("floor_zones_max", `Maximum of ${maxZones} floor zones reached. Delete one first.`));
+    return;
+  }
+  pickAndDraw({
+    zM: 0,   // a new zone's height isn't known yet — raised zones: set the
+             // base height on the row, then redraw (plane-aware decode)
+    label: t("floor_zone_draw_hint", "Floor zone — click ≥3 points on the floor, then Done"),
+    onPoints: async (worldPoints) => {
+      const name = promptZoneName(zones.map((z) => z.name), nextDefaultName());
+      if (!name) return;
+      zones.push({
+        id: newZoneId(),
+        name,
+        kind: "palette",
+        type: "palette",
+        severity: "info",
+        polygon: worldPoints,
+        z_base_m: 0,
+      });
+      await persist();
+    },
+  });
+}
+
+// Re-click an existing zone's outline, decoding at ITS base height — the fix
+// for a platform zone originally drawn with the floor decode (its stored
+// polygon is the platform's displaced floor shadow, not its footprint).
+function redrawZone(zone) {
+  const h = zone.z_base_m || 0;
+  const hint = h > 0
+    ? t("floor_zone_redraw_hint_plane", "Click ≥3 edge points ON the raised surface")
+      + ` (z = ${h.toFixed(2)} m)`
+    : t("floor_zone_draw_hint", "Floor zone — click ≥3 points on the floor, then Done");
+  pickAndDraw({
+    zM: h,
+    label: `${zone.name} — ${hint}`,
+    onPoints: async (worldPoints) => {
+      zone.polygon = worldPoints;
+      await persist();
+    },
   });
 }
 
@@ -237,6 +277,15 @@ function buildRow(zone, idx) {
   meta.className = "layout-hint";
   meta.textContent = `${zone.polygon.length} pts`;
 
+  // Redraw: re-click the outline decoded at the zone's CURRENT base height
+  // (plane-aware) — required after raising a zone that was drawn on the floor.
+  const redraw = document.createElement("button");
+  redraw.type = "button";
+  redraw.className = "glass-btn zm-iconbtn";
+  redraw.title = t("floor_zone_redraw", "Redraw on camera (clicks decode at the base height)");
+  redraw.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>';
+  redraw.addEventListener("click", () => redrawZone(zone));
+
   const del = document.createElement("button");
   del.type = "button";
   del.className = "glass-btn zm-iconbtn";
@@ -252,6 +301,7 @@ function buildRow(zone, idx) {
   row.appendChild(sevSel);
   row.appendChild(baseField);
   row.appendChild(meta);
+  row.appendChild(redraw);
   row.appendChild(del);
   return row;
 }

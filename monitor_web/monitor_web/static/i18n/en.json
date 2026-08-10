@@ -117,5 +117,7 @@
   "group_performance": "Performance",
   "group_display": "Display overlays (applies instantly)",
   "show_floor_zones": "Show floor zones (metric outline)",
-  "zone_base_height": "Base height (m)"
+  "zone_base_height": "Base height (m)",
+  "floor_zone_redraw": "Redraw on camera (clicks decode at the base height)",
+  "floor_zone_redraw_hint_plane": "Click ≥3 edge points ON the raised surface"
 }

@@ -208,7 +208,9 @@ async function onCamPointerDown(ev) {
     return;
   }
 
-  // 'project' mode (default): convert to world (X, Y) m via the camera's H.
+  // 'project' mode (default): convert to world (X, Y) m via the camera's
+  // geometry — on the plane z = zM (a raised platform/shelf zone's own base
+  // height, passed by the caller; 0 = the floor path, unchanged).
   try {
     const res = await fetch("/api/project/pixel-to-floor", {
       method: "POST",
@@ -216,7 +218,8 @@ async function onCamPointerDown(ev) {
       // frame_wh: the stream can be a downscaled copy of the calibrated
       // sensor — the server rescales the click into the calibration frame.
       body: JSON.stringify({ camera_id: target, points: [[srcX, srcY]],
-                             frame_wh: [img.naturalWidth, img.naturalHeight] }),
+                             frame_wh: [img.naturalWidth, img.naturalHeight],
+                             z_m: active.zM || 0 }),
     });
     if (!res.ok) {
       console.warn("draw_mode: pixel-to-floor failed", await res.text());
@@ -285,6 +288,8 @@ export function startDraw({
   onCancel,
   minPoints = 3,
   maxPoints = Infinity,
+  zM = 0,   // 'project' mode: decode clicks onto the plane z = zM metres
+            // (a raised zone's base height) instead of the floor
 }) {
   const toolbar = ensureToolbar();
   if (!toolbar.bar) return;
@@ -320,7 +325,7 @@ export function startDraw({
       return;
     }
     active = {
-      target, mode, img, canvas,
+      target, mode, img, canvas, zM,
       points: [],          // 'project': world (X, Y) m; 'raw': source-frame (u, v) px
       displayPoints: [],   // display-px (for the preview overlay only)
       toolbar, onDone, minPoints, maxPoints,
