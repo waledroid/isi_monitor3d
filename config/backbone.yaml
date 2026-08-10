@@ -1,5 +1,5 @@
 node_id: Sortie_Machine_4
-calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration.json
+calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
 cameras:
   cam_a:
     source:
@@ -51,14 +51,14 @@ detection:
   - palette
   - carton
   - polybag
-  confidence_threshold: 0.3
+  confidence_threshold: 0.25
   pose_confidence_threshold: 0.5
   inference_imgsz: 640
   pose_every_n: 1
   pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.engine
   pose_imgsz: 640
   pose_enabled: true
-  zone_imgsz: 320
+  zone_imgsz: 384
   zone_membership_tol_m: 0.5
   sahi:
     enabled: false
@@ -71,9 +71,13 @@ homography:
   cross_cam_fusion:
     match_distance_m:
       palette_vide: 0.8
+      palette: 1.0
+      carton: 1.0
   disagreement_gate:
     agreement_distance_m:
       palette_vide: 0.4
+      palette: 0.8
+      carton: 0.8
   tracker:
     plugin: bytetrack
     conf_high: 0.5

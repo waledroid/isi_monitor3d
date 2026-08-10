@@ -113,6 +113,17 @@ def test_onnx_suffix_still_builds_ort_session(monkeypatch, tmp_path):
     assert ort_session.build_onnx_session(str(tmp_path / "m.onnx")) == "ORT"
 
 
+def test_onnx_never_gets_trt_ep_even_with_legacy_env(monkeypatch):
+    """The retired lazy TRT-EP path must stay dead: a stale ISI3D_TRT=1 in the
+    environment injects NOTHING — `.onnx` means plain ONNX Runtime, TensorRT
+    happens only through native `.engine` files."""
+    monkeypatch.setenv("ISI3D_TRT", "1")
+    resolved = ort_session.resolve_providers(
+        ["CUDAExecutionProvider", "CPUExecutionProvider"])
+    names = [p[0] if isinstance(p, tuple) else p for p in resolved]
+    assert names == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
 # ------------------------------------------------- class-names metadata
 
 def test_modelmeta_names_from_sidecar(tmp_path):

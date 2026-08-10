@@ -166,3 +166,50 @@ URL: https://gstreamer.freedesktop.org/ (accessed 2026-07-21)
 [28] NVIDIA Video Codec SDK — NVDEC (software), NVIDIA Corporation.
 URL: https://developer.nvidia.com/video-codec-sdk (accessed 2026-07-21)
 — cited in §2.1 (GPU hardware video-decode engine; hardware decode chain of §2.4).
+
+Entries [29]–[34] added 2026-07-31 for the expanded §2.1 per-architecture
+subsections (2.1.1–2.1.7); each was verified this session (arXiv abstract or
+OASIS standard page opened and matched on authors + title + venue).
+
+[29] D. Bolya, C. Zhou, F. Xiao, Y. J. Lee, "YOLACT: Real-time Instance
+Segmentation," *IEEE/CVF ICCV 2019*. arXiv:1904.02689.
+URL: https://arxiv.org/abs/1904.02689
+— cited in §2.1.1 (prototype-plus-coefficient mask head of the YOLO `-seg`
+variants; the repo's application-side decode in
+`backbone/detection/postprocess.py` implements this prototype/coefficient
+combination in both its branches — the dense-head branch with NMS and the
+end-to-end NMS-free branch. Per the M1 resolution (2026-07-31), the
+deployed/benchmarked yolo26n-seg export emits a (300, 38) end-to-end head and
+dispatches to the NMS-free branch, which is the path the paper describes).
+
+[30] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,
+Ł. Kaiser, I. Polosukhin, "Attention Is All You Need," *Advances in Neural
+Information Processing Systems 30 (NeurIPS 2017)*. arXiv:1706.03762.
+URL: https://arxiv.org/abs/1706.03762
+— cited in §2.1.2 (transformer encoder–decoder underlying DETR) and §2.1.3
+(cross-attention text conditioning in latent diffusion).
+
+[31] X. Zhu, W. Su, L. Lu, B. Li, X. Wang, J. Dai, "Deformable DETR: Deformable
+Transformers for End-to-End Object Detection," *ICLR 2021*. arXiv:2010.04159.
+URL: https://arxiv.org/abs/2010.04159
+— cited in §2.1.2 (multi-scale deformable attention; convergence/efficiency
+refinement of the DETR line).
+
+[32] J. Ho, A. Jain, P. Abbeel, "Denoising Diffusion Probabilistic Models,"
+*Advances in Neural Information Processing Systems 33 (NeurIPS 2020)*.
+arXiv:2006.11239.
+URL: https://arxiv.org/abs/2006.11239
+— cited in §2.1.3 (forward-noising / learned-reverse-denoising foundation of
+diffusion generation).
+
+[33] C. Ryali, Y.-T. Hu, D. Bolya, C. Wei, H. Fan, P.-Y. Huang, V. Aggarwal,
+A. Chowdhury, O. Poursaeed, J. Hoffman, J. Malik, Y. Li, C. Feichtenhofer,
+"Hiera: A Hierarchical Vision Transformer without the Bells-and-Whistles,"
+*ICML 2023*. arXiv:2306.00989.
+URL: https://arxiv.org/abs/2306.00989
+— cited in §2.1.6 (hierarchical MAE-pretrained image encoder of SAM2).
+
+[34] MQTT Version 5.0, OASIS Standard, 7 March 2019.
+URL: https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html
+— cited in §2.1.7 (broker-mediated pub/sub, topic wildcards, QoS 0/1/2,
+retained messages, last will, keepalive).

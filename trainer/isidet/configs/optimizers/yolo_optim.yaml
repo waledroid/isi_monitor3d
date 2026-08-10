@@ -18,7 +18,7 @@ optimizer:
 
 early_stopping:
   enabled: true
-  patience: 20     # 🛑 stop if fitness hasn't improved in 20 epochs (keeps best).
+  patience: 30     # 🛑 stop if fitness hasn't improved in 20 epochs (keeps best).
                    # NOTE: a crash + --resume RESETS Ultralytics' early-stop
                    # counter, so on a resumed run, enforce it by watching results.csv.
   min_delta: 0.0005

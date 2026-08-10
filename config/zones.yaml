@@ -1,46 +1,31 @@
 zones:
-- id: zp_mr8z7cot
-  name: Sortie_1
+- id: zp_msmyxzx7
+  name: sortie_machine_1
   type: palette
   kind: palette
   severity: info
   polygon:
-  - - -4.704
-    - -0.429
-  - - -1.49
-    - 0.637
-  - - -0.671
-    - -0.199
-  - - -4.643
-    - -2.773
+  - - -2.368
+    - 0.269
+  - - -2.293
+    - 1.583
+  - - -0.944
+    - 1.535
+  - - -0.998
+    - 0.231
   derived_from: zone_patch
-- id: zp_mrc2y24v
-  name: Sortie_2
+- id: zp_msmyz2e4
+  name: sortie_machine_2
   type: palette
   kind: palette
   severity: info
   polygon:
-  - - -0.807
-    - 1.289
-  - - -0.118
-    - 2.005
-  - - 0.936
-    - 0.765
-  - - 0.198
-    - 0.036
-  derived_from: zone_patch
-- id: zp_mrx9l3wj
-  name: Sortie_3
-  type: palette
-  kind: palette
-  severity: info
-  polygon:
-  - - 0.132
-    - 2.083
-  - - 0.939
-    - 2.867
-  - - 1.832
-    - 1.687
-  - - 1.121
-    - 0.932
+  - - -1.915
+    - -1.211
+  - - -1.909
+    - -0.256
+  - - -0.831
+    - -0.241
+  - - -0.795
+    - -1.151
   derived_from: zone_patch

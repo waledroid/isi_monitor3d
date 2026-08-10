@@ -38,20 +38,9 @@ One per camera per tick, loopback only:
 
 WSL2 mirrored mode drops loopback UDP > ~1.5 KB. `UdpSink` slices JSON into `FragmentMessage {fid, i, n, data}`; `FragmentBuffer` reassembles (5 s prune, 64 groups). MQTT never fragments.
 
-## Gateway REST (`:8080`, Bearer token)
+## Gateway REST (`:8080`)
 
-| Endpoint | Returns |
-|---|---|
-| `GET /nodes` | nodes: mode, liveness, diagnostics |
-| `GET /zones`, `GET /zones/{name}` | zone occupancy |
-| `GET /tracks` | recent 2D/3D tracks |
-| `GET /passings` | zone-crossing events |
-| `GET /diagnostics` | latest heartbeats |
-| `GET /config` | node config ads |
-| `GET /recent` | raw MQTT tail |
-| `GET /healthz` | liveness (no token) |
-| `GET /ui` | live probe page |
-| `GET /docs` | Swagger |
+The broker + gateway module — architecture, topic tree, endpoint table, config, deploy — has its own page: [isicomms — broker & gateway](isicomms.md).
 
 !!! note "Poll it"
     `curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/zones` — the whole AGV/WMS integration surface.

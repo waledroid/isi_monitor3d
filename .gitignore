@@ -78,3 +78,6 @@ thesis/latex/p*.png
 thesis/latex/bg-*.png
 thesis/latex/intro-*.png
 thesis/latex/prog-*.png
+
+# blackbox telemetry (tools/blackbox_logger.py)
+/logs/

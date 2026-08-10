@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import signal
 import threading
 
@@ -42,10 +41,6 @@ def main() -> None:
 
     with open(args.config) as fh:
         cfg = yaml.safe_load(fh) or {}
-    # TensorRT opt-in (Settings ▸ Detection): every session built in this
-    # process (seg + pose) inherits it through the shared ort_session seam.
-    os.environ["ISI3D_TRT"] = (
-        "1" if bool((cfg.get("detection") or {}).get("trt_enabled", True)) else "0")
     if str(cfg.get("ingestion", {}).get("mode", "frames")) != "points":
         raise SystemExit(
             "isistream: backbone.yaml has ingestion.mode != 'points' — the "

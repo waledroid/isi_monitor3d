@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 
 from .api import (
+    routes_clients,
     routes_config,
     routes_diagnostics,
     routes_health,
@@ -64,6 +66,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = cfg
     app.state.subscriber = subscriber
 
+    # REST-consumer tracking (surfaced by /clients and the /ui Consumers
+    # card): every API request is recorded per client, keyed by the optional
+    # X-Client-Name header (AGVs are asked to send one) or client IP. Page
+    # shells / docs / health are skipped — only data-endpoint traffic counts.
+    # Touched only on the event loop (async middleware + async routes), so a
+    # plain dict is race-free.
+    app.state.api_clients = {}
+    _untracked = {"/ui", "/test", "/docs", "/openapi.json",
+                  "/favicon.ico", "/healthz", f"/{API_VERSION}/healthz"}
+    _clients_cap = 100
+
+    @app.middleware("http")
+    async def _track_client(request: Request, call_next):
+        if request.url.path not in _untracked:
+            ip = request.client.host if request.client else "?"
+            name = request.headers.get("x-client-name")
+            key = name or ip
+            store: dict[str, dict] = app.state.api_clients
+            entry = store.get(key)
+            if entry is None:
+                if len(store) >= _clients_cap:
+                    del store[min(store, key=lambda k: store[k]["last_seen"])]
+                entry = store[key] = {"name": name, "ip": ip, "requests": 0}
+            entry["last_seen"] = time.time()
+            entry["requests"] += 1
+            entry["last_path"] = request.url.path
+        return await call_next(request)
+
     # Silence favicon noise.
     @app.get("/favicon.ico", include_in_schema=False)
     async def _favicon() -> Response:
@@ -80,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         routes_passings.router,
         routes_zones.router,
         routes_config.router,
+        routes_clients.router,     # /clients — REST consumers + MQTT count
         routes_ui.router,          # /recent — the raw tail + ingest counters
     )
     version_prefix = f"/{API_VERSION}"

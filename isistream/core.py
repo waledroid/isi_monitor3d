@@ -47,12 +47,6 @@ from backbone.shared.zones import ZoneRegistry
 
 logger = logging.getLogger(__name__)
 
-# Batch sizes we let TensorRT compile engines for. Any real batch (zones x
-# cameras x SAHI tiles) is padded up to the next bucket; the padded frames'
-# outputs are discarded. Keep the list SHORT — every entry is an engine.
-_BATCH_BUCKETS: tuple[int, ...] = (1, 2, 4, 8, 16, 32)
-
-
 class FrameProvider(Protocol):
     """The host's frame seam: newest real frame + capture_ts, or None."""
 
@@ -113,32 +107,19 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
         # crop's off-zone corner triangles.
         fill_polys = (zone_fill_polygons(rig, zones, crop_height_m=crop_h)
                       if fill_on else None)
-        # TensorRT compiles one engine per input shape. WITHOUT SAHI the batch
-        # is deterministic (zones x cameras, at most a couple of values) and
-        # its engines are already cached — padding would only force new builds
-        # and waste inference on filler frames. WITH SAHI the tile count moves
-        # with zone geometry, so bucket the batch: a handful of engines instead
-        # of one per tile count. CUDA EP takes any batch and never pads.
-        from backbone.shared.ort_session import trt_available, trt_requested
-        trt_on = trt_requested() and trt_available()
-        sahi_on = bool((sahi_cfg or {}).get("enabled"))
-        buckets = _BATCH_BUCKETS if (trt_on and sahi_on) else None
+        # No batch bucketing: ONNX paths run plain CUDA EP (any batch), and
+        # native .engine files carry a dynamic batch profile (1..32) — the
+        # lazy TRT-EP per-shape compiles that bucketing worked around are gone.
         detector = ZoneScopedDetector(
             detector, boxes,
             {cid: rig[cid].image_size_wh for cid in rig.camera_ids},
-            sahi=sahi_cfg, enhance=enhance_cfg, batch_buckets=buckets,
+            sahi=sahi_cfg, enhance=enhance_cfg,
             max_crop_aspect=max_aspect, zone_filter=zfilter,
             fill_polys=fill_polys)
         if sahi_cfg and sahi_cfg.get("enabled"):
             logger.info("isistream: SAHI tiling ON (tile=%s, overlap=%.2f)",
                         sahi_cfg.get("tile") or "model input",
                         float(sahi_cfg.get("overlap", 0.2)))
-            if buckets:
-                logger.warning(
-                    "isistream: SAHI + TensorRT — the FIRST tick at each new "
-                    "batch size compiles an engine (MINUTES, one time). They "
-                    "are cached in models/.trt_cache; detections resume "
-                    "automatically. Buckets: %s", list(buckets))
         if enhance_cfg and enhance_cfg.get("enabled"):
             logger.info("isistream: crop enhancement ON (CLAHE clip=%.1f, gamma=%.2f)",
                         float(enhance_cfg.get("clip_limit", 2.0)),

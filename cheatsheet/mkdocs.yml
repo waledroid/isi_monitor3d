@@ -41,3 +41,4 @@ nav:
   - Datasets & training: datasets.md
   - Detection pipeline: detection.md
   - Wire, MQTT & probe: comms.md
+  - isicomms — broker & gateway: isicomms.md

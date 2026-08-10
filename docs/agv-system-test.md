@@ -7,8 +7,9 @@ type (carton/polybag); the AGV system consumes that signal and launches its
 pick-and-place.
 
 **Interactive console:** open `http://<SERVER_IP>:8080/test` in any browser on
-the LAN — one card per state below, each showing the live answer plus the exact
-REST URL and MQTT topic to use.
+the LAN (it opens the isicomms UI — the test cards run automatically) — one
+card per state below, each showing the live answer plus the exact REST URL and
+MQTT topic to use.
 
 ## 1. What you receive
 
@@ -48,6 +49,8 @@ Quick check: `mosquitto_sub -h <SERVER_IP> -t 'isiMonitor3D/v1/+/zone/+' -v`
 **Option B — REST (poll-based).** `GET http://<SERVER_IP>:8080/v1/zones` (all
 zones, enriched with the latest state). Poll at 1–2 Hz. Same JSON fields.
 Quick check: `curl http://<SERVER_IP>:8080/v1/zones`
+Send an `X-Client-Name: agv_07` header with your requests — your client then
+appears by name in the operator UI's Consumers panel (instead of by IP).
 
 ## 3. Reference client (tested against the live system)
 

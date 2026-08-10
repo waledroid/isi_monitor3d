@@ -2,17 +2,65 @@
 
 ## 2.1 Background: underlying architectures and tools
 
-isiMonitor3d integrates components from five complementary research areas: vision inference, multi-object tracking, projective geometry, synthetic-data generation, and edge deployment. Rather than reviewing these fields exhaustively, this subsection highlights only the properties directly exploited by the proposed system.
+isiMonitor3d integrates components from six complementary research areas: vision inference, multi-object tracking, projective geometry, synthetic-data generation, machine-consumable data delivery, and edge deployment. This subsection summarizes the specific architectures the system builds on — the two detector families (2.1.1–2.1.2), the generative stack of the synthetic-data pipeline (2.1.3–2.1.6), and the messaging protocol of the delivery layer (2.1.7) — and closes with the tracking, geometric, and runtime foundations (2.1.8). Each summary is limited to the architectural properties the system directly exploits, followed by the concrete form the component takes in isiMonitor3d.
 
-**Vision inference.** Real-time monitoring requires detectors that balance accuracy, speed, and edge deployability; isiMonitor3d therefore supports two complementary model families behind one detector interface. The primary family is YOLO26 instance segmentation, the current generation of the single-pass YOLO line [12, 13]: it is adopted for its high throughput at small input sizes and because its NMS-free, end-to-end prediction head removes the data-dependent post-processing that complicates compilation to edge runtimes [14]. Production uses YOLO26-seg models exported with their raw prediction head, keeping decoding under application control rather than baked into the artifact. The alternative family is RF-DETR-seg, a detection transformer descended from DETR's set-prediction formulation and its real-time variants [15, 16], selected because it is explicitly optimized for fine-tuning on small domain-specific datasets [17] — the per-site training regime of Section 1. Because both families serve the same detector interface, each deployment adopts whichever fine-tunes better on its data.
+### 2.1.1 YOLO26 — single-pass instance segmentation
 
-**Tracking.** Detected objects must then be associated across frames into persistent identities. isiMonitor3d builds on the standard tracking-by-detection recipe: a constant-velocity Kalman filter [26] per track supplies both the motion prediction that bridges detection gaps and the innovation covariance that scales matching distances, with Hungarian assignment of detections to predictions [6]. Association follows ByteTrack's two-pass confidence-split scheme, which recovers tracks from low-confidence detections — often occluded true objects — instead of discarding them [7]. The property exploited is that nothing in this recipe is tied to pixels: Section 2.5 transposes the state space to metric floor coordinates, so matching thresholds become physical distances and one tracker spans both cameras.
+The YOLO family frames detection as a single forward pass of a fully convolutional network that predicts classes and boxes densely over the image, trading the region-proposal stage of two-stage detectors for throughput [12]. Across its generations the family converged on a three-part structure [13]: a convolutional backbone extracts features at several scales; a neck aggregates these features across pyramid levels, so that small and large objects are each predicted from feature maps of appropriate resolution; and a decoupled head regresses boxes and classifies objects in separate branches. The dense predictions of such one-stage detectors are redundant by construction and have historically required non-maximum suppression (NMS) — a data-dependent, sequential post-processing step — to select final detections.
 
-**Geometry.** Converting image detections into metric object locations requires camera calibration and projective geometry [8]. isiMonitor3d relies on three classical results: planar-target calibration recovers each camera's intrinsics from views of a printed board [9]; a plane in the scene induces an invertible homography between that plane and the image, so a single calibrated camera suffices for metric localization of anything touching the floor; and direct linear transformation (DLT) triangulation recovers full 3D exactly when a second calibrated view exists. This complementarity — 2D from one camera cheaply, 3D on demand from two — is why one calibration can serve both localization modes side by side (Section 2.5). Fiducial targets make the estimation practical on site: AprilTag [10] and ArUco/ChArUco [11] boards provide uniquely identifiable corner constellations that remain detectable under occlusion and blur, turning correspondence — the hard part of every geometric solve — into a detection problem (Section 2.3).
+YOLO26, the generation adopted here, removes this dependency: it is trained for end-to-end prediction, so the network emits a final detection set directly without NMS, and it drops the distribution-focal-loss regression module of earlier generations, simplifying the prediction head [14]. Because this project exports the raw prediction head — no decoding baked into the artifact — the exported graph never contained NMS in any YOLO generation; the benefit the end-to-end head delivers here lies on the application side: detection decoding reduces to confidence filtering, coordinate un-letterboxing, and mask assembly, with no data-dependent suppression stage whose cost varies with scene density (the postprocessing cost breakdown of Section 3.3 reflects this). The release documentation additionally reports up to 43 % faster CPU ONNX inference for the nano variant relative to its YOLO11 predecessor [14]. The instance-segmentation (`-seg`) variants extend the head with the prototype-based mask design introduced by YOLACT [29]: the network predicts one shared bank of prototype masks per image plus a small coefficient vector per detection, and each instance mask is the thresholded sigmoid of a linear combination of the prototypes — adding segmentation at near-constant cost over detection.
 
-**Synthetic training data.** Training these detectors requires site-specific datasets, and acquiring annotated images for every warehouse installation is expensive; isiMonitor3d therefore incorporates a synthetic-data pipeline that expands a small site-specific photo set into labeled training data (Section 2.6). The generator is SDXL, a latent-diffusion model whose denoising runs in a compressed autoencoder latent space, making high-resolution synthesis affordable [24, 18]. Two extension mechanisms turn it into a training-data factory: ControlNet injects spatial conditioning so that generated scene geometry follows a supplied control map while prompts randomize appearance — paired with a constructed ground-truth mask, every generated image is labeled by construction [19]; and LoRA trains only low-rank weight updates, specializing the generator to one object class from tens of photographs at a small fraction of full fine-tuning cost [20]. On the ground-truth side, SAM2, a promptable segmentation foundation model [25], segments the real photographs from detector box prompts, removing manual mask annotation from the workflow.
+In isiMonitor3d, the production detectors are YOLO26-seg models fine-tuned in the isidet trainer on the three-class warehouse corpus (Section 2.6): the headline `yolo26l-seg` (640 px input; 0.977 box mAP@0.5 and 0.948 box mAP@0.5:0.95 on the validation split — Section 3.1, Table T1) and the deployed `yolo26n-seg`, which meets the accuracy target at a 320 px input (0.962 / 0.895). Models are exported to ONNX (opset 17) with the raw prediction head, so box decoding and prototype-mask combination remain under application control (Section 2.4).
 
-**Deployment.** Finally, the camera streams must be acquired and the models executed efficiently on industrial edge hardware. Stream handling uses GStreamer, whose element-graph pipeline architecture lets capture policy be expressed as pipeline structure — an explicit codec-matched depayloader, a hardware decoder with software fallback, a newest-frame-only sink — rather than application logic [27]; decoding is delegated to NVDEC, the dedicated decode engine on NVIDIA GPUs, keeping continuous multi-stream H.264/H.265 decoding off the CPU budget [28]. Inference runs on ONNX Runtime, which executes the framework-neutral ONNX artifact through pluggable execution providers [22]; TensorRT is used as such a provider, contributing engine-compiled speed while the application keeps a single hardware-neutral model file and interface [23]. The properties exploited are portability — the same `.onnx` serves the development workstation and the Jetson production target (Section 2.7) — and swappable acceleration, whose measured speedup is reported in Section 3.3; TensorRT's engine-per-shape compilation in turn imposes the shape discipline described in Section 2.4.
+### 2.1.2 RF-DETR — detection transformer
+
+DETR recasts detection as direct set prediction [15]. A transformer encoder [30] processes the flattened feature map of a convolutional backbone; in the decoder, a fixed set of learned object queries cross-attends to the encoded image features, each query producing one (class, box) prediction. Training assigns predictions to ground-truth objects one-to-one by bipartite Hungarian matching, and the resulting loss teaches the network itself to suppress duplicates — no anchors, no NMS. The original formulation, however, converged slowly and paid quadratic attention cost over dense feature maps. Deformable DETR addressed both by replacing full attention with multi-scale deformable attention, which samples a small learned set of points around each reference location [31], and subsequent real-time DETRs such as RT-DETR added efficient hybrid encoders and improved query selection, reaching YOLO-class speed [16].
+
+RF-DETR continues this real-time line with a different emphasis: rather than proposing a single fixed architecture, it fine-tunes a pretrained base network and applies weight-sharing neural architecture search over the model's tunable dimensions, discovering accuracy–latency trade-offs per target dataset and explicitly aiming at transferability of DETRs to domains far from the pretraining distribution [17]. This orientation toward fine-tuning on small, domain-specific datasets matches the per-site training regime of Section 1.
+
+In isiMonitor3d, RF-DETR-seg is the alternative detector family behind the same `Detector` interface. The evaluated model is `rfdetr-medium-seg`, fine-tuned on the same corpus; it reads a fixed 432 px square input, and its exported ONNX graph exposes three named outputs — `dets` (normalized boxes), `labels` (per-query class logits), and `masks` (per-query mask logits) — decoded without NMS. At its selected checkpoint it reaches 0.973 box mAP@0.5 and 0.938 box mAP@0.5:0.95 on the validation split (Section 3.1, Table T1). Because both families serve the same detector interface, each deployment adopts whichever fine-tunes better on its data.
+
+### 2.1.3 SDXL — latent diffusion
+
+In the denoising-diffusion formulation [32], image generation inverts a gradual noising process: a fixed forward process corrupts a training image with Gaussian noise over many steps, and a network — typically a UNet — is trained to reverse the corruption step by step, so that sampling reconstructs an image from noise. Latent diffusion made this affordable at high resolution by moving denoising out of pixel space [24]: a variational autoencoder compresses images into a lower-dimensional latent space, the denoising UNet operates entirely on latents — conditioned on text through cross-attention over the prompt's encoder embeddings [30] — and the autoencoder's decoder maps the final latent back to pixels.
+
+SDXL scales this recipe [18]: a UNet roughly three times larger than in earlier Stable Diffusion versions, text conditioning from two encoders whose embeddings are concatenated (OpenCLIP ViT-bigG and CLIP ViT-L), and additional conditioning on the original image size and crop coordinates of each training example, which allows training on the full dataset without discarding small images and suppresses cropping artifacts at sampling time.
+
+In isiMonitor3d, SDXL is the generator of the isiGen synthetic-data pipeline (Section 2.6): the publicly released `stabilityai/stable-diffusion-xl-base-1.0` checkpoint, used with frozen weights and extended only through the two mechanisms described next — spatial conditioning by ControlNet (2.1.4) and class specialization by LoRA (2.1.5).
+
+### 2.1.4 ControlNet — spatial conditioning
+
+ControlNet adds spatial control to a pretrained text-to-image diffusion model without retraining it [19]. The architecture duplicates the encoder and middle blocks of the base UNet into a trainable copy that receives, in addition to the latent, a spatial control map — a depth map, edge map, or pose skeleton aligned with the target image. The copy's outputs are injected into the frozen base network through zero-initialized 1 × 1 convolutions ("zero convolutions"): at the start of training the added branch contributes exactly nothing, and its influence grows only as training demands it. Because the base weights never change, the pretrained generative prior — object appearance, lighting, texture statistics — is preserved intact while the control branch learns to enforce the supplied spatial structure.
+
+This property is what makes isiGen's annotations correct by construction. isiGen uses the depth ControlNet released for SDXL (`diffusers/controlnet-depth-sdxl-1.0`). Its control maps are composite depth maps assembled by the scaffold stage from monocular depth estimates of real backgrounds and object instances, and each scaffold pairs such a control map with the segmentation mask of the objects it places. The generated image's geometry therefore follows the scaffold while the text prompt randomizes appearance — and the scaffold's mask remains a valid ground-truth annotation for the generated image (Section 2.6).
+
+### 2.1.5 LoRA — low-rank adaptation
+
+Low-rank adaptation fine-tunes a large pretrained network by learning only a low-rank update to selected weight matrices [20]. For a pretrained weight $\mathbf{W} \in \mathbb{R}^{d \times k}$, kept frozen, LoRA parameterizes the update as $\Delta\mathbf{W} = \frac{\alpha}{r}\mathbf{B}\mathbf{A}$ with $\mathbf{B} \in \mathbb{R}^{d \times r}$, $\mathbf{A} \in \mathbb{R}^{r \times k}$, rank $r \ll \min(d, k)$, and a constant scaling factor $\alpha$; the adapted layer computes $\mathbf{h} = \mathbf{W}\mathbf{x} + \frac{\alpha}{r}\mathbf{B}\mathbf{A}\mathbf{x}$. The trainable parameter count per layer is $r(d + k)$ — orders of magnitude below full fine-tuning for small $r$ — and after training the update can be merged, $\mathbf{W}' = \mathbf{W} + \frac{\alpha}{r}\mathbf{B}\mathbf{A}$, so inference incurs no additional latency. Applied to a diffusion backbone, this yields a compact per-class adapter file over one shared frozen base model — and, in the few-dozen-image regime of this work, it is this restriction of the trainable capacity that makes per-class specialization practical at all.
+
+In isiMonitor3d, isiGen trains one rank-16 SDXL LoRA adapter per object class from a few dozen real photographs; the full training configuration is reported with the pipeline in Section 2.6, and the adapter's contribution to detector training is evaluated in the ablation of Section 3.4.
+
+### 2.1.6 SAM2 — promptable segmentation
+
+SAM2 is a promptable segmentation foundation model [25]: rather than segmenting a fixed class list, it returns the mask of whatever a prompt designates. Its image encoder is Hiera, a hierarchical vision transformer that produces multi-scale features from a deliberately plain, MAE-pretrained architecture [33]; a lightweight prompt encoder embeds points, boxes, or coarse masks; and a small mask decoder combines the two embedding streams into output masks with predicted quality scores. The expensive image embedding is computed once per image and reused across prompts. SAM2 additionally carries a streaming memory-attention module for propagating masks through video; isiGen uses single-image prediction only, so this component is not exercised.
+
+In isiMonitor3d, SAM2 removes manual mask annotation from the synthetic-data workflow. isiGen loads `facebook/sam2.1-hiera-small` (~185 MB) through the `SAM2ImagePredictor` interface and prompts it with the bounding boxes of the project's trained detector — detector-prompted masking — with a promptless automatic-mask-generation mode available when no prompts exist; the resulting masks become the ground truth attached to the real photographs (Section 2.6).
+
+### 2.1.7 MQTT and the metadata delivery layer
+
+MQTT is a lightweight publish/subscribe messaging protocol standardized by OASIS [34]. Its architecture is broker-mediated: clients publish messages to hierarchical, slash-separated topics on a central broker, and the broker forwards each message to every client whose subscription matches — including through single-level (`+`) and multi-level (`#`) topic wildcards — so producers need no knowledge of consumer identity or count. The protocol defines three delivery guarantees (QoS 0, at most once; QoS 1, at least once; QoS 2, exactly once), per-topic retained messages that the broker replays to newly connecting subscribers, and a keepalive mechanism that bounds failure-detection time. Because filtering happens at the broker on topic names rather than in consumers on payloads, MQTT suits industrial telemetry with many heterogeneous consumers: each subscribes to exactly the object classes or zones it needs.
+
+In isiMonitor3d, MQTT delivery is implemented by `MqttSink`, a `MetadataSink` plugin holding one paho-mqtt client and one background network-loop thread (reconnecting with 1–30 s exponential backoff); the deployed client speaks MQTT 3.1.1, and every protocol feature relied on here is defined identically in the 3.1.1 and 5.0 OASIS standards [34]. It publishes the pydantic-validated schema-version-6 JSON envelopes of Section 2.7 with per-class topic fan-out — `{prefix}/track2d/{cls}`, `{prefix}/track3d/{cls}`, and per-zone state and event topics — keeping topic cardinality proportional to the number of classes, not the number of tracked objects; the `track_id` travels in the payload. Zone occupancy state is published retained at QoS 1, so a late-joining consumer (for example, an AGV controller reconnecting mid-shift) immediately receives the current state of every zone rather than waiting for the next transition. Delivery failures are logged and swallowed: an unreachable broker degrades delivery, never the perception or geometry pipeline. `MqttSink` operates beside the UDP sink behind the same plugin seam, and the deployed configuration runs both (Section 2.7).
+
+### 2.1.8 Tracking, geometry, and runtime substrate
+
+The remaining foundations are summarized briefly here and developed where they are used.
+
+**Tracking.** Detected objects must be associated across frames into persistent identities. isiMonitor3d builds on the standard tracking-by-detection recipe: a constant-velocity Kalman filter [26] per track supplies both the motion prediction that bridges detection gaps and the innovation covariance that scales matching distances, with Hungarian assignment of detections to predictions [6]. Association follows ByteTrack's two-pass confidence-split scheme, which recovers tracks from low-confidence detections — often occluded true objects — instead of discarding them [7]. The property exploited is that nothing in this recipe is tied to pixels: Section 2.5 transposes the state space to metric floor coordinates, so matching thresholds become physical distances and one tracker spans both cameras.
+
+**Geometry.** Converting image detections into metric object locations requires camera calibration and projective geometry [8]. isiMonitor3d relies on three classical results: planar-target calibration recovers each camera's intrinsics from views of a printed board [9]; a plane in the scene induces an invertible homography between that plane and the image, so a single camera with a metrically anchored floor homography suffices for metric localization of anything touching the floor; and direct linear transformation (DLT) triangulation recovers full 3D exactly when a second calibrated view exists. This complementarity — 2D from one camera cheaply, 3D on demand from two — is why one calibration can serve both localization modes side by side (Section 2.5). Fiducial targets make the estimation practical on site: AprilTag [10] and ArUco/ChArUco [11] boards provide uniquely identifiable corner constellations that remain detectable under occlusion and blur, turning correspondence — the hard part of every geometric solve — into a detection problem (Section 2.3).
+
+**Deployment.** Finally, the camera streams must be acquired and the models executed efficiently on industrial edge hardware. Stream handling uses GStreamer, whose element-graph pipeline architecture lets capture policy be expressed as pipeline structure — an explicit codec-matched depayloader, a hardware decoder with software fallback, a newest-frame-only sink — rather than application logic [27]; decoding is delegated to NVDEC, the dedicated decode engine on NVIDIA GPUs, keeping continuous multi-stream H.264/H.265 decoding off the CPU budget [28]. Inference runs on ONNX Runtime, which executes the framework-neutral ONNX artifact through pluggable execution providers [22]; in the as-measured configuration of this article (July 2026), TensorRT acceleration was provided through ONNX Runtime's TensorRT execution provider [23], contributing engine-compiled speed while the exchanged model file remains the hardware-neutral `.onnx` — compiled engines are locally derived accelerator caches, not exchanged artifacts. The properties exploited are portability — the same `.onnx` serves the development workstation and the Jetson production target (Section 2.7) — and swappable acceleration, whose measured speedup is reported in Section 3.3; TensorRT's engine-per-shape compilation in turn imposes the shape discipline described in Section 2.4.
 
 Overall, isiMonitor3d follows a sequential processing pipeline. GStreamer and NVDEC acquire and decode the camera streams; YOLO26-seg or RF-DETR-seg perform object detection; ground-plane homography projects each detection to metric floor coordinates, where Kalman filtering and ByteTrack maintain object identities; stereo triangulation adds full 3D on demand; and the resulting tracks are delivered through the communication layer. Offline, SDXL, ControlNet, LoRA, and SAM2 generate and annotate synthetic training data used to adapt detectors to each deployment.
 
@@ -110,7 +158,7 @@ Because vertically extruded zones may overlap in image space, the same object ca
 
 **Detection models and inference runtime.** Object detection employs instance-segmentation networks from the two detector families introduced in Section 2.1: YOLO26-seg and RF-DETR-seg. All models are exported to ONNX and executed using ONNX Runtime. Using framework-independent ONNX models rather than vendor-specific engine formats allows identical model files to be deployed on both the development workstation and Jetson production hardware (Section 2.7), while hardware-specific acceleration is provided transparently through interchangeable execution providers.
 
-On NVIDIA systems, inference uses the TensorRT execution provider with compiled engines cached on disk. An optional slicing-assisted inference (SAHI) mode subdivides unusually large or elongated zone crops into overlapping square tiles before detection. Because TensorRT generates separate optimized engines for different input dimensions and SAHI introduces variable batch sizes, batches are padded into predefined buckets (1, 2, 4, 8, 16, and 32) to limit the total number of compiled engines.
+On NVIDIA systems, in the configuration measured in this article (July 2026), inference used ONNX Runtime's TensorRT execution provider with compiled engines cached on disk. An optional slicing-assisted inference (SAHI) mode subdivides unusually large or elongated zone crops into overlapping square tiles before detection. Because TensorRT generates separate optimized engines for different input dimensions and SAHI introduces variable batch sizes, batches are padded into predefined buckets (1, 2, 4, 8, 16, and 32) to limit the total number of compiled engines.
 
 The same detector interface also supports the CUDA execution provider as a fallback on NVIDIA GPUs, while an OpenVINO-based detector plugin behind the same interface enables deployment on Intel CPUs and integrated GPUs without modifying the remainder of the perception pipeline.
 
@@ -189,7 +237,7 @@ isiGen addresses the primary deployment bottleneck identified in Section 1: the 
 
 The pipeline consists of ten sequential stages implemented as independent plugins: curation, automatic detection, mask generation, control-map generation, captioning, LoRA training, scaffold synthesis, image generation, quality filtering, and dataset export.
 
-The process begins by curating real images while preserving their original warehouse environments. Automatic object detection provides bounding-box prompts that seed mask generation, after which SAM2 produces color-coded segmentation masks. DepthAnythingV2 and Canny edge detection generate complementary control maps used to constrain image synthesis. Image captions are automatically constructed using a unique trigger token for each object class together with detailed background descriptions, reducing concept bleed during diffusion-based generation.
+The process begins by curating real images while preserving their original warehouse environments. Automatic object detection provides bounding-box prompts that seed mask generation, after which SAM2 produces color-coded segmentation masks. DepthAnythingV2 monocular depth estimation generates the depth control maps used to constrain image synthesis (a Canny edge extractor also runs at this stage, but its maps do not condition generation). Image captions are automatically constructed using a unique trigger token for each object class together with detailed background descriptions, reducing concept bleed during diffusion-based generation.
 
 Class-specific LoRA adapters are then fine-tuned on Stable Diffusion XL, using an fp16 UNet with fp32 LoRA weights. For the black-polybag dataset, training used rank 16, a resolution of 768 px, 2,000 optimization steps, a learning rate of $10^{-4}$, batch size 1 with four-step gradient accumulation, and 53 real training photographs.
 
@@ -207,7 +255,21 @@ The delivery layer converts the metric engine outputs into machine-readable inte
 
 All engine outputs crossing process boundaries are transmitted as Pydantic-validated JSON envelopes (schema version 6). Each message contains the schema version, message type, and originating `capture_ts` timestamp, ensuring consistent temporal interpretation across all consumers. The message catalogue includes `Track2D`, `Track3D`, zone entry/exit events, image references, persistent zone states (`ZoneState`, used as the WMS/FMS integration signal), per-camera observations, incoming `DetectionSetMessage`s (Section 2.2), oversized-message fragmentation envelopes, proximity alerts, periodic diagnostic heartbeats, and retained configuration advertisements.
 
-For low-latency communication between components deployed on the same site, the system uses UDP/JSON as the primary intra-site transport. Remote and multi-node consumers are served through MQTT, which provides broker-mediated distribution and retained message delivery. MQTT topics follow the hierarchy `<base>/<version>/<node_id>/<suffix>`, for example `isiMonitor3D/v1/zone_a/track2d/person`. The MQTT topic version is intentionally independent from the payload schema version, allowing communication routing and message evolution to progress independently.
+For low-latency communication between components deployed on the same site, the system uses UDP/JSON as the primary intra-site transport. Remote and multi-node consumers are served through MQTT, which provides broker-mediated distribution and retained message delivery. MQTT topics follow the hierarchy `<base>/<version>/<node_id>/<suffix>`; the complete per-node topic tree is:
+
+```
+{prefix} = isiMonitor3D/v1/<node>
+├─ track2d/{cls}          metric floor tracks
+├─ track3d/{cls}          on-demand 3D tracks
+├─ zone/{zone}            zone occupancy (retained, QoS 1)
+│  ├─ passings            entry/exit events
+│  └─ images/{track_id}   snapshot references
+├─ proximity              person-object pairs (retained, QoS 1)
+├─ diagnostics/heartbeat  node health heartbeat
+└─ config                 config advertisement (retained)
+```
+
+This is the same hierarchy the isicomms probe interface renders live — latest message per topic — during commissioning. The MQTT topic version is intentionally independent from the payload schema version, allowing communication routing and message evolution to progress independently.
 
 The isicomms module provides the interface between the internal messaging system and external industrial clients. It combines an MQTT broker (port 1883) with a REST gateway for polling-based consumers such as AGV fleet controllers. The gateway exposes an optionally token-authenticated HTTP API on port 8080 with endpoints for nodes (`/nodes`), zones (`/zones`), tracks (`/tracks`), and passing events (`/passings`). This abstraction avoids requiring vehicle controllers to implement MQTT clients, which is often incompatible with existing fleet-control software.
 
@@ -684,4 +746,109 @@ ZONE-TWIN MECHANISM ADDED (2026-07-21 ninth pass — author flagged it missing).
   3. §2.5 fusion sentence: minimal clause "— including the two independent
      views of a twinned zone (Section 2.4) —" inserted into the author's
      verbatim text to close the loop (FLAGGED as an insertion into his §2.5).
+
+§2.1 EXPANDED into per-architecture subsections 2.1.1–2.1.8 (2026-07-31,
+  author request: "more technical grounding on every AI architecture used";
+  15-page cap explicitly waived for now — shrink pass later).
+  - Structure: condensed lead-in → 2.1.1 YOLO26 → 2.1.2 RF-DETR → 2.1.3 SDXL
+    → 2.1.4 ControlNet → 2.1.5 LoRA → 2.1.6 SAM2 → 2.1.7 MQTT/MqttSink →
+    2.1.8 Tracking/Geometry/Deployment (the three prior paragraphs preserved
+    verbatim except "must then be" → "must be" in Tracking) → closing
+    pipeline-overview paragraph unchanged. The prior "Vision inference" and
+    "Synthetic training data" paragraphs are superseded by 2.1.1–2.1.2 and
+    2.1.3–2.1.6; every claim and citation they carried survives in the
+    subsections (orphan check: [12]–[20], [22]–[28] all still cited in §2.1).
+  - New citations [29] YOLACT, [30] Vaswani, [31] Deformable DETR, [32] DDPM,
+    [33] Hiera, [34] MQTT v5.0 OASIS — all verified 2026-07-31 (arXiv
+    abstracts / OASIS page fetched; details in references.md). Existing
+    numbering untouched; global renumber deferred to final assembly.
+  - Repo verification (this session) of every project-specific number:
+    * yolo26l-seg 640 px 0.977/0.948 and yolo26n-seg 320 px 0.962/0.895 —
+      MANUSCRIPT Table T1 (unchanged home of the numbers);
+      trainer/isidet/configs/train_pallet3_seg_yolo26.yaml exists
+      (export_nms: false, export_opset: 17; on-disk instance currently set to
+      the nano weights at imgsz 320).
+    * Prototype/coefficient seg decode: backbone/detection/postprocess.py
+      (protos (nm,mh,mw) + per-detection mask coeffs).
+    * RF-DETR: 432 px fixed square, outputs dets/labels/masks, NMS-free —
+      backbone/detection/rfdetr_onnx_seg.py docstring + output-name mapping;
+      0.973/0.938 best-EMA epoch 23/41 — Table T1.
+    * SDXL id stabilityai/stable-diffusion-xl-base-1.0 + ControlNet id
+      diffusers/controlnet-depth-sdxl-1.0 — generation/sdxl_{controlnet,
+      inpaint}.py, lora/diffusers_sdxl.py, configs/project_template.yaml.
+    * Composite depth control maps — scaffolds/copy_paste.py ("control:
+      composite depth (bg depth + pasted object's depth)").
+    * LoRA rank 16 / 768 px / 2000 steps / lr 1e-4 / batch 1×4 / 53 photos —
+      §2.6 (already verified); final loss 0.127 NEW in §2.1.5, from
+      runs/lora/black_polybag_r16_18-06-2026_13-24-47/report.md ("final loss
+      (mean of last 100): 0.1270").
+    * SAM2: facebook/sam2.1-hiera-small ~185 MB, SAM2ImagePredictor, box
+      prompts + SAM2AutomaticMaskGenerator promptless path —
+      trainer/isiGen/src/stages/masking/sam2_masker.py.
+    * MqttSink: one paho client + background loop thread, 1–30 s backoff,
+      per-class topics {prefix}/track2d/{cls} (O(classes) fan-out, track_id
+      in payload), zone state retained QoS 1 (zone_state_qos=1), failures
+      logged and swallowed, registered beside udp in metadata_sink_registry —
+      backbone/comms/mqtt_sink.py; deployed config runs BOTH sinks
+      (config/backbone.yaml metadata.sinks: udp 9001 + mqtt 1883).
+    * YOLO26 claims (NMS-free end-to-end, DFL removal, up-to-43%-faster CPU
+      ONNX for nano vs YOLO11, -seg variants) — Ultralytics YOLO26 docs
+      fetched 2026-07-31; attributed to [14].
+    * RF-DETR claims limited to its abstract (pretrained base network,
+      weight-sharing NAS, transferability to diverse target domains) —
+      DINOv2-backbone claim deliberately NOT asserted (not in the abstract).
+  - New forward references §2.1 → Section 3.1/Table T1 (detector accuracies)
+    and §2.1.5 → Section 3.4 (ablation): grounding paragraphs cite measured
+    values where they live; no numbers duplicated inconsistently.
+
+§2.1 REVIEW APPLIED (02.1_arch.REVIEW.md, 2026-07-31 — verdict "minor
+  revision, two mandatory harmonizations"; all M1–M4 + m1–m12 applied):
+  - M1 RESOLVED BY REPO EVIDENCE — the benchmarked/deployed export ran the
+    END-TO-END (NMS-free) decode path. Proof: the G4 model
+    (trainer/isidet/runs/segment/models/yolo/yolo26n-seg_e100_320px_
+    03-07-2026_15-09-28/weights/best.fp16.onnx) was run on CPU EP this
+    session; output0 = (1, 300, 38) = (num_det, 6+nm) — the end-to-end head.
+    decode_yolo11_seg dispatches on head.shape[1]==6+nm → _decode_seg_end2end,
+    whose docstring/code contain NO NMS (confidence/class filter + letterbox
+    inversion + mask assembly only; the config's iou 0.45 is ignored on this
+    path). Therefore §2.1.1 keeps NMS-free as an exploited property; T5's
+    method note (§3.3) and §4.1 were WRONG to bill "NMS" and now say
+    "detection decoding / mask assembly" (fixed in 03_results.md,
+    04_discussion.md, MANUSCRIPT). The archived G4_trt_vs_cuda.md record still
+    says "NMS" in its labels — record left untouched as a frozen measurement
+    artifact; this note is the correction of record. §2.1.1's "pure tensor
+    program" sentence REWRITTEN per the reviewer: the raw-head export never
+    contained NMS in any generation; the honest benefit is removing the
+    application-side suppression stage.
+  - M2 APPLIED (option a — pin as-measured, no re-measure): §2.1.8 Deployment
+    and §2.4 now date the TRT-EP description ("as-measured configuration of
+    this article (July 2026)", past tense); portability sentence reworded
+    around the artifact (exchanged file = .onnx; engines = locally derived
+    accelerator caches). The 2026-07-23 native-.engine migration is NOT
+    described in the paper; T4/T5 untouched.
+  - M3 APPLIED: §2.1.5 grounding reduced to rank-16 + few-dozen photographs +
+    pointer to §2.6 (full hyperparameters live ONLY in §2.6); "final loss
+    0.127" DROPPED (not comparable across runs; the adapter's evaluation is
+    the §3.4 ablation).
+  - M4 APPLIED: §2.6 Canny sentence corrected — only DepthAnythingV2 depth
+    maps condition generation (sdxl_controlnet.py loads only
+    diffusers/controlnet-depth-sdxl-1.0; no canny consumer in
+    scaffolds/generation code); Canny stated as extracted-but-not-conditioning.
+  - Minors: m1 six research areas (added machine-consumable data delivery);
+    m2 MQTT 3.1.1 stated (paho Client default MQTTv311; no protocol= override
+    in MqttSink), [34] kept with both-versions clause, last-will DROPPED from
+    the feature list (no will_set in MqttSink); m3 "topic cardinality";
+    m4 "thresholded sigmoid of a linear combination"; m5 "encoder and middle
+    blocks"; m6 α/r scaling added to all three LoRA equations + small-data
+    sentence recast as system rationale ("in the few-dozen-image regime of
+    this work"), not a [20] claim; m7 "In the denoising-diffusion formulation
+    [32]"; m8 "a single camera with a metrically anchored floor homography";
+    m9 43 % figure kept vendor-attributed ("the release documentation
+    reports"); m10 §2.1.3 opening compressed to one sentence (sampling-
+    mechanics sentence dropped), §2.1.7 trimmed via the last-will cut;
+    m11 private-repo file paths removed from §2.1 reader-facing text
+    (train_pallet3_seg_yolo26.yaml, mqtt_sink.py, sam2_masker.py,
+    control_maps/, scaffolds/ — all retained in THIS comment for
+    traceability); m12 [29] bibliography annotation aligned with the M1
+    resolution (both references.md and the manuscript bibliography).
 -->
