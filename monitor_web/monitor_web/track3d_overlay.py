@@ -27,8 +27,9 @@ from .overlay import _draw_text_badge
 logger = logging.getLogger(__name__)
 
 FRESH_S = 1.5          # 3D fix older than this vs the newest bus ts ⇒ stale
-AXIS_M = 0.45          # metres — X/Y arrow length (same as the map gizmo)
-Z_MIN_M, Z_MAX_M = 0.3, 2.5   # Z arrow length clamp (visible even at z≈0)
+AXIS_M = 0.22          # metres — X/Y arrow length (kept short so the
+                       # gizmo doesn't dominate the object it marks)
+Z_MIN_M, Z_MAX_M = 0.2, 1.2   # Z arrow length clamp (visible even at z≈0)
 
 # BGR — match the map gizmo colours (0xef4444 / 0x22c55e / 0x3b82f6).
 _X_COLOR = (68, 68, 239)      # red
