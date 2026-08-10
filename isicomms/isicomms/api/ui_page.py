@@ -258,7 +258,7 @@ function renderTracks(d){
     t.xyz_m?'<span class="tag" style="color:var(--accent);border-color:var(--accent)">3D</span>'+
       (t.single_view?'<span class="mut" title="single-view fallback — Z pinned to 0">sv</span>':"")
       :'<span class="mut">2D</span>',
-    (t.xy_m?t.xy_m:t.xyz_m||[]).map(v=>v.toFixed(2)).join(", ")+" m",
+    (t.xy_m?t.xy_m.map(v=>v.toFixed(2)).join(", "):fmtXYZ(t.xyz_m))+" m",
     (t.confidence!=null?(t.confidence*100).toFixed(0)+"%":"–"),
     '<span class="mut">'+ago(t.ts)+"</span>",
   ]),["id","cls","dim","position","conf","seen"]);
@@ -296,6 +296,37 @@ let treeTopics="";          // signature of the current topic set
 let openPaths=new Set(["isiMonitor3D"]);   // default: base expanded
 let latestByTopic={};
 let zoneNames={};           // zone_id → display name, from /zones (config adverts)
+let zonePlanes=[];          // [{poly:[[x,y]..], z}] from /zones — declared base planes
+
+// point-in-polygon (ray casting), world metres
+function pip(x,y,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1];
+    if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))inside=!inside;
+  }
+  return inside;
+}
+// Base height of the declared zone plane under (x, y), else 0 (the floor).
+function zBase(x,y){
+  let b=0;
+  for(const zp of zonePlanes)if(zp.z>b&&pip(x,y,zp.poly))b=zp.z;
+  return b;
+}
+// Display form of a Track3D position. Raw 2-camera Z absorbs the bbox
+// correspondence error for large boxy objects (often < 0, physically false)
+// — anchor the shown Z to the declared plane of the zone the track stands
+// in (same rule as the dashboard's cam-view axis badge); raw value stays in
+// the tooltip. The wire contract (xyz_m) is untouched — display only.
+function fmtXYZ(p){
+  if(!p||p.length<3)return(p||[]).map(v=>v.toFixed(2)).join(", ");
+  const b=zBase(p[0],p[1]),z=Math.max(b,p[2]);
+  const head=p[0].toFixed(2)+", "+p[1].toFixed(2)+", ";
+  if(z===p[2])return head+z.toFixed(2);
+  return head+'<span title="raw z '+p[2].toFixed(2)+
+    " m — 2-camera depth absorbs bbox correspondence error; anchored to the zone plane ("+
+    b.toFixed(2)+' m)" style="cursor:help">'+z.toFixed(2)+"*</span>";
+}
 
 function buildTree(topics){
   const root={};
@@ -417,7 +448,7 @@ const CHECKS=[
       "No 3D tracks — needs both cameras seeing a subscribed class."];
     return[st("good",t.length+" LOCALIZED"),
       t.slice(-6).map(x=>"#"+x.track_id+" <b>"+esc(x.cls)+"</b> ["+
-        (x.xyz_m||[]).map(v=>v.toFixed(2)).join(", ")+"] m"+
+        fmtXYZ(x.xyz_m)+"] m"+
         (x.single_view?' <span class="mut">(single-view)</span>':"")).join("<br>")];}},
  {id:"pass",title:"Passages",rest:"/v1/passings",topic:"isiMonitor3D/v1/+/zone/+/passings",
   interpret:d=>{
@@ -486,6 +517,9 @@ async function tick(){
   $("health").className="dot"+(!bad(h)&&h.ok?(alive?" ok":" warn"):"");
   const zn={};(bad(zones)?[]:(zones.zones||[])).forEach(z=>{if(z.zone_id)zn[z.zone_id]=z.name;});
   zoneNames=zn;
+  zonePlanes=(bad(zones)?[]:(zones.zones||[]))
+    .filter(z=>+z.z_base_m>0&&Array.isArray(z.polygon)&&z.polygon.length>=3)
+    .map(z=>({poly:z.polygon,z:+z.z_base_m}));
   renderNodes(nodes);renderZones(zones);renderTracks(tracks);
   renderConsumers(cons);renderStats(tail);
   if(!bad(tail)&&tail.topics)renderTree(tail.topics);
