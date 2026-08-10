@@ -188,11 +188,12 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
         # dashboard is then the only pose in the system for display).
         pose = wire_pose if wire_pose is not None else get_async_pose(cfg, camera_id)
         dets = get_zone_dets(image) if get_zone_dets is not None else []
-        # Zone-based: membership is METRIC — each foot projects to the floor
-        # (the engine's own undistort+H) and must land inside a zone polygon
-        # (±0.15 m), so both cameras agree with each other AND with the fused
-        # zone state (a pixel-polygon test dropped boundary objects on one
-        # camera while the other showed them). Masks are stencil-bounded to
+        # Zone-based: membership is METRIC — each foot projects to the zone's
+        # own plane (the engine's own geometry) and must land inside a zone
+        # polygon ± the producer's configured tolerance
+        # (detection.zone_membership_tol_m), so both cameras agree with each
+        # other AND with the fused zone state (a pixel-polygon test dropped
+        # boundary objects on one camera while the other showed them). Masks are stencil-bounded to
         # the zones' EXTRUDED HULLS (tight laterally, tall enough for the
         # objects standing in the zone). Persons/skeletons are the deliberate global
         # safety exception — never zone-clipped. No zones ⇒ no object boxes.
@@ -202,7 +203,8 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
             cw, ch = zone_ctx["calib_wh"]
             scaled_zones = scale_polygons(zone_ctx["polys"], fw / cw, fh / ch)
             dets = clip_to_zones_metric(dets, zone_ctx["rig"], camera_id, (fw, fh),
-                                        zone_ctx["zones"])
+                                        zone_ctx["zones"],
+                                        tol_m=zone_ctx.get("tol_m", 0.15))
             if _stencil_wh != (fw, fh):     # zones are fixed per stream build
                 _stencil_cache = zone_stencil(
                     (fh, fw), scale_polygons(zone_ctx["hulls"], fw / cw, fh / ch))
@@ -571,8 +573,10 @@ def _camera_zone_ctx(cfg, camera_id: str) -> dict | None:
             return None
         w, h = rig[camera_id].image_size_wh
         hulls = project_zone_hulls(rig, zones, camera_id)
+        from ..zone_projection import membership_tol_m
         return {"polys": polys, "rig": rig, "zones": zones,
-                "hulls": hulls, "calib_wh": (int(w), int(h))}
+                "hulls": hulls, "calib_wh": (int(w), int(h)),
+                "tol_m": membership_tol_m(cfg.backbone_config_path)}
     except Exception:
         logger.warning("cam %s: floor-zone projection failed", camera_id, exc_info=True)
         return None
@@ -644,8 +648,18 @@ def build_cam_stream(state, camera_id: str, *, detect: bool = False,
         # extrinsics). Built once per stream build so rvec/tvec are cached.
         from ..track3d_overlay import CamAxisOverlay
         axis_bus = getattr(state, "bus", None)
+
+        def _axis_zones(_c=cfg):
+            # (path, mtime)-cached — the badge anchors to a raised zone's
+            # declared plane (Zone.z_base_m) instead of under the floor.
+            try:
+                zpath = _zones_yaml_path(_c)
+                return _load_zones_cached(str(zpath), zpath.stat().st_mtime_ns)
+            except Exception:
+                return None
+
         axis_overlay = CamAxisOverlay(_warp_camera(cfg, camera_id),
-                                      lambda: axis_bus)
+                                      lambda: axis_bus, zones_getter=_axis_zones)
         frames = _detect_iter(
             frames, cfg, camera_id,
             is_running=is_running,

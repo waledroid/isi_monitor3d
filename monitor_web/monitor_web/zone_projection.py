@@ -29,6 +29,9 @@ not (mirrors ``zone_scope``'s Mode-1 fallback).
 
 from __future__ import annotations
 
+import functools as _functools
+from pathlib import Path as _Path
+
 import cv2
 import numpy as np
 from backbone.shared.geometry import (
@@ -116,8 +119,33 @@ def zone_stencil(shape_hw, polys) -> np.ndarray:
 # Boundary tolerance for METRIC zone membership on the cam views. Measured on
 # the rig: genuine boundary cases (an object physically in the zone whose
 # per-camera foot projection lands just outside the polygon) miss by
-# 0.05-0.11 m; crop-margin junk sits 0.38 m+ out. 0.15 m splits them cleanly.
+# 0.05-0.11 m; crop-margin junk sits 0.38 m+ out. 0.15 m splits them cleanly
+# ON THE FLOOR — but this is only the FALLBACK: the display must accept
+# everything the producer keeps, so callers pass the producer's own
+# ``detection.zone_membership_tol_m`` via :func:`membership_tol_m`. (A raised
+# zone's per-camera foot-on-plane carries bbox-correspondence error of
+# 0.2-0.6 m on a wide-baseline rig; the engine ships those detections and the
+# panel must not silently drop them.)
 _ZONE_TOL_M = 0.15
+
+
+@_functools.lru_cache(maxsize=4)
+def _membership_tol_cached(path_str: str, mtime_ns: int) -> float:
+    import yaml
+    det = (yaml.safe_load(_Path(path_str).read_text()) or {}).get("detection") or {}
+    return float(det.get("zone_membership_tol_m", _ZONE_TOL_M))
+
+
+def membership_tol_m(backbone_yaml) -> float:
+    """The producer's in-zone tolerance (``detection.zone_membership_tol_m``
+    from backbone.yaml, (path, mtime)-cached) — ONE membership rule needs ONE
+    tolerance, or the display drops detections the engine keeps. Falls back
+    to ``_ZONE_TOL_M`` when the file/key is unavailable."""
+    try:
+        p = _Path(backbone_yaml)
+        return _membership_tol_cached(str(p.resolve()), p.stat().st_mtime_ns)
+    except Exception:
+        return _ZONE_TOL_M
 
 
 def clip_to_zones_metric(dets: list, rig, camera_id: str, display_wh, zones,

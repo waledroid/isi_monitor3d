@@ -254,7 +254,7 @@ class ZoneDetectionWorker:
             from .api.routes_video import _load_zones_cached
             from .api.routes_zone_patches import _load_rig
             from .floor_zone_sync import _zones_yaml_path
-            from .zone_projection import zone_of_foot_metric
+            from .zone_projection import membership_tol_m, zone_of_foot_metric
             rig = _load_rig(self._cfg)
             if rig is None or self.camera_id not in rig:
                 return None
@@ -263,7 +263,9 @@ class ZoneDetectionWorker:
             if len(zones) == 0:
                 return None
             cam_id = self.camera_id
-            return lambda foot: zone_of_foot_metric(rig, cam_id, frame_wh, zones, foot)
+            tol = membership_tol_m(self._cfg.backbone_config_path)
+            return lambda foot: zone_of_foot_metric(rig, cam_id, frame_wh, zones,
+                                                    foot, tol_m=tol)
         except Exception:
             logger.debug("zone worker[%s]: metric membership unavailable",
                          self.camera_id, exc_info=True)

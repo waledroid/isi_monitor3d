@@ -2,8 +2,9 @@
 
 Mirrors the floor map's axis gizmo (`static/js/floor_map_3d.js`) on the live
 camera panels: for every object with a FRESH two-view ``Track3D`` fix on the
-UDP bus, draw a small XYZ axis at the object's floor point plus the measured
-height in the same white rounded badge the distance lines use — projected
+UDP bus, draw a small XYZ axis at the object's base point (the zone's own
+plane when it stands in a raised zone, else the floor) plus its height in
+the same white rounded badge the distance lines use — projected
 into the camera through its FULL model (``cv2.projectPoints`` with K, D and
 the camera←world extrinsic inverted from the stored world←camera pose).
 
@@ -88,8 +89,9 @@ class CamAxisOverlay:
     frame untouched, so the video stream cannot die on a bad fix.
     """
 
-    def __init__(self, view, bus_getter) -> None:
+    def __init__(self, view, bus_getter, zones_getter=None) -> None:
         self._get_bus = bus_getter
+        self._get_zones = zones_getter
         self._enabled = False
         self._warn_ts = 0.0
         if view is None or not has_metric_extrinsics(view):
@@ -137,14 +139,33 @@ class CamAxisOverlay:
                 self._warn_ts = now
                 logger.warning("3D axis overlay failed (throttled 30s)", exc_info=True)
 
+    def _zone_base_m(self, x: float, y: float) -> float:
+        """Base height of the raised zone under ``(x, y)``, else 0.0.
+
+        Triangulated Z is biased low for large boxy objects (the two cameras'
+        bbox-bottom pixels are DIFFERENT physical points, so their rays cross
+        below the true base — measured -0.3..-0.9 m on the rig). For an
+        object standing in a zone that DECLARES its plane (``Zone.z_base_m``),
+        the declared plane is the best available base estimate — anchor there
+        instead of under the floor."""
+        zones = self._get_zones() if self._get_zones is not None else None
+        if zones is None:
+            return 0.0
+        try:
+            return max((float(zones[n].z_base_m) for n in zones.which((x, y))),
+                       default=0.0)
+        except Exception:
+            return 0.0
+
     def _draw_one(self, image, t3) -> None:
         h, w = image.shape[:2]
         x, y = float(t3.xyz_m[0]), float(t3.xyz_m[1])
-        z = max(0.0, float(t3.xyz_m[2]))
-        z_len = max(Z_MIN_M, min(Z_MAX_M, z))       # clamp like the map gizmo
-        world = [(x, y, 0.0),                        # origin (floor point)
-                 (x + AXIS_M, y, 0.0),               # X tip
-                 (x, y + AXIS_M, 0.0),               # Y tip
+        base = self._zone_base_m(x, y)
+        z = max(base, float(t3.xyz_m[2]))            # never below the base plane
+        z_len = base + max(Z_MIN_M, min(Z_MAX_M, z - base))  # clamp like the map gizmo
+        world = [(x, y, base),                       # origin (zone-plane point)
+                 (x + AXIS_M, y, base),              # X tip
+                 (x, y + AXIS_M, base),              # Y tip
                  (x, y, z_len)]                      # Z tip
         uv, in_front = self.project(world, (w, h))
         if not in_front[0]:
