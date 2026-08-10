@@ -28,6 +28,10 @@ def _zone_entry(node_id: str, area: str, zspec, state) -> dict:
         "type": zspec.type,
         "severity": zspec.severity,
         "polygon": zspec.polygon,
+        # Height (meters) of the plane this zone's polygon lives on — mirrors
+        # Zone.z_base_m (0.0 = floor). Additive: defaulted on ZoneSpec so a
+        # legacy retained advert (pre-z_base_m Backbone) still parses.
+        "z_base_m": zspec.z_base_m,
         # Live contents from the retained zone/<zone> state (None = no state
         # received yet — distinct from an explicit empty list).
         "objects": [o.model_dump(mode="json") for o in state.objects] if state else None,

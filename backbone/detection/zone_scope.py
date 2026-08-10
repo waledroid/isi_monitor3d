@@ -126,6 +126,11 @@ def build_zone_membership_filter(rig, zones, tol_m: float = 0.15):
     (rectangular, height-extruded) pixel crop had to reach. Tolerance is
     sampled as a 5-point cross (center ± tol on each axis) so an object
     straddling the boundary by projection error is kept.
+
+    Mixed-height degenerate note: when no zone's containment test matches, the
+    filter still fails open (returns ``True``) if EVEN ONE zone's plane
+    projection was degenerate — even when every other zone sits on a valid
+    plane that already tested this point and found it genuinely outside.
     """
     from backbone.shared.zones import ZoneAwareProjector
 

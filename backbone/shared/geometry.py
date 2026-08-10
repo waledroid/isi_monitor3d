@@ -368,12 +368,18 @@ def project_floor_polygon_distorted(
     t: np.ndarray,
     image_size_wh: tuple[int, int],
     *,
+    z_m: float = 0.0,
     margin_frac: float = 0.25,
     fold_safety: float = 0.9,
     circle_segments: int = 96,
 ) -> np.ndarray | None:
-    """Project a floor POLYGON into RAW (distorted) pixels, clipped to the
-    camera's reliably-projectable field.
+    """Project a floor-parallel POLYGON at height ``z_m`` into RAW (distorted)
+    pixels, clipped to the camera's reliably-projectable field.
+
+    ``z_m`` generalizes this beyond ``Z = 0`` the same way :func:`pixel_to_plane`
+    generalizes :func:`pixel_to_floor` — a raised zone (a platform, a shelf)
+    projects at its own ``Zone.z_base_m`` instead of the floor. Default 0.0
+    keeps every existing caller's floor behavior identical.
 
     Point-wise projection cannot represent a zone that spills past the
     camera's field: samples beyond the lens's fold radius (see
@@ -388,7 +394,7 @@ def project_floor_polygon_distorted(
     doesn't meaningfully overlap the field.
     """
     pts = np.asarray(polygon_xy_m, dtype=np.float64).reshape(-1, 2)
-    world3 = np.hstack([pts, np.zeros((len(pts), 1))])
+    world3 = np.hstack([pts, np.full((len(pts), 1), float(z_m))])
     K = np.asarray(K, dtype=np.float64)
     R = np.asarray(R, dtype=np.float64)
     t = np.asarray(t, dtype=np.float64).reshape(3)

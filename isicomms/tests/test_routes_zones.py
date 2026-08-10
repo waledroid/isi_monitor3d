@@ -30,6 +30,25 @@ def test_zones_from_single_node(client):
     assert isinstance(z["polygon"], list)
 
 
+def test_zones_expose_z_base_m(client):
+    """A raised platform/shelf zone's z_base_m rides the REST row; a legacy
+    zone without it (default 0.0) still reads 0.0, never null/missing."""
+    sub = client.app.state.subscriber
+    cfg = make_config("node_a", area="hall_1", zones=[
+        ZoneSpec(name="platform", kind="palette", type="storage", severity="info",
+                 polygon=[[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]],
+                 z_base_m=0.304),
+        ZoneSpec(name="floor_zone", kind="palette", type="storage", severity="info",
+                 polygon=[[5.0, 0.0], [9.0, 0.0], [9.0, 2.0], [5.0, 2.0]]),
+    ])
+    sub.update_from_message("node_a", cfg)
+
+    r = client.get("/zones")
+    by_name = {z["name"]: z for z in r.json()["zones"]}
+    assert by_name["platform"]["z_base_m"] == 0.304
+    assert by_name["floor_zone"]["z_base_m"] == 0.0
+
+
 def test_zones_union_from_two_nodes(client):
     sub = client.app.state.subscriber
 

@@ -40,6 +40,14 @@ PALLET_CLASSES = frozenset({"palette", "pallet", "palette_vide"})
 OBJECT_CLASSES = frozenset({"carton", "polybag"})
 
 
+def pallets_of(dets: list[Detection]) -> list[Detection]:
+    """Every pallet-class detection in ``dets``, in order — the ONE filter
+    both ``_frame_states`` (below) and ``PalletStateManager.step`` use to
+    align pallet detections with ``frame_states``' aligned results (they
+    ``zip(..., strict=True)``), so the two filters can never desync."""
+    return [d for d in dets if str(d.cls).lower() in PALLET_CLASSES]
+
+
 def _load_area(d: Detection) -> float:
     """Mask area if present (precise), else bbox area — for the dominant-content pick."""
     if d.mask is not None:
@@ -209,7 +217,7 @@ class PalletOccupancy:
     # ---- per-camera per-frame pallet states ----
 
     def _frame_states(self, dets: list[Detection]) -> list:
-        pallets = [d for d in dets if str(d.cls).lower() in PALLET_CLASSES]
+        pallets = pallets_of(dets)
         objects = [d for d in dets if str(d.cls).lower() in OBJECT_CLASSES]
         pallets_m = [self._project(p) for p in pallets]
         loads: dict[int, list[Detection]] = {i: [] for i in range(len(pallets))}

@@ -603,6 +603,7 @@ class Orchestrator:
                     type=z.type,
                     severity=z.severity,
                     polygon=z.polygon.tolist(),
+                    z_base_m=z.z_base_m,
                 )
             )
 

@@ -780,6 +780,37 @@ def test_orchestrator_shutdown_stops_diagnostics_before_publisher_close(
         sock.close()
 
 
+def test_config_message_carries_zone_z_base_m(tmp_path: Path) -> None:
+    """_build_config_message threads Zone.z_base_m into the ZoneSpec advert —
+    a raised platform/shelf zone must not silently advertise as floor (0.0)."""
+    cal_path = _write_calibration(tmp_path)
+    onnx_path = _write_stub_onnx(tmp_path)
+    sock, port = _bind_receiver()
+    try:
+        zones_path = tmp_path / "zones_zbase.yaml"
+        zones_path.write_text(yaml.safe_dump({
+            "zones": [
+                {"name": "platform", "type": "palette",
+                 "polygon": [[-2.0, -2.0], [4.0, -2.0], [4.0, 2.0], [-2.0, 2.0]],
+                 "z_base_m": 0.304},
+                {"name": "dock", "type": "palette",
+                 "polygon": [[10.0, 10.0], [12.0, 10.0], [12.0, 12.0], [10.0, 12.0]]},
+            ]
+        }))
+        cfg_path = _write_config(
+            tmp_path, calibration_path=cal_path, onnx_path=onnx_path,
+            udp_port=port, zones_path=zones_path,
+        )
+        orch = Orchestrator(cfg_path)
+        msg = orch._build_config_message()
+        by_name = {z.name: z for z in msg.zones}
+        assert by_name["platform"].z_base_m == 0.304
+        assert by_name["dock"].z_base_m == 0.0
+        orch.publisher.close()
+    finally:
+        sock.close()
+
+
 # ---- zone state (retained per-zone object list — the WMS/FMS signal) ----
 
 

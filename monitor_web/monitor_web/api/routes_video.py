@@ -201,7 +201,7 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
             fh, fw = image.shape[:2]
             cw, ch = zone_ctx["calib_wh"]
             scaled_zones = scale_polygons(zone_ctx["polys"], fw / cw, fh / ch)
-            dets = clip_to_zones_metric(dets, zone_ctx["view"], (fw, fh),
+            dets = clip_to_zones_metric(dets, zone_ctx["rig"], camera_id, (fw, fh),
                                         zone_ctx["zones"])
             if _stencil_wh != (fw, fh):     # zones are fixed per stream build
                 _stencil_cache = zone_stencil(
@@ -552,7 +552,9 @@ def _camera_zone_ctx(cfg, camera_id: str) -> dict | None:
     save rebuilds the stream), not per frame.
 
     - ``polys``   projected floor-zone polygons, calibration px (outlines)
-    - ``view``    the camera's calibration (metric foot→floor membership)
+    - ``rig``     the calibration rig (plane-aware metric membership needs
+                  every camera's view, not just this one — see
+                  ``ZoneAwareProjector``)
     - ``zones``   the metric ZoneRegistry (membership polygons, in metres)
     - ``hulls``   the zones' extruded hulls, calibration px (the mask stencil)
     - ``calib_wh`` the calibration frame size (display scaling)
@@ -569,7 +571,7 @@ def _camera_zone_ctx(cfg, camera_id: str) -> dict | None:
             return None
         w, h = rig[camera_id].image_size_wh
         hulls = project_zone_hulls(rig, zones, camera_id)
-        return {"polys": polys, "view": rig[camera_id], "zones": zones,
+        return {"polys": polys, "rig": rig, "zones": zones,
                 "hulls": hulls, "calib_wh": (int(w), int(h))}
     except Exception:
         logger.warning("cam %s: floor-zone projection failed", camera_id, exc_info=True)

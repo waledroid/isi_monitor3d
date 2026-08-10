@@ -262,8 +262,8 @@ class ZoneDetectionWorker:
             zones = _load_zones_cached(str(zpath), zpath.stat().st_mtime_ns)
             if len(zones) == 0:
                 return None
-            view = rig[self.camera_id]
-            return lambda foot: zone_of_foot_metric(view, frame_wh, zones, foot)
+            cam_id = self.camera_id
+            return lambda foot: zone_of_foot_metric(rig, cam_id, frame_wh, zones, foot)
         except Exception:
             logger.debug("zone worker[%s]: metric membership unavailable",
                          self.camera_id, exc_info=True)

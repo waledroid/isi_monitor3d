@@ -110,6 +110,7 @@ from backbone.homography.pallet_occupancy import (
     PALLET_CLASSES,
     OccupancyStabilizer,
     PalletOccupancy,
+    pallets_of,
 )
 from backbone.shared.zones import (
     Zone,
@@ -313,7 +314,7 @@ class PalletStateManager:
         # verdict is bucketed into).
         frame_occ: dict[str, tuple[str, str | None]] = {}
         for cam_dets in detections_by_camera.values():
-            pallets = [d for d in cam_dets if str(d.cls).lower() in PALLET_CLASSES]
+            pallets = pallets_of(cam_dets)
             results = self._occupancy.frame_states(cam_dets)
             for det, (pallet_xy, state, content, _conf) in zip(pallets, results, strict=True):
                 plane_cache: dict[float, tuple[float, float] | None] = {}

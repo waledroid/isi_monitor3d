@@ -521,6 +521,12 @@ def get_config(request: Request) -> JSONResponse:
     for z in zones_raw:
         if not isinstance(z, dict):
             continue
+        try:
+            z_base_m = float(z.get("z_base_m") or 0.0)
+        except (TypeError, ValueError):
+            # A hand-edited zones.yaml can carry a non-numeric z_base_m —
+            # default to the floor rather than 500ing the whole config read.
+            z_base_m = 0.0
         zones_out.append(
             {
                 "id": z.get("id"),
@@ -531,7 +537,7 @@ def get_config(request: Request) -> JSONResponse:
                 "polygon": z.get("polygon", []),
                 "model": z.get("model"),
                 "confidence_threshold": z.get("confidence_threshold"),
-                "z_base_m": float(z.get("z_base_m") or 0.0),
+                "z_base_m": z_base_m,
             }
         )
 

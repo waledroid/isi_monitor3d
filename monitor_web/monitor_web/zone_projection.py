@@ -10,8 +10,21 @@ pixel-space ``zone_patches``, which the cam view no longer needs).
 isistream detects inside each zone's bounding-box CROP (a rectangle a bit larger
 than the polygon), so its observations can carry objects in the rectangular
 margin outside the zone shape. The METRIC membership test (clip_to_zones_metric
-/ zone_of_foot_metric, foot → floor → zones.yaml polygon ± tolerance) is what
-enforces "no detections outside the zone" — identically on every surface.
+/ zone_of_foot_metric, foot → EACH ZONE'S OWN PLANE → zones.yaml polygon ±
+tolerance) is what enforces "no detections outside the zone" — identically on
+every surface.
+
+**Plane-aware (zone-base-height, decision 5).** A zone's polygon lives on its
+own plane (``Zone.z_base_m`` — 0.0 for the floor). Every projection/membership
+function here re-projects onto EACH ZONE'S OWN PLANE via
+``backbone.shared.zones.ZoneAwareProjector`` (the same helper
+``backbone.detection.zone_scope.build_zone_membership_filter`` and
+``PalletStateManager`` consume) instead of assuming ``Z = 0``: floor zones
+(``z_base_m == 0``) take the exact undistort+H floor path, bit-for-bit
+identical to the pre-z_base behavior; a raised zone on a metric rig
+ray/plane-intersects at its own height; a Mode-1 (H-only) rig cannot lift a
+ray off the floor and falls back to the floor path for every zone, raised or
+not (mirrors ``zone_scope``'s Mode-1 fallback).
 """
 
 from __future__ import annotations
@@ -31,19 +44,24 @@ def project_zone_polygons(rig, zones, camera_id: str) -> list:
 
     Returns ``[(zone_id, name, poly)]`` where ``poly`` is an ``(N, 2)`` float
     array of pixel vertices. Mode 2 (real ``K, D, R, t``) projects distortion-
-    aware and clipped to the reliably-projectable field; Mode 1 (only ``H``)
-    maps through the homography. Zones the camera cannot see are dropped.
+    aware, AT THE ZONE'S OWN PLANE (``Zone.z_base_m``; 0.0 = floor, matching
+    pre-z_base behavior exactly), and clipped to the reliably-projectable
+    field; Mode 1 (only ``H``) maps through the homography — it cannot lift a
+    ray off the floor, so every zone (raised or not) projects at the floor.
+    Zones the camera cannot see are dropped.
     """
     if rig is None or camera_id not in rig:
         return []
     view = rig[camera_id]
     out: list = []
     for name in zones.names:
+        zone = zones[name]
         poly_m = densify_polygon(
-            np.asarray(zones[name].polygon, dtype=np.float64), segments_per_edge=8)
+            np.asarray(zone.polygon, dtype=np.float64), segments_per_edge=8)
         if has_metric_camera_model(view.K, view.R, view.t):
             px = project_floor_polygon_distorted(
-                poly_m, view.K, view.D, view.R, view.t, view.image_size_wh)
+                poly_m, view.K, view.D, view.R, view.t, view.image_size_wh,
+                z_m=float(zone.z_base_m))
         else:
             px = floor_to_pixel(poly_m, view.H)
         if px is None or len(px) < 3:
@@ -102,34 +120,49 @@ def zone_stencil(shape_hw, polys) -> np.ndarray:
 _ZONE_TOL_M = 0.15
 
 
-def clip_to_zones_metric(dets: list, view, display_wh, zones,
+def clip_to_zones_metric(dets: list, rig, camera_id: str, display_wh, zones,
                          tol_m: float = _ZONE_TOL_M) -> list:
-    """Zone membership in METRES — the same undistort+H the metric engine
-    uses, so the cam view agrees with the fused zone state / COMMS card.
+    """Zone membership in METRES — each detection's foot is tested against
+    EACH ZONE'S OWN PLANE (``Zone.z_base_m``, via
+    :class:`~backbone.shared.zones.ZoneAwareProjector`), so the cam view
+    agrees with the fused zone state / COMMS card (``PalletStateManager``
+    uses the same helper) even for a raised platform/shelf zone whose FLOOR
+    projection would land outside the polygon and drop it.
 
     A per-camera PIXEL polygon test is boundary-fragile: calibration skew puts
     the same physical object's foot inside one camera's projected polygon and
     a few dozen px outside the other's (box shown on cam2, dropped on cam1).
-    Projecting the foot to the floor and testing against the metric zone
-    polygon (± ``tol_m``) is camera-invariant. Each kept det gets ``zone_id``
-    (nearest zone). No zones ⇒ nothing shown."""
-    if not dets or len(zones) == 0:
+    Projecting the foot onto the zone's plane and testing against the metric
+    zone polygon (± ``tol_m``) is camera-invariant. Each kept det gets
+    ``zone_id`` (nearest zone, by signed distance across every zone whose
+    plane projection is valid). No zones ⇒ nothing shown. Floor zones
+    (``z_base_m == 0``) project via the exact undistort+H path, bit-for-bit
+    identical to the pre-z_base behavior."""
+    if not dets or len(zones) == 0 or rig is None or camera_id not in rig:
         return []
-    from backbone.shared.geometry import pixel_to_floor, undistort_points
+    from backbone.shared.zones import ZoneAwareProjector
+    view = rig[camera_id]
     cw, ch = float(view.image_size_wh[0]), float(view.image_size_wh[1])
     fw, fh = float(display_wh[0]), float(display_wh[1])
-    uv = np.array([[d.foot_uv[0] * cw / fw, d.foot_uv[1] * ch / fh]
-                   for d in dets], dtype=np.float64)
-    xy = pixel_to_floor(undistort_points(uv, view.K, view.D), view.H)
-    polys = [(zones.id_of(n) or n, np.asarray(zones[n].polygon, np.float32))
-             for n in zones.names]
+    projector = ZoneAwareProjector(rig)
+    zone_list = [(zones.id_of(n) or n, zones[n]) for n in zones.names]
     kept: list = []
-    for d, (x, y) in zip(dets, xy, strict=True):
-        if not (np.isfinite(x) and np.isfinite(y)):
-            continue
+    for d in dets:
+        raw_uv = (d.foot_uv[0] * cw / fw, d.foot_uv[1] * ch / fh)
+        # One plane projection per distinct zone height — zones sharing a
+        # height (the common all-floor case) reuse one projection, same
+        # memoization `zone_scope.build_zone_membership_filter` applies.
+        plane_cache: dict[float, tuple[float, float] | None] = {}
         best = None
-        for zid, poly in polys:
-            dist = cv2.pointPolygonTest(poly, (float(x), float(y)), True)
+        for zid, zone in zone_list:
+            z = float(zone.z_base_m)
+            if z not in plane_cache:
+                plane_cache[z] = projector.position_in_zone(camera_id, raw_uv, zone)
+            xy = plane_cache[z]
+            if xy is None or not (np.isfinite(xy[0]) and np.isfinite(xy[1])):
+                continue
+            poly = np.asarray(zone.polygon, np.float32)
+            dist = cv2.pointPolygonTest(poly, (float(xy[0]), float(xy[1])), True)
             if best is None or dist > best[1]:
                 best = (zid, dist)
         if best is not None and best[1] >= -float(tol_m):
@@ -141,10 +174,12 @@ def clip_to_zones_metric(dets: list, view, display_wh, zones,
 def project_zone_hulls(rig, zones, camera_id: str, *,
                        height_m: float = 2.0) -> list:
     """Per-zone EXTRUDED hulls in the camera's calibration frame: the convex
-    hull of the zone polygon projected at the floor (z=0) AND at ``height_m``.
+    hull of the zone polygon projected at ITS OWN BASE PLANE (``Zone.z_base_m``;
+    0.0 = floor, matching pre-z_base behavior exactly) AND at
+    ``z_base_m + height_m``.
 
-    This is the mask-clip boundary. The flat floor polygon cuts the body off
-    a tall object (a mask rises above its floor footprint) and a field-
+    This is the mask-clip boundary. The flat base-plane polygon cuts the body
+    off a tall object (a mask rises above its footprint) and a field-
     clipped projection under-covers an edge-on zone (0% mask survival on
     genuinely in-zone objects); the zones' crop-box RECTS over-cover (their
     union spans most of the frame — masks visibly outside the zones again).
@@ -163,21 +198,25 @@ def project_zone_hulls(rig, zones, camera_id: str, *,
     view = rig[camera_id]
     out: list = []
     for name in zones.names:
+        zone = zones[name]
         poly_m = densify_polygon(
-            np.asarray(zones[name].polygon, dtype=np.float64), segments_per_edge=8)
+            np.asarray(zone.polygon, dtype=np.float64), segments_per_edge=8)
+        z0 = float(zone.z_base_m)
         if has_metric_camera_model(view.K, view.R, view.t):
-            floor3 = np.hstack([poly_m, np.zeros((len(poly_m), 1))])
-            top3 = np.hstack([poly_m, np.full((len(poly_m), 1), float(height_m))])
+            base3 = np.hstack([poly_m, np.full((len(poly_m), 1), z0)])
+            top3 = np.hstack([poly_m, np.full((len(poly_m), 1), z0 + float(height_m))])
             uv = np.vstack([
-                _project_world3(floor3, view.K, view.D, view.R, view.t,
+                _project_world3(base3, view.K, view.D, view.R, view.t,
                                 view.image_size_wh),
                 _project_world3(top3, view.K, view.D, view.R, view.t,
                                 view.image_size_wh),
             ])
             uv = uv[~np.isnan(uv).any(axis=1)]
         else:
-            # Mode 1 (H only): floor polygon + the same polygon shifted up by
-            # its own pixel height — the zone_crop_boxes stand-in.
+            # Mode 1 (H only): cannot lift a ray off the floor — floor
+            # polygon + the same polygon shifted up by its own pixel height —
+            # the zone_crop_boxes stand-in, same for every zone regardless of
+            # z_base_m.
             base = floor_to_pixel(poly_m, view.H)
             lift = base.copy()
             lift[:, 1] -= (base[:, 1].max() - base[:, 1].min())
@@ -206,23 +245,33 @@ def project_zone_hulls(rig, zones, camera_id: str, *,
     return out
 
 
-def zone_of_foot_metric(view, display_wh, zones, foot_uv,
+def zone_of_foot_metric(rig, camera_id: str, display_wh, zones, foot_uv,
                         tol_m: float = _ZONE_TOL_M) -> str | None:
     """Single-foot version of :func:`clip_to_zones_metric` — the ONE membership
-    rule (foot → floor via the camera's undistort+H → nearest zones.yaml
-    polygon ± ``tol_m``) shared by the cam views AND the zone worker, so a
-    detection can never be 'in the zone' on one surface and outside on
-    another. Returns the zone id, or ``None``."""
-    from backbone.shared.geometry import pixel_to_floor, undistort_points
+    rule (foot → EACH ZONE'S OWN PLANE → nearest zones.yaml polygon ±
+    ``tol_m``) shared by the cam views AND the zone worker, so a detection can
+    never be 'in the zone' on one surface and outside on another. Floor zones
+    (``z_base_m == 0``) project via the exact undistort+H path, bit-for-bit
+    identical to the pre-z_base behavior. Returns the zone id, or ``None``."""
+    if rig is None or camera_id not in rig or len(zones) == 0:
+        return None
+    from backbone.shared.zones import ZoneAwareProjector
+    view = rig[camera_id]
     cw, ch = float(view.image_size_wh[0]), float(view.image_size_wh[1])
     fw, fh = float(display_wh[0]), float(display_wh[1])
-    uv = np.array([[foot_uv[0] * cw / fw, foot_uv[1] * ch / fh]], dtype=np.float64)
-    xy = pixel_to_floor(undistort_points(uv, view.K, view.D), view.H)[0]
-    if not (np.isfinite(xy[0]) and np.isfinite(xy[1])):
-        return None
+    raw_uv = (foot_uv[0] * cw / fw, foot_uv[1] * ch / fh)
+    projector = ZoneAwareProjector(rig)
+    plane_cache: dict[float, tuple[float, float] | None] = {}
     best = None
     for name in zones.names:
-        poly = np.asarray(zones[name].polygon, np.float32)
+        zone = zones[name]
+        z = float(zone.z_base_m)
+        if z not in plane_cache:
+            plane_cache[z] = projector.position_in_zone(camera_id, raw_uv, zone)
+        xy = plane_cache[z]
+        if xy is None or not (np.isfinite(xy[0]) and np.isfinite(xy[1])):
+            continue
+        poly = np.asarray(zone.polygon, np.float32)
         dist = cv2.pointPolygonTest(poly, (float(xy[0]), float(xy[1])), True)
         if best is None or dist > best[1]:
             best = (zones.id_of(name) or name, dist)

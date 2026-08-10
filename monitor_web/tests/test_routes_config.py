@@ -258,6 +258,24 @@ def test_post_zone_z_base_m_negative_rejected(populated_app) -> None:
         assert res.status_code == 422
 
 
+def test_get_config_hand_edited_non_numeric_z_base_m_defaults_zero(tmp_path: Path) -> None:
+    """A zones.yaml hand-edited with a non-numeric z_base_m must not 500 the
+    whole config read — it defaults to the floor like an absent key."""
+    zones_path = tmp_path / "zones.yaml"
+    zones_path.write_text(yaml.safe_dump({"zones": [
+        {"name": "bad", "kind": "palette", "z_base_m": "not-a-number",
+         "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]},
+    ]}))
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {}, "zones_path": str(zones_path)}))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    with TestClient(create_app(cfg)) as client:
+        res = client.get("/api/config")
+    assert res.status_code == 200
+    assert res.json()["zones"][0]["z_base_m"] == 0.0
+
+
 def test_get_config_exposes_z_base_m_from_disk(tmp_path: Path) -> None:
     """A zones.yaml already carrying z_base_m surfaces it on GET; a zone
     without the key reads as 0.0."""

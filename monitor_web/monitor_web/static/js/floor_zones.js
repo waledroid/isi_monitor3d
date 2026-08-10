@@ -210,8 +210,15 @@ function buildRow(zone, idx) {
   baseInput.setAttribute("aria-label", t("zone_base_height", "Base height (m)"));
   baseInput.addEventListener("change", () => {
     const v = parseFloat(baseInput.value);
-    const clamped = Number.isFinite(v) ? Math.max(0, Math.min(5, v)) : 0;
-    baseInput.value = clamped;   // empty/invalid → back to 0
+    if (!Number.isFinite(v)) {
+      // Unparseable/empty input restores the PREVIOUS value rather than
+      // silently persisting 0 — an operator's fat-fingered edit must not
+      // quietly reset a platform zone back to the floor.
+      baseInput.value = zone.z_base_m || 0;
+      return;
+    }
+    const clamped = Math.max(0, Math.min(5, v));
+    baseInput.value = clamped;
     zone.z_base_m = clamped;
     persist();
   });
