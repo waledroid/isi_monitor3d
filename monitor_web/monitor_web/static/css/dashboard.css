@@ -1502,6 +1502,32 @@ button.btn-stop:hover {
   margin-top: 12px;
 }
 
+/* Floor-zone rows (floor_zones.js) carry one extra control — the base-height
+   field — so they need 6 columns instead of the shared 5-column grid above. */
+.config-link-row.zm-zone-row {
+  grid-template-columns: minmax(100px, 1fr) 100px 90px auto auto auto;
+  gap: 10px;
+}
+
+.zm-zone-base-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.zm-zone-base-field > span {
+  font-size: 11px;
+  color: #9aa5b1;
+  white-space: nowrap;
+}
+
+.config-link-row .zm-zone-base {
+  width: 6ch;
+  padding: 8px 6px;
+  text-align: right;
+}
+
 /* ============ S17.1: draw-target picker (CAM-only) ============ */
 
 .zm-draw-picker {

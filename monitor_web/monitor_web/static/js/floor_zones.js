@@ -150,7 +150,9 @@ function drawNewZone() {
 
 function buildRow(zone, idx) {
   const row = document.createElement("div");
-  row.className = "config-link-row";
+  // zm-zone-row: floor-zone rows carry one extra control (base height) vs the
+  // shared 5-column .config-link-row grid — scoped 6-column override in CSS.
+  row.className = "config-link-row zm-zone-row";
 
   const nameInput = document.createElement("input");
   nameInput.type = "text";
@@ -222,6 +224,14 @@ function buildRow(zone, idx) {
     zone.z_base_m = clamped;
     persist();
   });
+  // Visible small label + tooltip so the bare number isn't cryptic in the row.
+  const baseField = document.createElement("label");
+  baseField.className = "zm-zone-base-field";
+  baseField.title = t("zone_base_height", "Base height (m)");
+  const baseLabel = document.createElement("span");
+  baseLabel.textContent = t("zone_base_height", "Base height (m)");
+  baseField.appendChild(baseLabel);
+  baseField.appendChild(baseInput);
 
   const meta = document.createElement("span");
   meta.className = "layout-hint";
@@ -240,7 +250,7 @@ function buildRow(zone, idx) {
   row.appendChild(nameInput);
   row.appendChild(kindSel);
   row.appendChild(sevSel);
-  row.appendChild(baseInput);
+  row.appendChild(baseField);
   row.appendChild(meta);
   row.appendChild(del);
   return row;
