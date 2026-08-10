@@ -351,3 +351,32 @@ def test_post_accepts_distinct_names(app_cfg):
         res = client.post("/api/zone-patches", json={"patches": [
             _roi("z1", "Dock A"), _roi("z2", "Dock B", x0=200)]})
         assert res.status_code == 200, res.text
+
+
+# ---- twin staleness signature covers zones.yaml ----------------------------
+
+
+def test_calibration_sig_changes_on_zones_yaml_edit(tmp_path: Path):
+    """A zone edit (polygon redraw, base-height change) moves the twin
+    geometry exactly like a calibration switch — the staleness signature must
+    change when zones.yaml changes so ensure_twins_current regenerates."""
+    import time
+
+    from monitor_web.api.routes_zone_patches import _calibration_sig
+
+    backbone_yaml = tmp_path / "backbone.yaml"
+    zones_path = tmp_path / "zones.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {}, "metadata": {"sinks": []},
+        "zones_path": str(zones_path),
+    }))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+
+    zones_path.write_text(yaml.safe_dump({"zones": []}))
+    sig1 = _calibration_sig(cfg)
+    time.sleep(0.01)
+    zones_path.write_text(yaml.safe_dump(
+        {"zones": [{"id": "zp_1", "name": "Z", "polygon": [[0, 0], [1, 0], [1, 1]],
+                    "z_base_m": 0.304}]}))
+    sig2 = _calibration_sig(cfg)
+    assert sig1 != sig2

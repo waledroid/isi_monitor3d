@@ -240,3 +240,36 @@ def test_projection_failure_keeps_previous_entry_while_patch_lives(tmp_path) -> 
     zones = yaml.safe_load((tmp_path / "zones.yaml").read_text())["zones"]
     assert [z["id"] for z in zones] == ["zp_1"]
     assert zones[0]["name"] == "Zone 1"
+
+
+# ---- raised zones: decode at the zone's own plane (z_base_m) ---------------
+
+
+def test_sync_decodes_raised_zone_on_its_plane_and_preserves_height(tmp_path) -> None:
+    """A patch drawn around a platform's edges re-projects at the zone's
+    declared z_base_m: the derived polygon is the platform's TRUE footprint
+    (not its displaced floor shadow), and the height survives the re-sync."""
+    cfg, rig = _cfg(tmp_path), _rig(tmp_path)
+    z = 0.304
+    # world square (1..1.3, 1..1.3) ON the platform plane, through the
+    # look-down rig: u = 1000*X/(3-z) + 500, v = 500 - 1000*Y/(3-z)
+    def px(X, Y):
+        return [1000.0 * X / (3.0 - z) + 500.0, 500.0 - 1000.0 * Y / (3.0 - z)]
+    corners = [(1.0, 1.0), (1.3, 1.0), (1.3, 1.3), (1.0, 1.3)]
+    _seed_zones(tmp_path, [{"id": "zp_1", "name": "Zone 1", "type": "palette",
+                            "kind": "palette", "severity": "info",
+                            "polygon": [[0, 0], [1, 0], [1, 1]],
+                            "z_base_m": z, "derived_from": "zone_patch"}])
+    patch = {"id": "zp_1", "name": "Zone 1", "camera": "cam_a",
+             "polygon": [px(X, Y) for X, Y in corners], "frame_wh": [1000, 1000]}
+    n = sync_floor_zones_from_patches(cfg, patches=[patch], rig=rig)
+    assert n == 1
+    zones = yaml.safe_load((tmp_path / "zones.yaml").read_text())["zones"]
+    assert len(zones) == 1
+    assert zones[0]["z_base_m"] == z
+    got = np.asarray(zones[0]["polygon"], dtype=float)
+    want = np.asarray(corners, dtype=float)
+    assert np.allclose(got, want, atol=5e-3)      # true footprint, not shadow
+    # the floor decode of the same pixels would be scaled by 3/(3-z) ≈ 1.113 —
+    # pin that the shadow was NOT stored.
+    assert not np.allclose(got, want * 3.0 / (3.0 - z), atol=5e-2)

@@ -115,15 +115,15 @@ class PatchesBody(BaseModel):
     patches: list[PatchRect] = Field(default_factory=list, max_length=MAX_PATCHES * 2)
 
 
-def _patch_ghost(patch: dict, rig) -> dict | None:
+def _patch_ghost(patch: dict, rig, z_m: float = 0.0) -> dict | None:
     """Project a patch's polygon into the OTHER camera's pixels (Mode-2 ghost).
 
-    Round-trips through the floor: own-camera pixels → undistort → ``H_own`` →
-    world metres → ``H_other``⁻¹ → other-camera pixels. Points are scaled from
-    the patch's stored ``frame_wh`` to the calibration frame first. Returns
-    ``{"camera", "polygon", "image_wh"}`` or ``None`` when the patch camera
-    isn't calibrated, there is no second camera, or the projection lands
-    entirely outside the other view (no overlap).
+    Round-trips through the zone's plane (``z_m`` — 0 = the floor, unchanged):
+    own-camera pixels → world metres on ``Z = z_m`` → other-camera pixels.
+    Points are scaled from the patch's stored ``frame_wh`` to the calibration
+    frame first. Returns ``{"camera", "polygon", "image_wh"}`` or ``None``
+    when the patch camera isn't calibrated, there is no second camera, or the
+    projection lands entirely outside the other view (no overlap).
     """
     import numpy as np
     from backbone.shared.geometry import (
@@ -131,6 +131,7 @@ def _patch_ghost(patch: dict, rig) -> dict | None:
         floor_to_pixel,
         has_metric_camera_model,
         pixel_to_floor,
+        pixel_to_plane,
         project_floor_polygon_distorted,
         undistort_points_checked,
     )
@@ -167,7 +168,15 @@ def _patch_ghost(patch: dict, rig) -> dict | None:
         und, valid = undistort_points_checked(pts, own.K, own.D)
         if valid.sum() < 6:
             return None
-        world = pixel_to_floor(und[valid], own.H)
+        if z_m > 0.0 and has_metric_camera_model(own.K, own.R, own.t):
+            # Raised zone: decode the drawn pixels on ITS plane (true
+            # footprint), keeping the divergence guard's sample filter.
+            # pixel_to_plane takes RAW pixels — it undistorts internally.
+            world = pixel_to_plane(pts[valid], own.K, own.D, own.R, own.t, z_m)
+            if world is None:
+                return None
+        else:
+            world = pixel_to_floor(und[valid], own.H)
         # Distortion-aware: the ghost is drawn over the RAW (distorted) live
         # frame — pinhole coords would drift 100+ px near the edges of a
         # strong barrel lens. H-only fallback for placeholder extrinsics.
@@ -180,7 +189,8 @@ def _patch_ghost(patch: dict, rig) -> dict | None:
             # projectable field first (the visible overlap is bounded by the
             # field rim, not just the zone's own boundary).
             ghost = project_floor_polygon_distorted(
-                world, other.K, other.D, other.R, other.t, other.image_size_wh)
+                world, other.K, other.D, other.R, other.t, other.image_size_wh,
+                z_m=z_m)
             if ghost is None or len(ghost) < 3:
                 return None
         else:
@@ -213,16 +223,30 @@ def _load_rig(cfg):
 
 
 def _calibration_sig(cfg) -> str:
-    """Identity of the ACTIVE calibration (path + mtime) — twins are projected
-    through it, so a change means every stored twin is stale."""
+    """Identity of everything the stored twins were projected through: the
+    ACTIVE calibration (path + mtime) AND zones.yaml (path + mtime) — a zone
+    edit (polygon redraw, base-height change) moves the twin geometry just
+    like a calibration switch does, so either change marks every twin stale.
+
+    ``regenerate_twins`` stores the signature AFTER its own zones.yaml
+    rewrite, so a regeneration pass never invalidates itself (no regen loop).
+    """
+    sig = ""
     try:
         from .routes_calibrate import _mode_calibration_path
         p = _mode_calibration_path(cfg)
         if p.exists():
-            return f"{p.resolve()}:{p.stat().st_mtime_ns}"
+            sig = f"{p.resolve()}:{p.stat().st_mtime_ns}"
     except Exception:
         pass
-    return ""
+    try:
+        from ..floor_zone_sync import _zones_yaml_path
+        z = _zones_yaml_path(cfg)
+        if z.exists():
+            sig += f"|{z.resolve()}:{z.stat().st_mtime_ns}"
+    except Exception:
+        pass
+    return sig
 
 
 def ensure_twins_current(cfg) -> bool:
@@ -242,11 +266,11 @@ def ensure_twins_current(cfg) -> bool:
     return True
 
 
-def _make_twin(patch: dict, rig) -> dict | None:
-    """Derive the cross-camera twin of a patch: the ghost polygon (same floor
-    region, other camera), clipped to that camera's frame, carrying the same
-    name so both workers render the same physical zone."""
-    ghost = _patch_ghost(patch, rig)
+def _make_twin(patch: dict, rig, z_m: float = 0.0) -> dict | None:
+    """Derive the cross-camera twin of a patch: the ghost polygon (same
+    zone-plane region, other camera), clipped to that camera's frame, carrying
+    the same name so both workers render the same physical zone."""
+    ghost = _patch_ghost(patch, rig, z_m=z_m)
     if ghost is None:
         return None
     import numpy as np
@@ -292,12 +316,18 @@ def _build_twins(user_patches: list[dict], rig, cfg) -> list[dict]:
     """
     if rig is None or len(list(rig.camera_ids)) < 2:
         return []
+    z_by_id: dict[str, float] = {}
     try:
         from backbone.shared.zones import ZoneRegistry
 
         from ..floor_zone_sync import _zones_yaml_path
         from ..zone_projection import project_zone_polygons
         zones = ZoneRegistry.load(_zones_yaml_path(cfg))
+        # project_zone_polygons projects each zone AT ITS OWN PLANE
+        # (Zone.z_base_m) — a raised zone's twin lands on the platform, not
+        # on its floor shadow. Remember the heights for the ghost fallback.
+        z_by_id = {(zones.id_of(n) or n): float(zones[n].z_base_m)
+                   for n in zones.names}
         polys_by_cam = {
             cam: {zid: poly for zid, _name, poly in
                   project_zone_polygons(rig, zones, cam)}
@@ -319,7 +349,8 @@ def _build_twins(user_patches: list[dict], rig, cfg) -> list[dict]:
                 twin = _twin_dict(p, other, poly, rig[other].image_size_wh)
         if twin is None:
             try:
-                twin = _make_twin(p, rig)
+                twin = _make_twin(p, rig,
+                                  z_m=z_by_id.get(str(p.get("id")), 0.0))
             except Exception:
                 twin = None
         if twin is not None:
@@ -373,12 +404,23 @@ def get_zone_patches(request: Request) -> dict:
     patches = [dict(p) for p in load_patches(cfg)]
     rig = _load_rig(cfg)
     if rig is not None:
+        z_by_id: dict[str, float] = {}
+        try:
+            from backbone.shared.zones import ZoneRegistry
+
+            from ..floor_zone_sync import _zones_yaml_path
+            zones = ZoneRegistry.load(_zones_yaml_path(cfg))
+            z_by_id = {(zones.id_of(n) or n): float(zones[n].z_base_m)
+                       for n in zones.names}
+        except Exception:
+            pass                       # no zones file → floor ghosts, as before
         twinned = {p.get("twin_of") for p in patches if is_twin(p)}
         for p in patches:
             if is_twin(p) or p.get("id") in twinned:
                 continue
             try:
-                p["ghost"] = _patch_ghost(p, rig)
+                p["ghost"] = _patch_ghost(
+                    p, rig, z_m=z_by_id.get(str(p.get("id")), 0.0))
             except Exception:
                 p["ghost"] = None
     return {"patches": patches}

@@ -143,15 +143,32 @@ function pickAndDraw({ zM, label, onPoints }) {
   });
 }
 
+// Ask for the surface height BEFORE drawing so the clicks decode on the
+// right plane from the first point. Returns 0..5, or null on cancel.
+function promptBaseHeight() {
+  const raw = window.prompt(
+    t("floor_zone_height_prompt",
+      "Base height of the zone's surface in metres (0 = floor; e.g. 0.304 for a platform)"),
+    "0");
+  if (raw === null) return null;
+  const v = parseFloat(String(raw).replace(",", "."));
+  return Number.isFinite(v) ? Math.max(0, Math.min(5, v)) : 0;
+}
+
 function drawNewZone() {
   if (zones.length >= maxZones) {
     window.alert(t("floor_zones_max", `Maximum of ${maxZones} floor zones reached. Delete one first.`));
     return;
   }
+  const h = promptBaseHeight();
+  if (h === null) return;
+  const hint = h > 0
+    ? t("floor_zone_redraw_hint_plane", "Click ≥3 edge points ON the raised surface")
+      + ` (z = ${h.toFixed(2)} m)`
+    : t("floor_zone_draw_hint", "Floor zone — click ≥3 points on the floor, then Done");
   pickAndDraw({
-    zM: 0,   // a new zone's height isn't known yet — raised zones: set the
-             // base height on the row, then redraw (plane-aware decode)
-    label: t("floor_zone_draw_hint", "Floor zone — click ≥3 points on the floor, then Done"),
+    zM: h,
+    label: hint,
     onPoints: async (worldPoints) => {
       const name = promptZoneName(zones.map((z) => z.name), nextDefaultName());
       if (!name) return;
@@ -162,7 +179,7 @@ function drawNewZone() {
         type: "palette",
         severity: "info",
         polygon: worldPoints,
-        z_base_m: 0,
+        z_base_m: h,
       });
       await persist();
     },

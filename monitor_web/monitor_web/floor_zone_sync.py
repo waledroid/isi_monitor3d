@@ -59,9 +59,20 @@ def _patch_pixel_polygon(patch: dict) -> list[list[float]] | None:
     return None
 
 
-def _project_patch_to_floor(patch: dict, view) -> list[list[float]] | None:
-    """Patch pixels (at their stored ``frame_wh``) → floor metres, or None."""
-    from backbone.shared.geometry import pixel_to_floor, undistort_points
+def _project_patch_to_floor(patch: dict, view,
+                            z_m: float = 0.0) -> list[list[float]] | None:
+    """Patch pixels (at their stored ``frame_wh``) → world metres, or None.
+
+    ``z_m > 0`` decodes ON THE ZONE'S PLANE (ray ∩ ``Z = z_m`` via
+    ``pixel_to_plane``): a patch drawn around a raised platform's edges then
+    yields the platform's TRUE footprint instead of its displaced floor
+    shadow. Needs metric extrinsics; H-only rigs fall back to the floor."""
+    from backbone.shared.geometry import (
+        has_metric_camera_model,
+        pixel_to_floor,
+        pixel_to_plane,
+        undistort_points,
+    )
 
     poly = _patch_pixel_polygon(patch)
     if poly is None:
@@ -73,7 +84,12 @@ def _project_patch_to_floor(patch: dict, view) -> list[list[float]] | None:
         fw, fh = float(stored[0]), float(stored[1])
         if (int(fw), int(fh)) != (int(cw), int(ch)):
             pts = pts * [cw / fw, ch / fh]
-    world = pixel_to_floor(undistort_points(pts, view.K, view.D), view.H)
+    if z_m > 0.0 and has_metric_camera_model(view.K, view.R, view.t):
+        world = pixel_to_plane(pts, view.K, view.D, view.R, view.t, z_m)
+        if world is None:
+            return None
+    else:
+        world = pixel_to_floor(undistort_points(pts, view.K, view.D), view.H)
     if not np.isfinite(world).all():
         return None
     return [[round(float(x), 3), round(float(y), 3)] for x, y in world]
@@ -123,8 +139,23 @@ def sync_floor_zones_from_patches(cfg, patches: list[dict] | None = None,
             logger.info("floor_zone_sync: %r skipped (camera %r not calibrated)",
                         p.get("name") or p.get("id"), cam)
             continue
+        # STABLE identity: reuse the patch id (``zp_…``) so the pixel patch and
+        # this floor zone share ONE immutable id — never positional, never
+        # reused after a delete. The label (``name``) is free to change; the id
+        # is what AGVs/WMS/MQTT key on. Legacy patches without an id fall back to
+        # the loader's name-slug (still deterministic).
+        pid = str(p.get("id") or "").strip()
+        prev = prev_by_id.get(pid, {})
+        # The zone's declared plane survives every re-sync AND drives the
+        # decode: patch pixels drawn around a raised platform re-project at the
+        # zone's own height, not the floor (a z=0 decode would clobber the
+        # true footprint with the platform's displaced floor shadow).
         try:
-            floor = _project_patch_to_floor(p, rig[cam])
+            z_base = max(0.0, min(5.0, float(prev.get("z_base_m") or 0.0)))
+        except (TypeError, ValueError):
+            z_base = 0.0
+        try:
+            floor = _project_patch_to_floor(p, rig[cam], z_m=z_base)
         except Exception:
             logger.warning("floor_zone_sync: projection failed for %r",
                            p.get("name") or p.get("id"), exc_info=True)
@@ -135,13 +166,6 @@ def sync_floor_zones_from_patches(cfg, patches: list[dict] | None = None,
         if name in used_names:                       # ZoneRegistry rejects dupes
             name = f"{name} ({p.get('id', '')})"
         used_names.add(name)
-        # STABLE identity: reuse the patch id (``zp_…``) so the pixel patch and
-        # this floor zone share ONE immutable id — never positional, never
-        # reused after a delete. The label (``name``) is free to change; the id
-        # is what AGVs/WMS/MQTT key on. Legacy patches without an id fall back to
-        # the loader's name-slug (still deterministic).
-        pid = str(p.get("id") or "").strip()
-        prev = prev_by_id.get(pid, {})
         entry: dict = {}
         if pid:
             entry["id"] = pid
@@ -153,6 +177,8 @@ def sync_floor_zones_from_patches(cfg, patches: list[dict] | None = None,
             "polygon": floor,
             "derived_from": _MARKER,                 # ignored by the loader
         })
+        if z_base > 0.0:                             # omit-at-0, like the UI writer
+            entry["z_base_m"] = z_base
         derived.append(entry)
 
     # ---- reconcile: the patch and its floor zone are ONE object -------------
