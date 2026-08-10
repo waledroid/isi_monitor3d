@@ -10,8 +10,10 @@ from __future__ import annotations
 import numpy as np
 
 from backbone.core.types import Detection
+from backbone.homography.foot_projector import FootProjector
 from backbone.homography.pallet_occupancy import PalletOccupancy
 from backbone.homography.pallet_state_manager import PalletStateManager, ZoneDecision
+from backbone.shared.geometry import floor_homography_from_K_R_t
 from backbone.shared.zones import Zone, ZoneRegistry
 
 
@@ -254,3 +256,193 @@ def test_stale_occupancy_forgotten_when_presence_exits():
     for _ in range(2):  # enter_after=2
         dec = _zone_dec(mgr.step({"cam_a": [new_pallet]}))
     assert dec.palette_state == "palette_empty"
+
+
+# ---------- plane-aware bucketing (zone-base-height, decision 5) ----------
+#
+# Rig geometry mirrors tests/test_zone_scope.py's Task 2 fixtures: a
+# look-down camera at the origin, z=3, f=1000, c=(500, 500) — a world point
+# (X, Y, z) projects to u = 1000*X/(3-z) + 500. A platform at 0.304 m is the
+# live sortie_machine_1 height.
+
+_PLAT_K = np.array([[1000.0, 0.0, 500.0], [0.0, 1000.0, 500.0], [0.0, 0.0, 1.0]])
+_PLAT_R = np.diag([1.0, -1.0, -1.0])
+_PLATFORM_Z = 0.304
+_PLATFORM_POLY = np.array(
+    [[2.9, -0.1], [3.1, -0.1], [3.1, 0.1], [2.9, 0.1]], dtype=np.float64)
+# Foot pixel of an object standing at world (3.0, 0.0) ON the platform —
+# plane-projects to exactly (3.0, 0.0); floor-projects to X≈3.34 (outside
+# the platform's polygon even with the ±0.15 m tolerance cross).
+_PLATFORM_FOOT = (1000.0 * 3.0 / (3.0 - _PLATFORM_Z) + 500.0, 500.0)
+
+
+class _PlatformView:
+    def __init__(self, image_size_wh=(2000, 1000)):
+        self.K = _PLAT_K
+        self.D = np.zeros(5)
+        self.R = _PLAT_R
+        self.t = np.array([0.0, 0.0, 3.0])
+        self.H = floor_homography_from_K_R_t(self.K, self.R, self.t)
+        self.image_size_wh = image_size_wh
+
+
+class _PlatformViewH:
+    """Mode-1 placeholder extrinsics — only ``H`` is real (K=I, R=I, t=0)."""
+
+    def __init__(self, image_size_wh=(2000, 1000)):
+        self.K = np.eye(3)
+        self.D = np.zeros(5)
+        self.R = np.eye(3)
+        self.t = np.zeros(3)
+        self.H = floor_homography_from_K_R_t(
+            _PLAT_K, _PLAT_R, np.array([0.0, 0.0, 3.0]))
+        self.image_size_wh = image_size_wh
+
+
+class _PlatformRig:
+    def __init__(self, views: dict):
+        self._views = views
+
+    @property
+    def camera_ids(self):
+        return tuple(self._views)
+
+    def __getitem__(self, cam_id):
+        return self._views[cam_id]
+
+    def __contains__(self, cam_id):
+        return cam_id in self._views
+
+
+def _platform_registry(z_base_m: float, zone_id: str = "platform") -> ZoneRegistry:
+    return ZoneRegistry([Zone(name="Platform", type="palette",
+                              polygon=_PLATFORM_POLY, id=zone_id, z_base_m=z_base_m)])
+
+
+def test_platform_zone_buckets_detection_floor_projection_would_miss():
+    """A detection standing on the 0.304 m platform: with `rig` supplied, its
+    evidence is bucketed on the ZONE'S OWN plane and lands inside; a
+    same-shaped zone left at z_base_m=0 (floor) never sees it — proving
+    bucketing now depends on each zone's own height, not one shared Z=0
+    projection."""
+    rig = _PlatformRig({"cam_a": _PlatformView()})
+    pallet = Detection(camera_id="cam_a", capture_ts=0.0, cls="palette",
+                       confidence=0.9,
+                       bbox_xyxy=(_PLATFORM_FOOT[0] - 20, _PLATFORM_FOOT[1] - 20,
+                                  _PLATFORM_FOOT[0] + 20, _PLATFORM_FOOT[1]),
+                       foot_uv=_PLATFORM_FOOT)
+    projector = _FakeProjector()
+    raised = _platform_registry(_PLATFORM_Z)
+    floor = _platform_registry(0.0)
+    mgr_raised = PalletStateManager(raised, projector, PalletOccupancy(projector), rig=rig)
+    mgr_floor = PalletStateManager(floor, projector, PalletOccupancy(projector), rig=rig)
+    for _ in range(2):  # enter_after=2
+        dec_raised = _zone_dec(mgr_raised.step({"cam_a": [pallet]}), "platform")
+        dec_floor = _zone_dec(mgr_floor.step({"cam_a": [pallet]}), "platform")
+    assert dec_raised.palette_state == "palette_empty"
+    assert dec_raised.counts.get("palette") == 1
+    assert dec_floor.palette_state == "no_palette"
+    assert dec_floor.counts.get("palette", 0) == 0
+
+
+def test_platform_occupancy_state_lands_in_platform_zone():
+    """A pallet standing on the platform, loaded with a carton (the A
+    image-overlap estimator decides "full" from bbox geometry alone,
+    independent of the mock projector's metric accuracy): its occupancy
+    verdict must bucket into the PLATFORM zone via plane-aware projection —
+    the deliverable's explicit case, "a platform pallet's occupancy state
+    must land in the platform zone." The plain `_FakeProjector` (scale=0.01)
+    would map this foot to x≈16.1, nowhere near the platform's x∈[2.9,3.1]
+    footprint, proving the bucketing no longer depends on it."""
+    rig = _PlatformRig({"cam_a": _PlatformView()})
+    fx, fy = _PLATFORM_FOOT
+    pallet = Detection(camera_id="cam_a", capture_ts=0.0, cls="palette",
+                       confidence=0.9, bbox_xyxy=(fx - 100, 440, fx + 100, 500),
+                       foot_uv=(fx, fy))
+    carton = Detection(camera_id="cam_a", capture_ts=0.0, cls="carton",
+                       confidence=0.9, bbox_xyxy=(fx - 50, 400, fx + 50, 450),
+                       foot_uv=(fx, 450.0))
+    projector = _FakeProjector()
+    raised = _platform_registry(_PLATFORM_Z)
+    floor = _platform_registry(0.0)
+    mgr_raised = PalletStateManager(raised, projector, PalletOccupancy(projector), rig=rig)
+    mgr_floor = PalletStateManager(floor, projector, PalletOccupancy(projector), rig=rig)
+    for _ in range(2):
+        dec_raised = _zone_dec(mgr_raised.step({"cam_a": [pallet, carton]}), "platform")
+        dec_floor = _zone_dec(mgr_floor.step({"cam_a": [pallet, carton]}), "platform")
+    assert dec_raised.palette_state == "palette_loaded"
+    assert dec_raised.content == ("carton",)
+    assert dec_floor.palette_state == "no_palette"    # never entered presence
+
+
+def test_floor_zone_bit_identical_with_or_without_rig():
+    """z_base_m=0 zones must decide IDENTICALLY whether or not `rig` is
+    supplied — `ZoneAwareProjector`'s z=0 path is pinned bit-identical to
+    `FootProjector`'s plain floor projection (geometry's pixel_to_plane z=0
+    parity test), so wiring the SAME rig into both `projector` and `rig`
+    (exactly as the orchestrator does) must not change a single decision."""
+    rig = _PlatformRig({"cam_a": _PlatformView()})
+    zones = _zone_registry()  # default floor zone, z_base_m=0.0
+    projector = FootProjector(rig)
+    mgr_plain = PalletStateManager(zones, projector, PalletOccupancy(projector))
+    mgr_aware = PalletStateManager(zones, projector, PalletOccupancy(projector), rig=rig)
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a")
+    carton = _det("carton", (150, 250, 250, 300), camera_id="cam_a")
+    for _ in range(5):
+        d_plain = _zone_dec(mgr_plain.step({"cam_a": [pallet, carton]}))
+        d_aware = _zone_dec(mgr_aware.step({"cam_a": [pallet, carton]}))
+        assert d_plain == d_aware
+
+
+def test_mode1_h_only_rig_raised_zone_no_crash_keeps_floor_behavior():
+    """Mode-1 (H-only placeholder K=I, R=I, t=0) rigs cannot lift a ray off
+    the floor: a raised zone's decisions match a floor zone's exactly, no
+    crash (Global Constraint: raised projection paths fall back to current
+    behavior on H-only rigs)."""
+    rig = _PlatformRig({"cam_a": _PlatformViewH()})
+    projector = FootProjector(rig)
+    raised = _platform_registry(_PLATFORM_Z)
+    floor = _platform_registry(0.0)
+    pallet = _det("palette", (700, 460, 900, 500), camera_id="cam_a")
+    mgr_raised = PalletStateManager(raised, projector, PalletOccupancy(projector), rig=rig)
+    mgr_floor = PalletStateManager(floor, projector, PalletOccupancy(projector), rig=rig)
+    for _ in range(2):
+        d_r = _zone_dec(mgr_raised.step({"cam_a": [pallet]}), "platform")
+        d_f = _zone_dec(mgr_floor.step({"cam_a": [pallet]}), "platform")
+        assert d_r == d_f
+
+
+def test_unknown_camera_to_zone_aware_projector_contributes_no_evidence():
+    """A detection whose camera isn't in `rig`: plane-aware bucketing skips
+    it for every zone (fail-closed — same "a bad projection proves nothing"
+    policy the single-projection path always had), no crash."""
+    rig = _PlatformRig({"cam_a": _PlatformView()})
+    zones = _zone_registry()
+    projector = _FakeProjector()
+    mgr = PalletStateManager(zones, projector, PalletOccupancy(projector), rig=rig)
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_unknown")
+    dec = _zone_dec(mgr.step({"cam_unknown": [pallet]}))
+    assert dec.palette_state == "no_palette"
+    assert dec.counts.get("palette", 0) == 0
+
+
+def test_camera_loss_gate_unaffected_by_plane_aware_bucketing():
+    """The camera-loss gate (partial-frame protection, Finding 2) works
+    exactly as before when `rig` is supplied for plane-aware bucketing — the
+    gate/hysteresis layer sits ABOVE bucketing and doesn't care how a
+    detection's xy was derived."""
+    rig = _PlatformRig({"cam_a": _PlatformView()})
+    zones = _platform_registry(_PLATFORM_Z)
+    projector = _FakeProjector()
+    mgr = PalletStateManager(zones, projector, PalletOccupancy(projector),
+                             rig=rig, camera_ids=("cam_a", "cam_b"))
+    pallet = Detection(camera_id="cam_a", capture_ts=0.0, cls="palette",
+                       confidence=0.9,
+                       bbox_xyxy=(_PLATFORM_FOOT[0] - 20, _PLATFORM_FOOT[1] - 20,
+                                  _PLATFORM_FOOT[0] + 20, _PLATFORM_FOOT[1]),
+                       foot_uv=_PLATFORM_FOOT)
+    for _ in range(2):  # enter_after=2, both cameras reporting
+        mgr.step({"cam_a": [pallet], "cam_b": []}, reporting_cameras=("cam_a", "cam_b"))
+    for _ in range(30):  # cam_a goes dark — must NOT read as evidence of absence
+        dec = _zone_dec(mgr.step({"cam_b": []}, reporting_cameras=("cam_b",)), "platform")
+        assert dec.palette_state == "palette_empty"

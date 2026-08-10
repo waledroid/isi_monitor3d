@@ -380,9 +380,14 @@ class Orchestrator:
         # decides each zone's palette_state enum from per-camera detection
         # evidence alone (tracks never consulted). Shares the SAME projector
         # and occupancy instances as the enrichment above — one calibration,
-        # one A+B estimator, two consumers.
+        # one A+B estimator, two consumers. `rig` enables plane-aware zone
+        # bucketing (zone-base-height, decision 5): a raised zone's detection
+        # evidence and occupancy verdicts are tested on ITS OWN plane
+        # (Zone.z_base_m) instead of the floor, via a ZoneAwareProjector
+        # built from the SAME rig everything else uses.
         self._pallet_state = PalletStateManager(
             self._zones, self._projector, self._occupancy,
+            rig=self._rig,
             camera_ids=self._camera_ids,
             **hg_cfg.get("pallet_state", {}),
         )

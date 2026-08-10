@@ -5,18 +5,49 @@ class, decided from per-camera DETECTION EVIDENCE — tracks are never
 consulted. Two independent signals feed each zone's decision:
 
 * **Presence** (decision 2 of the design doc): a zone holds a class if ANY
-  camera's detection of that class projects (via ``FootProjector``) inside
-  the zone polygon, within ``tol_m`` — the same tolerant 5-point-cross
-  containment ``backbone.detection.zone_scope.build_zone_membership_filter``
-  uses, reused here rather than reinvented. Cross-camera OR: one camera's
-  positive detection is proof, no other camera need agree.
+  camera's detection of that class projects inside the zone polygon, within
+  ``tol_m`` — the same tolerant 5-point-cross containment
+  ``backbone.detection.zone_scope.build_zone_membership_filter`` uses,
+  reused here rather than reinvented (``_in_zone``). Cross-camera OR: one
+  camera's positive detection is proof, no other camera need agree.
 * **Occupancy** (decision 3): reuses ``PalletOccupancy.frame_states`` per
   camera (the existing A+B image-overlap / metric-margin fusion, computed
-  independently within each camera's own detections), bucketed into zones by
-  each pallet's floor position. A "full" verdict from ANY camera OUTRANKS
-  another camera's "empty" for the same zone (an "empty" only claims absence
-  from that angle — same rule as ``PalletOccupancy.enrich``'s cross-camera
-  fallback).
+  independently within each camera's own detections, always at Z=0 — see
+  "Plane-aware bucketing" below), bucketed into zones by each pallet's
+  position. A "full" verdict from ANY camera OUTRANKS another camera's
+  "empty" for the same zone (an "empty" only claims absence from that angle
+  — same rule as ``PalletOccupancy.enrich``'s cross-camera fallback).
+
+**Plane-aware bucketing (zone-base-height, decision 5).** A zone's polygon
+lives on its own plane (``Zone.z_base_m`` — 0.0 for the floor, e.g. 0.304 m
+for a platform). Both presence and occupancy bucketing test containment on
+EACH ZONE'S OWN PLANE, not a single shared Z=0 projection: constructed with
+``rig`` set, this class builds one ``ZoneAwareProjector`` and re-projects
+each detection's raw foot pixel (``det.camera_id``, ``det.foot_uv``) onto
+every zone's plane it's tested against (``_plane_xy``, memoized per distinct
+``z_base_m`` so zones sharing a height reuse one projection — the same
+pattern ``build_zone_membership_filter`` uses). Occupancy's A/B
+classification (``state``/``content``) is unaffected — ``PalletOccupancy``
+still estimates full/empty from its own Z=0-projected ``pallets_m``
+internally; only which ZONE a pallet's verdict lands in is re-derived on
+that zone's plane. **Without ``rig`` (the default, and every pre-existing
+caller)** this class falls back to the single Z=0 projection via the plain
+``projector`` argument, computed once per detection exactly as before —
+floor-only zones then produce BIT-IDENTICAL decisions to pre-zone-base-height
+behavior.
+
+**Fail-closed skip on projection failure (unchanged policy, now per-zone).**
+Before zone-base-height, a detection whose single Z=0 projection failed
+(unknown camera / degenerate ray / raised exception) contributed no evidence
+to ANY zone that frame — the whole detection was skipped. With per-zone
+planes, failure is now scoped to the (detection, zone) PAIR: if a
+detection's camera is unknown to the ``ZoneAwareProjector`` or its ray is
+degenerate on ONE zone's plane, only that zone gets no evidence from it —
+other zones (especially ones sharing a different, valid plane) are
+unaffected. This keeps the same "a bad projection proves nothing, never
+counts as absence" fail-closed spirit CLAUDE.md principle 6 requires, just
+correctly scoped now that different zones can disagree about whether a
+given camera/pixel projects cleanly.
 
 Both signals are stabilized against per-frame flicker before they reach the
 published enum:
@@ -80,7 +111,12 @@ from backbone.homography.pallet_occupancy import (
     OccupancyStabilizer,
     PalletOccupancy,
 )
-from backbone.shared.zones import Zone, ZoneMembershipHysteresis, ZoneRegistry
+from backbone.shared.zones import (
+    Zone,
+    ZoneAwareProjector,
+    ZoneMembershipHysteresis,
+    ZoneRegistry,
+)
 
 # The pseudo-track id every per-class ZoneMembershipHysteresis is fed under —
 # there is exactly one "track" per class (the class's zone-membership set).
@@ -136,6 +172,7 @@ class PalletStateManager:
         projector,
         occupancy: PalletOccupancy,
         *,
+        rig=None,
         camera_ids: Collection[str] = (),
         tol_m: float = 0.15,
         enter_after: int = 2,
@@ -144,6 +181,10 @@ class PalletStateManager:
         self._zones = zones
         self._projector = projector
         self._occupancy = occupancy
+        # Optional: enables per-zone-plane bucketing (zone-base-height,
+        # decision 5). None (the default — every pre-existing caller) keeps
+        # the single Z=0 `projector` path, bit-identical to before.
+        self._zone_aware = ZoneAwareProjector(rig) if rig is not None else None
         # The FULL configured camera set — compared against each step's
         # `reporting_cameras` to detect a partial (degraded) frame. Empty
         # (the default) disables the camera-loss gate entirely, so callers
@@ -206,13 +247,27 @@ class PalletStateManager:
         for cam_dets in detections_by_camera.values():
             cam_counts: dict[str, dict[str, int]] = {zid: {} for zid in zone_ids}
             for det in cam_dets:
-                xy = self._project(det)
-                if xy is None:
-                    continue
                 cls = _norm_cls(det.cls)
+                if self._zone_aware is None:
+                    # No zone-aware projector: one Z=0 projection shared by
+                    # every zone, exactly as before zone-base-height
+                    # (bit-identical). A failed projection skips the WHOLE
+                    # detection, as it always did.
+                    shared_xy = self._project(det)
+                    if shared_xy is None:
+                        continue
+                    for zid in zone_ids:
+                        zone = self._zones.by_id(zid)
+                        if zone is not None and _in_zone(zone, shared_xy, self._tol):
+                            cam_counts[zid][cls] = cam_counts[zid].get(cls, 0) + 1
+                    continue
+                plane_cache: dict[float, tuple[float, float] | None] = {}
                 for zid in zone_ids:
                     zone = self._zones.by_id(zid)
-                    if zone is not None and _in_zone(zone, xy, self._tol):
+                    if zone is None:
+                        continue
+                    xy = self._plane_xy(det, zone, plane_cache)
+                    if xy is not None and _in_zone(zone, xy, self._tol):
                         cam_counts[zid][cls] = cam_counts[zid].get(cls, 0) + 1
             for zid, cls_counts in cam_counts.items():
                 for cls, n in cls_counts.items():
@@ -247,15 +302,28 @@ class PalletStateManager:
         self._present_prev = present
 
         # ---- occupancy: per-camera A+B classification, bucketed into zones
-        # by pallet floor position, full-wins-across-cameras this frame.
+        # by pallet position (each zone's OWN plane, same as presence above —
+        # a platform pallet's occupancy state must land in the platform
+        # zone), full-wins-across-cameras this frame. `frame_states`'
+        # results are aligned in order with the pallet-class detections in
+        # `cam_dets` (its own docstring guarantee), so zipping recovers each
+        # verdict's raw detection (camera_id/foot_uv) for re-projection —
+        # `PalletOccupancy`'s own A/B estimators still classify state/content
+        # at Z=0 internally, unchanged (this only re-derives which ZONE a
+        # verdict is bucketed into).
         frame_occ: dict[str, tuple[str, str | None]] = {}
         for cam_dets in detections_by_camera.values():
-            for pallet_xy, state, content, _conf in self._occupancy.frame_states(cam_dets):
-                if pallet_xy is None:
-                    continue
+            pallets = [d for d in cam_dets if str(d.cls).lower() in PALLET_CLASSES]
+            results = self._occupancy.frame_states(cam_dets)
+            for det, (pallet_xy, state, content, _conf) in zip(pallets, results, strict=True):
+                plane_cache: dict[float, tuple[float, float] | None] = {}
                 for zid in zone_ids:
                     zone = self._zones.by_id(zid)
-                    if zone is None or not _in_zone(zone, pallet_xy, self._tol):
+                    if zone is None:
+                        continue
+                    xy = pallet_xy if self._zone_aware is None else self._plane_xy(
+                        det, zone, plane_cache)
+                    if xy is None or not _in_zone(zone, xy, self._tol):
                         continue
                     cur = frame_occ.get(zid)
                     if cur is None or (state == "full" and cur[0] != "full"):
@@ -301,6 +369,33 @@ class PalletStateManager:
             return self._projector.project(det)
         except Exception:
             return None
+
+    def _plane_xy(
+        self,
+        det: Detection,
+        zone: Zone,
+        cache: dict[float, tuple[float, float] | None],
+    ) -> tuple[float, float] | None:
+        """``det``'s foot pixel projected onto ``zone``'s own base plane,
+        memoized per distinct ``z_base_m`` (zones sharing a height reuse one
+        projection — the same optimization
+        ``zone_scope.build_zone_membership_filter`` applies). Only called
+        when ``self._zone_aware`` is set (see module docstring).
+
+        Returns ``None`` for an unknown camera or a degenerate/behind-camera
+        ray — this (detection, zone) pair contributes no evidence for THIS
+        zone only; other zones (particularly ones on a different, valid
+        plane) are unaffected. See the module docstring's "Fail-closed skip"
+        section.
+        """
+        z = float(zone.z_base_m)
+        if z in cache:
+            return cache[z]
+        xy = None
+        if det.camera_id in self._zone_aware:
+            xy = self._zone_aware.position_in_zone(det.camera_id, det.foot_uv, zone)
+        cache[z] = xy
+        return xy
 
     def _zone_name(self, zone_id: str) -> str:
         zone = self._zones.by_id(zone_id)
