@@ -145,6 +145,17 @@ class ZoneConfig(BaseModel):
     # store in zones.yaml; the dashboard uses them. None = use the global model/conf.
     model: str | None = None
     confidence_threshold: float | None = None
+    # Height of the zone's plane above the floor, metres (platform/shelf zones).
+    # Absent = 0.0, matching the Backbone loader's default (Zone.z_base_m) —
+    # an older UI that omits the field keeps writing floor zones.
+    z_base_m: float = 0.0
+
+    @field_validator("z_base_m")
+    @classmethod
+    def _z_base_range(cls, v: float) -> float:
+        if not (0.0 <= float(v) <= 5.0):   # NaN also fails this → rejected
+            raise ValueError("z_base_m must be between 0 and 5 metres")
+        return float(v)
 
     @field_validator("polygon")
     @classmethod
@@ -520,6 +531,7 @@ def get_config(request: Request) -> JSONResponse:
                 "polygon": z.get("polygon", []),
                 "model": z.get("model"),
                 "confidence_threshold": z.get("confidence_threshold"),
+                "z_base_m": float(z.get("z_base_m") or 0.0),
             }
         )
 
@@ -1009,6 +1021,9 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
                     **({"model": z.model} if z.model else {}),
                     **({"confidence_threshold": z.confidence_threshold}
                        if z.confidence_threshold is not None else {}),
+                    # z_base_m omitted at 0.0 (the loader's default) so floor
+                    # zones / legacy files round-trip without the key.
+                    **({"z_base_m": z.z_base_m} if z.z_base_m else {}),
                 }
                 for z in payload.zones
             ]

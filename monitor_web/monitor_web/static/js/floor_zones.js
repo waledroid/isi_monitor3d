@@ -27,7 +27,7 @@ function el(id) { return document.getElementById(id); }
 const KINDS = ["palette", "etagere", "danger"];
 const SEVERITIES = ["info", "warning", "critical"];
 
-let zones = [];        // [{id, name, kind, type, severity, polygon: [[X,Y] m]}]
+let zones = [];        // [{id, name, kind, type, severity, polygon: [[X,Y] m], z_base_m}]
 let maxZones = 6;
 let loaded = false;    // guard: never persist a list we never loaded
 
@@ -59,6 +59,8 @@ export function loadFloorZones(configData) {
     type: z.type || z.kind || "palette",
     severity: SEVERITIES.includes(z.severity) ? z.severity : "info",
     polygon: z.polygon || [],
+    // Height of the zone's plane above the floor (m); absent/invalid → 0.
+    z_base_m: Number.isFinite(+z.z_base_m) ? Math.max(0, Math.min(5, +z.z_base_m)) : 0,
   })) : [];
   maxZones = (configData && configData.max_zones) || 6;
   loaded = !!configData;
@@ -133,6 +135,7 @@ function drawNewZone() {
               type: "palette",
               severity: "info",
               polygon: worldPoints,
+              z_base_m: 0,
             });
             await persist();
           }
@@ -194,6 +197,25 @@ function buildRow(zone, idx) {
   sevSel.style.visibility = zone.kind === "danger" ? "visible" : "hidden";
   sevSel.addEventListener("change", () => { zone.severity = sevSel.value; persist(); });
 
+  // Base height (m) of the zone's plane — 0 = floor; platforms/shelves > 0.
+  // Persisted as z_base_m; the Backbone projects the zone at this plane.
+  const baseInput = document.createElement("input");
+  baseInput.type = "number";
+  baseInput.className = "zm-input zm-zone-base";
+  baseInput.step = "0.01";
+  baseInput.min = "0";
+  baseInput.max = "5";
+  baseInput.value = zone.z_base_m || 0;
+  baseInput.title = t("zone_base_height", "Base height (m)");
+  baseInput.setAttribute("aria-label", t("zone_base_height", "Base height (m)"));
+  baseInput.addEventListener("change", () => {
+    const v = parseFloat(baseInput.value);
+    const clamped = Number.isFinite(v) ? Math.max(0, Math.min(5, v)) : 0;
+    baseInput.value = clamped;   // empty/invalid → back to 0
+    zone.z_base_m = clamped;
+    persist();
+  });
+
   const meta = document.createElement("span");
   meta.className = "layout-hint";
   meta.textContent = `${zone.polygon.length} pts`;
@@ -211,6 +233,7 @@ function buildRow(zone, idx) {
   row.appendChild(nameInput);
   row.appendChild(kindSel);
   row.appendChild(sevSel);
+  row.appendChild(baseInput);
   row.appendChild(meta);
   row.appendChild(del);
   return row;

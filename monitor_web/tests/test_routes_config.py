@@ -208,6 +208,76 @@ def test_post_config_caps_zones_at_six(populated_app) -> None:
         assert res.status_code == 422
 
 
+# ---- zone base height (z_base_m) — platform/shelf zones ----
+
+
+def _zone_payload(**extra):
+    zone = {
+        "name": "platform",
+        "kind": "palette",
+        "polygon": [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0]],
+        **extra,
+    }
+    return {"cameras": {"cam_a": {"url": "rtsp://a/x"}}, "zones": [zone]}
+
+
+def test_post_zone_z_base_m_persists_and_round_trips(populated_app) -> None:
+    """A zone saved with z_base_m lands in zones.yaml and comes back on GET."""
+    app, _, zones_path = populated_app
+    with TestClient(app) as client:
+        res = client.post("/api/config", json=_zone_payload(z_base_m=0.304))
+        assert res.status_code == 200, res.text
+        assert client.get("/api/config").json()["zones"][0]["z_base_m"] == 0.304
+    zn = yaml.safe_load(zones_path.read_text())
+    assert zn["zones"][0]["z_base_m"] == 0.304
+
+
+def test_post_zone_without_z_base_m_defaults_zero(populated_app) -> None:
+    """Absent field = 0.0 (matches the Backbone loader's default): the key is
+    omitted from zones.yaml so legacy files stay clean, and GET reports 0.0."""
+    app, _, zones_path = populated_app
+    with TestClient(app) as client:
+        res = client.post("/api/config", json=_zone_payload())
+        assert res.status_code == 200, res.text
+        assert client.get("/api/config").json()["zones"][0]["z_base_m"] == 0.0
+    zn = yaml.safe_load(zones_path.read_text())
+    assert "z_base_m" not in zn["zones"][0]
+
+
+def test_post_zone_z_base_m_above_five_rejected(populated_app) -> None:
+    app, _, _ = populated_app
+    with TestClient(app) as client:
+        res = client.post("/api/config", json=_zone_payload(z_base_m=5.5))
+        assert res.status_code == 422
+
+
+def test_post_zone_z_base_m_negative_rejected(populated_app) -> None:
+    app, _, _ = populated_app
+    with TestClient(app) as client:
+        res = client.post("/api/config", json=_zone_payload(z_base_m=-1.0))
+        assert res.status_code == 422
+
+
+def test_get_config_exposes_z_base_m_from_disk(tmp_path: Path) -> None:
+    """A zones.yaml already carrying z_base_m surfaces it on GET; a zone
+    without the key reads as 0.0."""
+    zones_path = tmp_path / "zones.yaml"
+    zones_path.write_text(yaml.safe_dump({"zones": [
+        {"name": "platform", "kind": "palette", "z_base_m": 0.304,
+         "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]},
+        {"name": "floor", "kind": "palette",
+         "polygon": [[2.0, 0.0], [3.0, 0.0], [3.0, 1.0]]},
+    ]}))
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text(yaml.safe_dump({
+        "cameras": {}, "zones_path": str(zones_path)}))
+    cfg = Settings(backbone_config_path=backbone_yaml, udp_port=0, port=0)
+    with TestClient(create_app(cfg)) as client:
+        zones = client.get("/api/config").json()["zones"]
+    assert zones[0]["z_base_m"] == 0.304
+    assert zones[1]["z_base_m"] == 0.0
+
+
 # ---- S12: V4L2 device vs RTSP url camera config ----
 
 

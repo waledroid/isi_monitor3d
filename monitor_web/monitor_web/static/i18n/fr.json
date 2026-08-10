@@ -116,5 +116,6 @@
   "group_pose": "Pose (squelettes)",
   "group_performance": "Performance",
   "group_display": "Superpositions (appliqué instantanément)",
-  "show_floor_zones": "Afficher les zones au sol (métrique)"
+  "show_floor_zones": "Afficher les zones au sol (métrique)",
+  "zone_base_height": "Hauteur de base (m)"
 }
