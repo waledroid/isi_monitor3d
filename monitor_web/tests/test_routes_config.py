@@ -480,89 +480,46 @@ def _detection_app(tmp_path: Path):
     return create_app(cfg), backbone_yaml
 
 
-def _force_gpu(monkeypatch, gpu: bool) -> None:
-    monkeypatch.setattr(routes_config, "gpu_available", lambda: gpu)
-
-
-def test_gpu_host_writes_onnx(tmp_path: Path, monkeypatch) -> None:
-    _force_gpu(monkeypatch, True)
-    app, backbone_yaml = _detection_app(tmp_path)
-    with TestClient(app) as client:
-        res = client.post("/api/config", json={"cameras": {}, "zones": [], "detection": {
-            "onnx_path": "./models/best.onnx", "class_names": ["palette_vide"]}})
-        assert res.status_code == 200, res.text
-    det = yaml.safe_load(backbone_yaml.read_text())["detection"]
-    assert det["plugin"] == "yolo_onnx"
-    assert det["onnx_path"] == "./models/best.onnx"
-    assert "model_xml" not in det and "device" not in det
-
-
-def test_cpu_host_writes_openvino(tmp_path: Path, monkeypatch) -> None:
-    _force_gpu(monkeypatch, False)
+def test_cpu_host_writes_openvino(tmp_path: Path) -> None:
+    """This branch's backend is ALWAYS OpenVINO IR — no hardware probe. The
+    model_xml may be nonexistent: output introspection then fails as a warning
+    and the plugin stays the detect default."""
     app, backbone_yaml = _detection_app(tmp_path)
     with TestClient(app) as client:
         res = client.post("/api/config", json={"cameras": {}, "zones": [], "detection": {
             "model_xml": "./models/model.xml", "class_names": ["palette_vide"]}})
         assert res.status_code == 200, res.text
+        assert client.get("/api/config").json()["detection"]["backend"] == "yolo_openvino"
     det = yaml.safe_load(backbone_yaml.read_text())["detection"]
-    assert det["plugin"] == "yolo_openvino"
+    assert det["plugin"].startswith("yolo_openvino")
     assert det["model_xml"] == "./models/model.xml"
-    assert det["device"] == "AUTO"
+    assert det["device"] == "CPU"
     assert "onnx_path" not in det
 
 
-def test_get_detection_backend_reflects_hardware(tmp_path: Path, monkeypatch) -> None:
-    app, _ = _detection_app(tmp_path)
-    with TestClient(app) as client:
-        _force_gpu(monkeypatch, True)
-        assert client.get("/api/config").json()["detection"]["backend"] == "yolo_onnx"
-        _force_gpu(monkeypatch, False)
-        assert client.get("/api/config").json()["detection"]["backend"] == "yolo_openvino"
-
-
-def test_get_detection_remembers_inactive_path(tmp_path: Path, monkeypatch) -> None:
-    """On a GPU host saving ONNX, a previously-entered OpenVINO xml is still shown."""
-    _force_gpu(monkeypatch, True)
-    app, _ = _detection_app(tmp_path)
-    with TestClient(app) as client:
-        # modal sends both inputs; only onnx is active on a GPU host
-        client.post("/api/config", json={"cameras": {}, "zones": [], "detection": {
-            "onnx_path": "./best.onnx", "model_xml": "./remembered.xml",
-            "class_names": ["palette_vide"]}})
-        det = client.get("/api/config").json()["detection"]
-    assert det["backend"] == "yolo_onnx"
-    assert det["onnx_path"] == "./best.onnx"
-    assert det["model_xml"] == "./remembered.xml"   # inactive path still surfaced
-
-
-def test_gpu_host_missing_onnx_is_400(tmp_path: Path, monkeypatch) -> None:
-    _force_gpu(monkeypatch, True)
-    app, _ = _detection_app(tmp_path)
-    with TestClient(app) as client:
-        res = client.post("/api/config", json={"cameras": {}, "zones": [], "detection": {
-            "model_xml": "./only.xml", "class_names": ["palette_vide"]}})
-        assert res.status_code == 400   # GPU host needs an onnx_path
-
-
-def test_detection_requires_at_least_one_path(tmp_path: Path, monkeypatch) -> None:
-    _force_gpu(monkeypatch, True)
+def test_detection_requires_model_xml(tmp_path: Path) -> None:
+    """DetectionConfig: model_xml (the only model path on this branch) is
+    required and must point at an OpenVINO .xml IR."""
     app, _ = _detection_app(tmp_path)
     with TestClient(app) as client:
         res = client.post("/api/config", json={"cameras": {}, "zones": [], "detection": {
             "class_names": ["palette_vide"]}})
-        assert res.status_code == 422   # DetectionConfig: no path at all
+        assert res.status_code == 422   # no model path at all
+
+        res = client.post("/api/config", json={"cameras": {}, "zones": [], "detection": {
+            "model_xml": "./models/best.onnx", "class_names": ["palette_vide"]}})
+        assert res.status_code == 422   # not an .xml IR
 
 
-def test_detection_show_nodes_round_trips_via_ui_settings(tmp_path: Path, monkeypatch) -> None:
+def test_detection_show_nodes_round_trips_via_ui_settings(tmp_path: Path) -> None:
     """show_nodes is a dashboard-only flag — persisted to UI settings, NOT
     backbone.yaml's detection block. Default True; toggling to False survives."""
-    _force_gpu(monkeypatch, True)
     app, backbone_yaml = _detection_app(tmp_path)
     ui_path = tmp_path / "ui.yaml"
     with TestClient(app) as client:
         assert client.get("/api/config").json()["detection"]["show_nodes"] is True
         res = client.post("/api/config", json={"cameras": {}, "zones": [], "detection": {
-            "onnx_path": "./best.onnx", "class_names": ["palette_vide"], "show_nodes": False,
+            "model_xml": "./models/best.xml", "class_names": ["palette_vide"], "show_nodes": False,
         }})
         assert res.status_code == 200, res.text
         assert yaml.safe_load(ui_path.read_text())["show_nodes"] is False
@@ -571,16 +528,15 @@ def test_detection_show_nodes_round_trips_via_ui_settings(tmp_path: Path, monkey
         assert client.get("/api/config").json()["detection"]["show_nodes"] is False
 
 
-def test_detection_show_masks_round_trips_via_ui_settings(tmp_path: Path, monkeypatch) -> None:
+def test_detection_show_masks_round_trips_via_ui_settings(tmp_path: Path) -> None:
     """show_masks (seg-overlay toggle) follows the same pattern as show_nodes —
     UI-only flag, never written to backbone.yaml's detection block."""
-    _force_gpu(monkeypatch, True)
     app, backbone_yaml = _detection_app(tmp_path)
     ui_path = tmp_path / "ui.yaml"
     with TestClient(app) as client:
         assert client.get("/api/config").json()["detection"]["show_masks"] is True
         res = client.post("/api/config", json={"cameras": {}, "zones": [], "detection": {
-            "onnx_path": "./best.onnx", "class_names": ["palette"], "show_masks": False,
+            "model_xml": "./models/best.xml", "class_names": ["palette"], "show_masks": False,
         }})
         assert res.status_code == 200, res.text
         assert yaml.safe_load(ui_path.read_text())["show_masks"] is False
@@ -735,76 +691,29 @@ def test_pose_onnx_files_lists_exports(populated_app, monkeypatch) -> None:
 
 
 def test_save_persists_pose_path(populated_app) -> None:
-    """A saved pose_onnx_path lands in backbone.yaml's detection block AND the
-    UI-settings memory, and round-trips on GET; clearing it removes it."""
+    """A saved pose_model_xml lands in backbone.yaml's detection block and
+    round-trips on GET; clearing it removes it."""
     app, backbone_yaml, _ = populated_app
-    pose = "/abs/runs/pose/person/weights/best.onnx"
+    pose = "/abs/models/yolo11n-pose/model.xml"
     with TestClient(app) as client:
         res = client.post("/api/config", json={
             "cameras": {"cam_a": {"url": "rtsp://a/x"}},
             "zones": [],
-            "detection": {"onnx_path": "/abs/det/best.onnx",
-                          "class_names": ["pallet"], "pose_onnx_path": pose},
+            "detection": {"model_xml": "/abs/det/model.xml",
+                          "class_names": ["pallet"], "pose_model_xml": pose},
         })
         assert res.status_code == 200, res.text
         det = yaml.safe_load(backbone_yaml.read_text())["detection"]
-        assert det["pose_onnx_path"] == pose
-        assert client.get("/api/config").json()["detection"]["pose_onnx_path"] == pose
+        assert det["pose_model_xml"] == pose
+        assert client.get("/api/config").json()["detection"]["pose_model_xml"] == pose
         # Clear it.
         client.post("/api/config", json={
             "cameras": {"cam_a": {"url": "rtsp://a/x"}},
             "zones": [],
-            "detection": {"onnx_path": "/abs/det/best.onnx",
-                          "class_names": ["pallet"], "pose_onnx_path": None},
+            "detection": {"model_xml": "/abs/det/model.xml",
+                          "class_names": ["pallet"], "pose_model_xml": None},
         })
-        assert "pose_onnx_path" not in yaml.safe_load(backbone_yaml.read_text())["detection"]
-
-
-def _tiny_rfdetr_onnx(tmp_path):
-    """A minimal ONNX whose outputs are named like RF-DETR (dets/labels/masks),
-    so the save's plugin selection + class inference fire without a 130 MB model."""
-    import numpy as np
-    import onnx
-    from onnx import TensorProto, helper, numpy_helper
-
-    nodes, outs = [], []
-    for name, shape in [("dets", (1, 2, 4)), ("labels", (1, 2, 5)), ("masks", (1, 2, 4, 4))]:
-        const = numpy_helper.from_array(np.zeros(shape, np.float32), name=f"c_{name}")
-        nodes.append(helper.make_node("Constant", [], [name], value=const))
-        outs.append(helper.make_tensor_value_info(name, TensorProto.FLOAT, list(shape)))
-    graph = helper.make_graph(nodes, "tinyrf", [], outs)
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)], ir_version=10)
-    path = tmp_path / "tiny_rfdetr.onnx"
-    onnx.save(model, str(path))
-    return path
-
-
-def test_rfdetr_model_save_sets_plugin_and_infers_classes(populated_app, tmp_path, monkeypatch):
-    """Selecting an RF-DETR model: classes are inferred (no embedded names) and the
-    saved plugin becomes rfdetr_onnx_seg with the YOLO-only knobs dropped."""
-    app, backbone_yaml, _ = populated_app
-    from monitor_web.api import routes_config
-    monkeypatch.setattr(routes_config, "_detect_backend", lambda: "yolo_onnx")
-    rf = _tiny_rfdetr_onnx(tmp_path)
-    with TestClient(app) as client:
-        cls = client.get("/api/detection/classes", params={"path": str(rf)}).json()["classes"]
-        assert cls == ["palette", "carton", "polybag"]
-        # The real Settings modal always posts the camera slots alongside the
-        # model change; a cameras:{} payload would (rightly) be rejected by the
-        # camera-wipe guard — and under pre-guard code it silently DELETED both
-        # cameras, which is the 2026-07-22 incident this suite now pins.
-        res = client.post("/api/config", json={
-            "cameras": {"cam_a": {"url": "rtsp://A/1"},
-                        "cam_b": {"url": "rtsp://B/1"}},
-            "zones": [],
-            "detection": {"onnx_path": str(rf), "class_names": cls, "confidence_threshold": 0.3},
-        })
-        assert res.status_code == 200, res.text
-    det = yaml.safe_load(backbone_yaml.read_text())["detection"]
-    assert det["plugin"] == "rfdetr_onnx_seg"
-    assert det["onnx_path"] == str(rf)
-    assert det["class_names"] == ["palette", "carton", "polybag"]
-    assert "iou_threshold" not in det and "inference_imgsz" not in det
+        assert "pose_model_xml" not in yaml.safe_load(backbone_yaml.read_text())["detection"]
 
 
 # ---- pose-only payload (the current Settings modal) ----
@@ -816,22 +725,22 @@ def test_pose_payload_updates_only_pose_keys(tmp_path: Path) -> None:
     backbone_yaml = tmp_path / "backbone.yaml"
     backbone_yaml.write_text(yaml.safe_dump({
         "cameras": {},
-        "detection": {"plugin": "yolo_onnx", "onnx_path": "./models/best.onnx",
+        "detection": {"plugin": "yolo_openvino", "model_xml": "./models/best.xml",
                       "class_names": ["palette"], "confidence_threshold": 0.4},
     }))
     cfg = Settings(backbone_config_path=backbone_yaml,
                    ui_settings_path=tmp_path / "ui.yaml", udp_port=0, port=0)
     with TestClient(create_app(cfg)) as client:
         res = client.post("/api/config", json={"cameras": {}, "pose": {
-            "pose_onnx_path": "/models/yolo11n-pose.onnx",
+            "pose_model_xml": "/models/yolo11n-pose/model.xml",
             "pose_confidence_threshold": 0.4}})
         assert res.status_code == 200, res.text
     det = yaml.safe_load(backbone_yaml.read_text())["detection"]
-    assert det["pose_onnx_path"] == "/models/yolo11n-pose.onnx"
+    assert det["pose_model_xml"] == "/models/yolo11n-pose/model.xml"
     assert det["pose_confidence_threshold"] == 0.4
     # Object-model keys are exactly as they were on disk.
-    assert det["onnx_path"] == "./models/best.onnx"
-    assert det["plugin"] == "yolo_onnx"
+    assert det["model_xml"] == "./models/best.xml"
+    assert det["plugin"] == "yolo_openvino"
     assert det["class_names"] == ["palette"]
     assert det["confidence_threshold"] == 0.4
 
@@ -840,16 +749,16 @@ def test_pose_payload_empty_path_clears(tmp_path: Path) -> None:
     backbone_yaml = tmp_path / "backbone.yaml"
     backbone_yaml.write_text(yaml.safe_dump({
         "cameras": {},
-        "detection": {"onnx_path": "./m.onnx", "pose_onnx_path": "/old-pose.onnx"},
+        "detection": {"model_xml": "./m.xml", "pose_model_xml": "/old-pose.xml"},
     }))
     cfg = Settings(backbone_config_path=backbone_yaml,
                    ui_settings_path=tmp_path / "ui.yaml", udp_port=0, port=0)
     with TestClient(create_app(cfg)) as client:
-        res = client.post("/api/config", json={"cameras": {}, "pose": {"pose_onnx_path": ""}})
+        res = client.post("/api/config", json={"cameras": {}, "pose": {"pose_model_xml": ""}})
         assert res.status_code == 200, res.text
     det = yaml.safe_load(backbone_yaml.read_text())["detection"]
-    assert "pose_onnx_path" not in det
-    assert det["onnx_path"] == "./m.onnx"
+    assert "pose_model_xml" not in det
+    assert det["model_xml"] == "./m.xml"
 
 
 # ---- Communication: MQTT sink + node_id ----
@@ -1135,16 +1044,15 @@ def test_isistream_save_writes_global_knobs_and_a_real_plugin(tmp_path, monkeypa
     from backbone.core.interfaces import detector_registry
 
     app, backbone_yaml = _detection_app(tmp_path)
-    _force_gpu(monkeypatch, True)
-    monkeypatch.setattr(routes_config, "_onnx_output_names",
+    monkeypatch.setattr(routes_config, "_ir_output_names",
                         lambda p: ["output0", "output1"])       # YOLO seg head
 
     with TestClient(app) as client:
         res = client.post("/api/config", json={
             "cameras": {"cam_a": {"url": "rtsp://x"}},
             "pose": {
-                "pose_enabled": True, "pose_onnx_path": "", "pose_confidence_threshold": 0.3,
-                "onnx_path": "/models/best.onnx",
+                "pose_enabled": True, "pose_model_xml": "", "pose_confidence_threshold": 0.3,
+                "model_xml": "/models/best/model.xml",
                 "zone_imgsz": 512, "confidence_threshold": 0.2,
                 "sahi_enabled": True, "sahi_tile": 320, "sahi_overlap": 0.35,
                 "enhance_enabled": True, "enhance_gamma": 1.2,
@@ -1153,23 +1061,23 @@ def test_isistream_save_writes_global_knobs_and_a_real_plugin(tmp_path, monkeypa
         assert res.status_code == 200, res.text
 
     det = _yaml.safe_load(backbone_yaml.read_text())["detection"]
-    assert det["onnx_path"] == "/models/best.onnx"
+    assert det["model_xml"] == "/models/best/model.xml"
     assert det["plugin"] in detector_registry.names(), det["plugin"]
+    assert det["plugin"] == "yolo_openvino_seg"       # 2 outputs → seg
     assert det["zone_imgsz"] == 512
     assert det["confidence_threshold"] == 0.2
     assert det["sahi"] == {"enabled": True, "tile": 320, "overlap": 0.35}
     assert det["enhance"] == {"enabled": True, "gamma": 1.2}
 
 
-def test_isistream_save_clamps_out_of_range_knobs(tmp_path, monkeypatch):
+def test_isistream_save_clamps_out_of_range_knobs(tmp_path):
     import yaml as _yaml
 
     app, backbone_yaml = _detection_app(tmp_path)
-    _force_gpu(monkeypatch, True)
     with TestClient(app) as client:
         res = client.post("/api/config", json={
             "cameras": {"cam_a": {"url": "rtsp://x"}},
-            "pose": {"pose_onnx_path": "", "zone_imgsz": 99999,
+            "pose": {"pose_model_xml": "", "zone_imgsz": 99999,
                      "confidence_threshold": 5.0, "sahi_overlap": 3.0,
                      "enhance_gamma": 99.0},
         })
@@ -1181,18 +1089,17 @@ def test_isistream_save_clamps_out_of_range_knobs(tmp_path, monkeypatch):
     assert det["enhance"]["gamma"] == 3.0
 
 
-def test_detection_quality_toggle_round_trips(tmp_path, monkeypatch):
+def test_detection_quality_toggle_round_trips(tmp_path):
     """The High/Low detection-quality selector maps to isistream.detect_substream
     (low = substream) and round-trips through GET /api/config."""
     import yaml as _yaml
 
     app, backbone_yaml = _detection_app(tmp_path)
-    _force_gpu(monkeypatch, True)
     with TestClient(app) as client:
         # Low quality → detect on the substream.
         r = client.post("/api/config", json={
             "cameras": {"cam_a": {"url": "rtsp://x"}},
-            "pose": {"pose_onnx_path": ""},
+            "pose": {"pose_model_xml": ""},
             "detect_substream": True})
         assert r.status_code == 200, r.text
         cfg = _yaml.safe_load(backbone_yaml.read_text())
@@ -1202,7 +1109,7 @@ def test_detection_quality_toggle_round_trips(tmp_path, monkeypatch):
         # High quality → detect on the main stream.
         r = client.post("/api/config", json={
             "cameras": {"cam_a": {"url": "rtsp://x"}},
-            "pose": {"pose_onnx_path": ""},
+            "pose": {"pose_model_xml": ""},
             "detect_substream": False})
         assert r.status_code == 200, r.text
         assert client.get("/api/config").json()["isistream"]["detect_substream"] is False

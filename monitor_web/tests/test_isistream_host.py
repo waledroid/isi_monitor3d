@@ -88,7 +88,6 @@ def test_purge_stale_frame_files_keeps_fresh_bus(tmp_path, monkeypatch):
     import time as _time
 
     import numpy as np
-
     from backbone.shared.frame_shm import FrameShmWriter, shm_path
 
     shm_dir = tmp_path / "shm"
