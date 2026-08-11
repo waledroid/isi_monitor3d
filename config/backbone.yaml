@@ -1,5 +1,5 @@
-node_id: Sortie_Machine_4
-calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
+node_id: Sortie_Machine_4_cpu
+calibration_path: /home/aatanda/isi_monitor3d_cpu/config/mode1/calibration.json
 cameras:
   cam_a:
     source:
@@ -7,7 +7,7 @@ cameras:
       url: rtsp://admin:admin@192.168.2.201:554/1
       latency_ms: 100
       capture_fps: 25
-      decoder: nvdec
+      decoder: software
       output_wh:
       - 1280
       - 720
@@ -15,21 +15,7 @@ cameras:
       name: rtsp
       url: rtsp://admin:admin@192.168.2.201:554/2
       latency_ms: 100
-      decoder: nvdec
-  cam_b:
-    source:
-      name: rtsp
-      url: rtsp://admin:admin123@192.168.2.200/cam/realmonitor?channel=1&subtype=0
-      capture_fps: 25
-      decoder: nvdec
-      output_wh:
-      - 1280
-      - 720
-    detect_source:
-      name: rtsp
-      url: rtsp://admin:admin123@192.168.2.200/cam/realmonitor?channel=1&subtype=1
-      latency_ms: 100
-      decoder: nvdec
+      decoder: software
 ingestion:
   frame_sync:
     max_skew_ms: 33.0
@@ -41,12 +27,13 @@ ingestion:
   mode: points
   points:
     listen_host: 127.0.0.1
-    listen_port: 9010
+    listen_port: 9012
     max_skew_ms: 60.0
     degraded_emit_after_ms: 200.0
 detection:
-  plugin: yolo_onnx_seg
-  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/segment/models/yolo/pallet/weights/pallet.onnx
+  plugin: yolo_openvino_seg
+  model_xml: /home/aatanda/isi_monitor3d_cpu/models/pallet_seg_openvino/model.xml
+  device: CPU
   class_names:
   - palette
   - carton
@@ -54,9 +41,9 @@ detection:
   confidence_threshold: 0.25
   pose_confidence_threshold: 0.5
   inference_imgsz: 640
-  pose_every_n: 1
-  pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.engine
-  pose_imgsz: 640
+  pose_every_n: 3
+  pose_model_xml: /home/aatanda/isi_monitor3d_cpu/models/yolo11n_pose_openvino/model.xml
+  pose_imgsz: 480
   pose_enabled: true
   zone_imgsz: 320
   zone_membership_tol_m: 0.5
@@ -101,23 +88,20 @@ metadata:
   sinks:
   - plugin: udp
     host: 127.0.0.1
-    port: 9001
+    port: 9003
   - plugin: mqtt
     host: 127.0.0.1
     port: 1883
-    prefix: isiMonitor3D/v1/Sortie_Machine_4
+    prefix: isiMonitor3D/v1/Sortie_Machine_4_cpu
   images:
     enabled: false
     out_dir: /var/lib/isi_monitor3d/snapshots
     url_base: file:///var/lib/isi_monitor3d/snapshots
     jpeg_quality: 85
     on_event: enter
-zones_path: /home/aatanda/isi_monitor3d/config/zones.yaml
-subscriptions_path: /home/aatanda/isi_monitor3d/config/mode2/subscriptions.yaml
+zones_path: /home/aatanda/isi_monitor3d_cpu/config/zones.yaml
+subscriptions_path: /home/aatanda/isi_monitor3d_cpu/config/mode2/subscriptions.yaml
 isistream:
   fps: 15.0
   motion_gate: true
   detect_substream: false
-triangulation:
-  reprojection_gate:
-    max_error_px: 60.0

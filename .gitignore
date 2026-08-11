@@ -81,3 +81,6 @@ thesis/latex/prog-*.png
 
 # blackbox telemetry (tools/blackbox_logger.py)
 /logs/
+
+# cpu branch: ship the Mode-1 starting calibration (operator can refit in-app)
+!config/mode1/calibration.json
