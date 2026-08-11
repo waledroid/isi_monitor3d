@@ -462,28 +462,6 @@
             <button id="zm-floor-zone-add" class="glass-btn config-link-add" type="button"
                     data-i18n="floor_zone_add">{{ t.floor_zone_add or '+ Draw floor zone on camera' }}</button>
           </section>
-          <!-- Cross-camera alignment fine-tune: 4 corresponding FLOOR points
-               picked on both cameras → a rigid correction baked into cam_b's
-               extrinsics (refined calibration file; toggleable; refit-able). -->
-          <section class="config-section">
-            <h3 data-i18n="align_section">{{ t.align_section or 'Cross-camera alignment (fine-tune)' }}</h3>
-            <p class="layout-hint" data-i18n="align_hint">
-              {{ t.align_hint or 'Pick 4 identical FLOOR spots on both cameras (tape marks are ideal — never box tops). Applies to the Backbone on next START.' }}
-            </p>
-            <div id="zm-align-status" class="layout-hint"></div>
-            <div class="config-general-fps" style="gap:8px;flex-wrap:wrap;">
-              <button id="zm-align-pick" class="glass-btn config-link-add" type="button"
-                      data-i18n="align_pick">{{ t.align_pick or 'Pick 4 point pairs' }}</button>
-              <button id="zm-align-refit" class="glass-btn" type="button" hidden
-                      data-i18n="align_refit">{{ t.align_refit or 'Refit (new calibration)' }}</button>
-              <label style="display:flex;align-items:center;gap:6px;">
-                <input id="zm-align-enabled" type="checkbox" disabled>
-                <span data-i18n="align_use">{{ t.align_use or 'Use fine-tuned calibration' }}</span>
-              </label>
-              <button id="zm-align-clear" class="glass-btn zm-iconbtn" type="button" hidden
-                      title="{{ t.clear or 'Clear' }}">✕</button>
-            </div>
-          </section>
         </div>
 
         <!-- Tab 4: Distance Lines -->

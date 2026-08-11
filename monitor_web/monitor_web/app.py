@@ -14,7 +14,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .api import (
-    routes_alignment,
     routes_calibrate,
     routes_cameras,
     routes_config,
@@ -191,7 +190,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes_control.router)
     app.include_router(routes_projection.router)
     app.include_router(routes_calibrate.router)
-    app.include_router(routes_alignment.router)
     app.include_router(routes_video.router)
     app.include_router(routes_map.router)
     app.include_router(routes_ws.router)

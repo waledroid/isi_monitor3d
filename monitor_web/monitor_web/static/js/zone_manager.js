@@ -9,7 +9,6 @@
 
 import { cancelDraw } from "/static/js/draw_mode.js";
 import { invalidateCalibrationCache } from "/static/js/draw_target_picker.js";
-import { loadAlignment } from "/static/js/alignment_tune.js";
 import { loadFloorZones } from "/static/js/floor_zones.js";
 
 function t(key, fallback) {
@@ -531,7 +530,6 @@ async function open() {
     console.warn("zone_manager: failed to load config", err);
   }
   loadFloorZones(configData);   // metric floor zones (Zones tab, drawn on a cam)
-  loadAlignment();              // cross-camera alignment fine-tune status
   if (configData) {
     buildCameraInputs(configData.cameras || {});
     // Camera FPS field (Cameras tab, backbone.yaml capture_fps).
