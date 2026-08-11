@@ -1,6 +1,6 @@
 # Build context allowlist for BOTH images built from the repo root:
 #   isicomms/Dockerfile   (gateway — needs backbone/ + isicomms/)
-#   docker/Dockerfile.app (GPU app — backbone/isistream/monitor_web/isical/
+#   docker/Dockerfile.app (CPU app — backbone/isistream/monitor_web/
 #                          calibration/tools + docker/environment.app.yml)
 # Everything else is excluded so the context stays tiny (the repo carries
 # ~47GB under trainer/ + ~2GB under archive/ that must never enter a build).
@@ -11,7 +11,7 @@
 !isicomms
 !isistream
 !monitor_web
-!isical
+
 !calibration
 !tools
 !docker
@@ -22,8 +22,8 @@ config/*
 # Runtime/dev junk inside the allowlisted dirs — never bake.
 tools/archive
 calibration/.venv-multical
-isical/data
-isical/runs
+
+
 monitor_web/.pytest_cache
 **/__pycache__
 **/*.pyc
