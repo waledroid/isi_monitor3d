@@ -18,7 +18,6 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import dashboard_config
 from ..detection_overlay import (
-    latest_trained_onnx,
     latest_trained_openvino,
     read_backbone,
     resolve_model,
@@ -52,13 +51,10 @@ def _config_ok(cfg) -> bool:
 
 def _model_ok(cfg) -> bool:
     det = read_backbone(cfg).get("detection") or {}
-    plugin = det.get("plugin", "yolo_onnx")
-    key = "model_xml" if plugin == "yolo_openvino" else "onnx_path"
-    raw = det.get(key)
+    raw = det.get("model_xml")
     if raw and resolve_model(raw, cfg) is not None:
         return True
-    fallback = latest_trained_openvino() if plugin == "yolo_openvino" else latest_trained_onnx()
-    return fallback is not None
+    return latest_trained_openvino() is not None
 
 
 def _sink_ok(cfg) -> bool:

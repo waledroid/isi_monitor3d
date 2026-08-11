@@ -25,9 +25,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from backbone.shared.hardware import (
-    gpu_available,  # consumer-side helper (like backbone.shared.zones)
-)
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -35,7 +32,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from .. import dashboard_config
 from ..detection_overlay import (
     latest_pose_onnx,
-    latest_trained_onnx,
     latest_trained_openvino,
     list_pose_onnx,
     list_trained_onnx,
@@ -50,8 +46,8 @@ router = APIRouter()
 
 
 def _detect_backend() -> str:
-    """Server-decided detector backend: GPU host → ONNX (CUDA); CPU-only → OpenVINO."""
-    return "yolo_onnx" if gpu_available() else "yolo_openvino"
+    """CPU deployment branch: the backend is ALWAYS OpenVINO IR."""
+    return "yolo_openvino"
 
 
 def _ensure_launchable(backbone_data: dict, cfg) -> None:
@@ -173,18 +169,15 @@ class ZoneConfig(BaseModel):
 
 class DetectionConfig(BaseModel):
     """The Backbone's detection model — written to backbone.yaml's `detection`
-    block (drives both the live Backbone and the MP4 viewer). The active backend
-    is decided by the server from hardware (GPU → yolo_onnx, CPU-only →
-    yolo_openvino), NOT by the client; the inactive path is remembered in the
-    UI-settings store so the modal can repopulate it."""
+    block (drives both the live Backbone and the MP4 viewer). CPU branch: the
+    backend is always OpenVINO IR — `model_xml` is the only model path."""
 
-    onnx_path: str | None = None
     model_xml: str | None = None
-    # Optional person-POSE ONNX (handled by a separate pose model in the design;
-    # gives ankle foot nodes). Written to backbone.yaml's detection block as
-    # `pose_onnx_path` and remembered in UI-settings. Empty/None = no pose model.
+    # Optional person-POSE OpenVINO IR (separate pose model; gives ankle foot
+    # nodes). Written to backbone.yaml's detection block as `pose_model_xml`.
+    # Empty/None = no pose model.
     pose_enabled: bool = True
-    pose_onnx_path: str | None = None
+    pose_model_xml: str | None = None
     # Person-pose detection confidence (the separate pose engine's `conf`).
     pose_confidence_threshold: float = 0.3
     class_names: list[str] = Field(..., min_length=1)
@@ -236,9 +229,10 @@ class DetectionConfig(BaseModel):
 
     @model_validator(mode="after")
     def at_least_one_path(self) -> DetectionConfig:
-        if not ((self.onnx_path and self.onnx_path.strip())
-                or (self.model_xml and self.model_xml.strip())):
-            raise ValueError("a model path (onnx_path or model_xml) is required")
+        if not (self.model_xml and self.model_xml.strip()):
+            raise ValueError("a model path (model_xml, an OpenVINO .xml IR) is required")
+        if not self.model_xml.strip().endswith(".xml"):
+            raise ValueError("model_xml must point at an OpenVINO .xml IR")
         return self
 
 
@@ -254,10 +248,10 @@ class PosePayload(BaseModel):
     """
 
     pose_enabled: bool = True
-    pose_onnx_path: str = ""
+    pose_model_xml: str = ""
     pose_confidence_threshold: float = 0.3
     # Global object model (all zones). Empty = leave the configured one.
-    onnx_path: str = ""
+    model_xml: str = ""
     zone_imgsz: int | None = None
     confidence_threshold: float | None = None
     sahi_enabled: bool | None = None
@@ -550,15 +544,12 @@ def get_config(request: Request) -> JSONResponse:
     # Default the model paths to the latest trained export so the modal pre-fills
     # a real, resolvable path (operator just clicks Save).
     detection_out = {
-        # backend is hardware-decided (not the saved plugin) so the modal shows
-        # the right field for THIS host.
+        # CPU branch: the backend is always OpenVINO IR.
         "backend": _detect_backend(),
-        "onnx_path": (det_raw.get("onnx_path") or ui.get("model_onnx_path")
-                      or latest_trained_onnx() or ""),
         "model_xml": (det_raw.get("model_xml") or ui.get("model_xml_path")
                       or latest_trained_openvino() or ""),
-        # Person-pose model (separate ONNX). Pre-fill from the saved config /
-        # UI memory / newest pose export so the dropdown shows a real choice.
+        # Person-pose model (separate OpenVINO IR). Pre-fill from the saved
+        # config / newest pose IR so the dropdown shows a real choice.
         "decode_masks": bool(det_raw.get("decode_masks", False)),
         "zone_imgsz": int(det_raw.get("zone_imgsz", 384) or 384),
         "sahi_enabled": bool((det_raw.get("sahi") or {}).get("enabled", False)),
@@ -567,7 +558,7 @@ def get_config(request: Request) -> JSONResponse:
         "enhance_enabled": bool((det_raw.get("enhance") or {}).get("enabled", False)),
         "enhance_gamma": float((det_raw.get("enhance") or {}).get("gamma", 1.0)),
         "pose_enabled": bool(det_raw.get("pose_enabled", True)),
-        "pose_onnx_path": (det_raw.get("pose_onnx_path") or ui.get("pose_onnx_path")
+        "pose_model_xml": (det_raw.get("pose_model_xml")
                            or latest_pose_onnx() or ""),
         "pose_confidence_threshold": det_raw.get("pose_confidence_threshold", 0.3),
         "class_names": det_raw.get("class_names") or ["palette_vide"],
@@ -664,82 +655,67 @@ def detection_pose_onnx_files(request: Request) -> JSONResponse:
 
 
 @functools.lru_cache(maxsize=16)
-def _onnx_class_names_cached(path_str: str, _mtime_ns: int) -> tuple[str, ...]:
-    """Class names embedded in an Ultralytics ONNX export (model metadata ``names``).
-    Cached by (path, mtime) so repeated modal opens are instant. Empty if unreadable
-    or the model carries none."""
+def _ir_class_names_cached(path_str: str, _mtime_ns: int) -> tuple[str, ...]:
+    """Class names embedded in an OpenVINO IR converted from an Ultralytics
+    ONNX (``ovc`` preserves the ``names`` metadata under rt_info
+    ``framework/names``). Cached by (path, mtime) so repeated modal opens are
+    instant. Empty if unreadable or the model carries none."""
     try:
-        import onnx
-        model = onnx.load(path_str, load_external_data=False)
-        for prop in model.metadata_props:
-            if prop.key == "names":
-                parsed = ast.literal_eval(prop.value)
-                if isinstance(parsed, dict):
-                    return tuple(str(parsed[k]) for k in sorted(parsed))
-                if isinstance(parsed, (list, tuple)):
-                    return tuple(str(n) for n in parsed)
-        # RF-DETR exports carry NO embedded names — infer the trained classes from
-        # the RF-DETR output signature (dets/labels) so the Settings form isn't empty
-        # (an empty class_names list fails the save's class_names>=1 validation).
-        out_names = {o.name for o in model.graph.output}
-        if {"dets", "labels"}.issubset(out_names):
-            return ("palette", "carton", "polybag")
+        import openvino as ov
+        model = ov.Core().read_model(path_str)
+        raw = model.get_rt_info(["framework", "names"]).astype(str)
+        parsed = ast.literal_eval(raw)
+        if isinstance(parsed, dict):
+            return tuple(str(parsed[k]) for k in sorted(parsed))
+        if isinstance(parsed, (list, tuple)):
+            return tuple(str(n) for n in parsed)
     except Exception as exc:  # any read/parse failure → no names (non-fatal)
         logger.warning("detection/classes: reading %s failed: %s", path_str, exc)
     return ()
 
 
-def _model_class_names(onnx_path: str | None) -> list[str]:
-    if not onnx_path:
+def _model_class_names(model_xml: str | None) -> list[str]:
+    if not model_xml:
         return []
-    p = Path(onnx_path)
+    p = Path(model_xml)
     if not p.exists():
         return []
-    return list(_onnx_class_names_cached(str(p), p.stat().st_mtime_ns))
+    return list(_ir_class_names_cached(str(p), p.stat().st_mtime_ns))
 
 
-def _onnx_output_names(onnx_path: str) -> list[str]:
-    """The model's output names (cheap) — used to pick the right task plugin
-    (RF-DETR vs YOLO) on save, the same way the overlay does. For a native
-    ``.engine`` the names come from its conversion sidecar (an engine can't be
-    introspected without deserializing on the GPU)."""
+def _ir_output_names(model_xml: str) -> list[str]:
+    """The IR's output names (cheap) — used to pick the right task plugin
+    (seg vs detect) on save, the same way the overlay does."""
     try:
-        if str(onnx_path).endswith(".engine"):
-            from backbone.shared.trt_session import read_sidecar
-            return list((read_sidecar(onnx_path) or {}).get("outputs") or [])
-        import onnx
-        model = onnx.load(onnx_path, load_external_data=False)
-        return [o.name for o in model.graph.output]
+        import openvino as ov
+        model = ov.Core().read_model(str(model_xml))
+        return [next(iter(o.names), "") for o in model.outputs]
     except Exception as exc:
-        logger.warning("detection: reading outputs of %s failed: %s", onnx_path, exc)
+        logger.warning("detection: reading outputs of %s failed: %s", model_xml, exc)
         return []
 
 
-def _model_info(onnx_path: str | None) -> dict:
+def _model_info(model_xml: str | None) -> dict:
     """``{classes, input_wh, fixed_input, family}`` for the Settings modal.
 
-    ``fixed_input`` is True when the ONNX has a static HxW (e.g. RF-DETR @432, or a
-    YOLO exported with ``dynamic=False``) — the imgsz slider can't change it then, so
-    the modal disables it and shows ``input_wh``. Dynamic models keep the slider."""
-    info = {"classes": _model_class_names(onnx_path), "input_wh": None,
+    ``fixed_input`` is True when the IR has a static HxW — the imgsz slider
+    can't change it then, so the modal disables it and shows ``input_wh``.
+    Dynamic models keep the slider."""
+    info = {"classes": _model_class_names(model_xml), "input_wh": None,
             "fixed_input": False, "family": "yolo"}
-    if not onnx_path or not Path(onnx_path).exists():
+    if not model_xml or not Path(model_xml).exists():
         return info
     try:
-        import onnx
-        model = onnx.load(onnx_path, load_external_data=False)
-        out_names = {o.name for o in model.graph.output}
-        if {"dets", "labels"}.issubset(out_names):
-            info["family"] = "rfdetr"
-        dims = model.graph.input[0].type.tensor_type.shape.dim
-        if len(dims) == 4:
-            h, w = dims[2], dims[3]
-            dynamic = bool(h.dim_param) or bool(w.dim_param) or h.dim_value <= 0 or w.dim_value <= 0
-            if not dynamic:
-                info["input_wh"] = [int(w.dim_value), int(h.dim_value)]
+        import openvino as ov
+        model = ov.Core().read_model(str(model_xml))
+        shape = model.inputs[0].get_partial_shape()
+        if len(shape) == 4:
+            h, w = shape[2], shape[3]
+            if h.is_static and w.is_static:
+                info["input_wh"] = [int(w.get_length()), int(h.get_length())]
                 info["fixed_input"] = True
     except Exception as exc:
-        logger.warning("detection: model-info for %s failed: %s", onnx_path, exc)
+        logger.warning("detection: model-info for %s failed: %s", model_xml, exc)
     return info
 
 
@@ -752,7 +728,7 @@ def detection_classes(request: Request, path: str | None = None) -> JSONResponse
     cfg = request.app.state.settings
     if not path:
         det = (_read_backbone(cfg) or {}).get("detection") or {}
-        path = det.get("onnx_path")
+        path = det.get("model_xml")
     # Returns {classes, input_wh, fixed_input, family} — additive, so the modal's
     # existing `.classes` read keeps working while it can now also gate the slider.
     return JSONResponse(_model_info(path))
@@ -843,42 +819,26 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
         block = backbone_data.get("detection", {})
         if not isinstance(block, dict):
             block = {}
-        block["plugin"] = backend
         block["class_names"] = list(det.class_names)
         block["confidence_threshold"] = det.confidence_threshold
         block["iou_threshold"] = det.iou_threshold
         block["inference_imgsz"] = det.inference_imgsz
-        if backend == "yolo_openvino":
-            if not (det.model_xml and det.model_xml.strip()):
-                raise HTTPException(400, "CPU-only host: an OpenVINO .xml model path is required")
-            block["model_xml"] = det.model_xml.strip()
-            block["device"] = "AUTO"
-            block.pop("onnx_path", None)
-            block.pop("providers", None)
-        else:  # ONNX host
-            if not (det.onnx_path and det.onnx_path.strip()):
-                raise HTTPException(
-                    400, "GPU host: a model path (.onnx or .engine) is required")
-            onnx_path = det.onnx_path.strip()
-            block["onnx_path"] = onnx_path
-            block.pop("model_xml", None)
-            block.pop("device", None)
-            # Refine the plugin from the model's output signature (RF-DETR vs YOLO),
-            # the SAME rule the overlay uses — so backbone.yaml's plugin matches the
-            # model and the Backbone (on START) loads the right decoder, not just the
-            # live preview. RF-DETR is NMS-free + fixed-input, so its YOLO-only knobs
-            # are dropped.
-            plugin = select_plugin(backend, _onnx_output_names(onnx_path))
-            block["plugin"] = plugin
-            if plugin == "rfdetr_onnx_seg":
-                for k in ("iou_threshold", "inference_imgsz", "keep_classes"):
-                    block.pop(k, None)
-        # Person-pose model path — independent of the detection backend; persisted
-        # so the operator's choice survives restarts. Empty clears it.
-        if det.pose_onnx_path and det.pose_onnx_path.strip():
-            block["pose_onnx_path"] = det.pose_onnx_path.strip()
+        model_xml = det.model_xml.strip()
+        block["model_xml"] = model_xml
+        block["device"] = block.get("device") or "CPU"
+        block.pop("onnx_path", None)
+        block.pop("providers", None)
+        # Refine the task plugin (seg vs detect) from the IR's output arity —
+        # the SAME rule the overlay uses, so backbone.yaml's plugin matches the
+        # model and the Backbone (on START) loads the right decoder.
+        block["plugin"] = select_plugin(backend, _ir_output_names(model_xml))
+        # Person-pose IR path — persisted so the operator's choice survives
+        # restarts. Empty clears it.
+        if det.pose_model_xml and det.pose_model_xml.strip():
+            block["pose_model_xml"] = det.pose_model_xml.strip()
         else:
-            block.pop("pose_onnx_path", None)
+            block.pop("pose_model_xml", None)
+        block.pop("pose_onnx_path", None)                 # legacy GPU-branch key
         block["pose_enabled"] = bool(det.pose_enabled)
         block["pose_confidence_threshold"] = det.pose_confidence_threshold
         block["decode_masks"] = bool(det.decode_masks)
@@ -893,12 +853,8 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             "distance_line_color": str(det.distance_line_color),
             "distance_line_thickness": int(det.distance_line_thickness),
         }
-        if det.onnx_path and det.onnx_path.strip():
-            patch["model_onnx_path"] = det.onnx_path.strip()
         if det.model_xml and det.model_xml.strip():
             patch["model_xml_path"] = det.model_xml.strip()
-        if det.pose_onnx_path and det.pose_onnx_path.strip():
-            patch["pose_onnx_path"] = det.pose_onnx_path.strip()
         _merge_ui_settings(cfg, patch)
 
     # ---- pose-only update (the current Settings modal): splice JUST the pose
@@ -908,29 +864,24 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
         block = backbone_data.get("detection", {})
         if not isinstance(block, dict):
             block = {}
-        pose_path = payload.pose.pose_onnx_path.strip()
+        pose_path = payload.pose.pose_model_xml.strip()
         if pose_path:
-            block["pose_onnx_path"] = pose_path
+            block["pose_model_xml"] = pose_path
         else:
-            block.pop("pose_onnx_path", None)   # empty = clear
+            block.pop("pose_model_xml", None)   # empty = clear
         block["pose_enabled"] = bool(payload.pose.pose_enabled)
         block["pose_confidence_threshold"] = payload.pose.pose_confidence_threshold
 
         # ---- global isistream object-model knobs (one model, all zones) ----
         p = payload.pose
-        if p.onnx_path and p.onnx_path.strip():
-            onnx_path = p.onnx_path.strip()
-            block["onnx_path"] = onnx_path
-            # Pick the TASK plugin from the model's own output names (detect /
-            # seg / RF-DETR), exactly like the camera-save path does. The base
-            # backend stays hardware-decided.
+        if p.model_xml and p.model_xml.strip():
+            model_xml = p.model_xml.strip()
+            block["model_xml"] = model_xml
+            block.pop("onnx_path", None)
+            # Pick the TASK plugin (seg vs detect) from the IR's output arity,
+            # exactly like the camera-save path does.
             block["plugin"] = select_plugin(_detect_backend(),
-                                            _onnx_output_names(onnx_path))
-            if block["plugin"] == "rfdetr_onnx_seg":
-                # switching from a YOLO model must not leave YOLO-only knobs
-                # behind — isistream forwards the block to the constructor
-                for yolo_key in ("iou_threshold", "keep_classes", "decode_masks"):
-                    block.pop(yolo_key, None)
+                                            _ir_output_names(model_xml))
         if p.zone_imgsz is not None:
             block["zone_imgsz"] = max(128, min(1280, int(p.zone_imgsz)))
         if p.confidence_threshold is not None:

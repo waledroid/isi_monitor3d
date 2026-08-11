@@ -404,9 +404,9 @@ function collectPose() {
   // Settings ▸ Isistream: ONE object model + global knobs for ALL zones.
   return {
     pose_enabled: el("zm-pose-enabled")?.checked ?? true,
-    pose_onnx_path: el("zm-model-pose-onnx")?.value.trim() || "",   // "" = clear
+    pose_model_xml: el("zm-model-pose-onnx")?.value.trim() || "",   // "" = clear
     pose_confidence_threshold: Number.isFinite(v) ? v : 0.3,
-    onnx_path: el("zm-model-onnx")?.value.trim() || "",
+    model_xml: el("zm-model-onnx")?.value.trim() || "",
     zone_imgsz: num("zm-model-zone-imgsz", 384),
     confidence_threshold: num("zm-model-conf", 0.25),
     sahi_enabled: el("zm-sahi-enabled")?.checked ?? false,
@@ -474,7 +474,7 @@ function fillModelSection(det, isis) {
   const poseEnabled = el("zm-pose-enabled");
   if (poseEnabled) poseEnabled.checked = det.pose_enabled !== false;
   // Global isistream object-model knobs (one model serves every zone).
-  selectModelOption("zm-model-onnx", det.onnx_path || "");
+  selectModelOption("zm-model-onnx", det.model_xml || "");
   set("zm-model-zone-imgsz", det.zone_imgsz ?? 384);
   set("zm-model-conf", det.confidence_threshold ?? 0.25);
   const sahiOn = el("zm-sahi-enabled");
@@ -495,7 +495,7 @@ function fillModelSection(det, isis) {
     if (!isis.has_detect_source) dq.value = "high";
   }
   // (TensorRT toggle retired — native .engine models supersede it.)
-  selectModelOption("zm-model-pose-onnx", det.pose_onnx_path || "");
+  selectModelOption("zm-model-pose-onnx", det.pose_model_xml || "");
   set("zm-model-pose-conf", det.pose_confidence_threshold ?? 0.3);
   // NOTE: global Detection FPS removed — zones run at the fixed DEFAULT_DETECTION_FPS (10).
   const cbNodes = el("zm-model-show-nodes");

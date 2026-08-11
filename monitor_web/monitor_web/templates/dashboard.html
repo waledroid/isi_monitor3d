@@ -352,7 +352,7 @@
             <div class="config-model">
               <!-- ── OBJECT DETECTION — one model, all zones, one batched call ── -->
               <h4 class="config-subhead" data-i18n="group_detection">{{ t.group_detection or 'Object detection' }}</h4>
-              <label data-i18n="model_object">{{ t.model_object or 'Object model (all zones, .onnx)' }}</label>
+              <label data-i18n="model_object">{{ t.model_object or 'Object model (all zones, OpenVINO .xml)' }}</label>
               <select id="zm-model-onnx">
                 <option value="" data-i18n="model_object_placeholder">{{ t.model_object_placeholder or '— none —' }}</option>
               </select>
@@ -384,7 +384,7 @@
                 <input id="zm-pose-enabled" type="checkbox" checked />
                 <span data-i18n="pose_enabled">{{ t.pose_enabled or 'Pose detection (person skeletons)' }}</span>
               </label>
-              <label class="zm-sub" data-i18n="model_pose">{{ t.model_pose or 'Pose model (person, .onnx)' }}</label>
+              <label class="zm-sub" data-i18n="model_pose">{{ t.model_pose or 'Pose model (person, OpenVINO .xml)' }}</label>
               <select id="zm-model-pose-onnx">
                 <option value="" data-i18n="model_pose_placeholder">{{ t.model_pose_placeholder or '— none —' }}</option>
               </select>
