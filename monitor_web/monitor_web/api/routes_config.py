@@ -926,6 +926,11 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
             # backend stays hardware-decided.
             block["plugin"] = select_plugin(_detect_backend(),
                                             _onnx_output_names(onnx_path))
+            if block["plugin"] == "rfdetr_onnx_seg":
+                # switching from a YOLO model must not leave YOLO-only knobs
+                # behind — isistream forwards the block to the constructor
+                for yolo_key in ("iou_threshold", "keep_classes", "decode_masks"):
+                    block.pop(yolo_key, None)
         if p.zone_imgsz is not None:
             block["zone_imgsz"] = max(128, min(1280, int(p.zone_imgsz)))
         if p.confidence_threshold is not None:
