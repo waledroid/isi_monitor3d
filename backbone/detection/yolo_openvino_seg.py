@@ -151,15 +151,23 @@ class YoloOpenvinoSegDetector(Detector):
         self._compiled([dummy])
 
     def _to_head_channels_first(self, raw_one: np.ndarray, nm: int) -> np.ndarray:
-        """Return a (4+nc+nm, A) view, accepting either (4+nc+nm, A) or (A, 4+nc+nm)."""
+        """Return the layout ``decode_yolo11_seg`` accepts.
+
+        Raw heads come as ``(4+nc+nm, A)`` or transposed ``(A, 4+nc+nm)``;
+        YOLO26/YOLOv10 END-TO-END exports instead emit ``(num_det, 6+nm)``
+        rows (xyxy + score + class + coeffs) — the decoder has a dedicated
+        branch for that layout, so pass it through untouched."""
         expected = 4 + len(self._class_names) + nm
         if raw_one.shape[0] == expected:
             return raw_one
         if raw_one.shape[1] == expected:
             return raw_one.transpose(1, 0)
+        if raw_one.shape[1] == 6 + nm:       # end-to-end head — decoder handles it
+            return raw_one
         raise RuntimeError(
-            f"YoloOpenvinoSegDetector: head channel dim does not match 4+nc+nm={expected}. "
-            f"Got shape {raw_one.shape}. Did class_names match the IR?"
+            f"YoloOpenvinoSegDetector: head channel dim does not match 4+nc+nm={expected} "
+            f"(raw) or 6+nm={6 + nm} (end-to-end). Got shape {raw_one.shape}. "
+            f"Did class_names match the IR?"
         )
 
     def _infer_batch(self, batch_tensor: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
