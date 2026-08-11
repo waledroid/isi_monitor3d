@@ -58,7 +58,7 @@ detection:
   pose_onnx_path: /home/aatanda/isi_monitor3d/models/yolo11n-pose-dynamic.engine
   pose_imgsz: 640
   pose_enabled: true
-  zone_imgsz: 384
+  zone_imgsz: 320
   zone_membership_tol_m: 0.5
   sahi:
     enabled: false
