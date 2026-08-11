@@ -70,11 +70,12 @@ async function loadPoseOnnxFiles() {
   await populateModelSelect("zm-model-pose-onnx", "/api/detection/pose-onnx-files");
 }
 
-// Fixed two-camera layout. Display labels map cam_a/cam_b → "Cam 1"/"Cam 2";
-// the backbone.yaml keys stay cam_a/cam_b.
+// CPU deployment branch: SINGLE camera (Mode 1). The GPU line's Cam 2 slot
+// is removed — backbone.yaml only ever carries cam_a.
+const CAM1_DEFAULT_RTSP =
+  "rtsp://admin:admin123@192.168.2.200/cam/realmonitor?channel=1&subtype=0";
 const CAMERA_SLOTS = [
   { id: "cam_a", labelKey: "camera_1", labelFallback: "Cam 1" },
-  { id: "cam_b", labelKey: "camera_2", labelFallback: "Cam 2" },
 ];
 
 function buildCameraRow(slot, cam) {
@@ -100,13 +101,13 @@ function buildCameraRow(slot, cam) {
   }
   typeSel.value = isV4l2 ? "v4l2" : "rtsp";
 
-  // URL field (RTSP).
+  // URL field (RTSP) — prefilled with the site default when unconfigured.
   const urlInput = document.createElement("input");
   urlInput.type = "text";
   urlInput.className = "zm-cam-url";
   urlInput.id = `zm-url-${slot.id}`;
-  urlInput.placeholder = "rtsp://…";
-  urlInput.value = cam.url || "";
+  urlInput.placeholder = CAM1_DEFAULT_RTSP;
+  urlInput.value = cam.url || (isV4l2 ? "" : CAM1_DEFAULT_RTSP);
 
   // Device field (USB) — text input backed by a datalist of detected devices,
   // so the operator can pick a detected /dev/video* OR type a path manually.
@@ -143,8 +144,7 @@ function buildCameraInputs(cameras) {
   const host = el("zm-cameras");
   host.innerHTML = "";
   cameras = cameras || {};
-  // Always render both slots so Cam 2 is always available to add (an empty
-  // Cam 2 simply isn't saved → Mode 1).
+  // Single slot — this branch is single-camera Mode 1 by construction.
   for (const slot of CAMERA_SLOTS) {
     const { label, typeSel, urlInput, devInput, datalist } =
       buildCameraRow(slot, cameras[slot.id] || {});
