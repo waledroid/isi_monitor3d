@@ -1,96 +1,79 @@
-# ISI Monitor 3D
+# ISI Monitor 3D — CPU deployment branch (`cpu`)
 
-Zone-based stereo warehouse vision system for Isitec. Each warehouse PC runs a
-**Backbone node** that ingests RTSP from 1–2 fixed cameras and publishes metric,
-identity-stable metadata — 2D floor tracks always, stereo 3D on demand, and per-zone
-contents (objects + confidence + pallet occupancy) — over **MQTT** to a central
-broker, where the **isi-gateway** aggregates every node into one REST API for
-WMS/FMS/AGV consumers. A local **operator dashboard** provides live video, a 2D
-digital-twin floor map, and node configuration.
+Single-camera, CPU-only variant of ISI Monitor 3D for a 32 GB RAM machine
+without a GPU. One RTSP camera → zone-scoped pallet/carton detection +
+person pose → metric `Track2D` over UDP/MQTT → operator dashboard + the
+isicomms AGV gateway. **All inference is OpenVINO IR** (`model.xml` +
+`model.bin`) on CPU — the ONNX Runtime / TensorRT / training tooling of the
+GPU line (`main`) does not exist on this branch.
 
-```
-cam_a ─RTSP┐                                        ┌─► WMS/FMS (direct MQTT)
-cam_b ─RTSP┤► Backbone node ──publish──► mosquitto ─┤
-           │  (per warehouse PC)         :1883      └─► isi-gateway :8080 ──REST──► AGVs, dashboards
-           └► monitor_web :8000 (local operator UI + node config)
-```
+## What's different from `main`
 
-The full communication contract (topic tree `isiMonitor3D/v1/<node_id>/…`, message
-schemas, use cases) is specified in `docs/rfc.md`; the customer-facing English RFC
-is `rfc_en.docx`.
+| | `main` (GPU line) | `cpu` (this branch) |
+|---|---|---|
+| Cameras | 2 (Mode 2: homography + triangulation/Track3D) | **1 (Mode 1: homography only — no 3D)** |
+| Inference | ONNX Runtime CUDA / native TensorRT engines | **OpenVINO IR, CPU** (`yolo_openvino`, `yolo_openvino_seg`, `yolo_openvino_pose`) |
+| Models | `.onnx` / `.engine` under `trainer/` | **`.xml` IRs under `models/`** |
+| Calibration | isical Studio + Multical (2-cam BA) | **in-app 4-point floor fit** (dashboard ▸ ruler) |
+| Dev tools | isical/, trainer/ (isiGen + isidet), thesis/ … | stripped |
+| Dashboard port | :8000 | **:8200** |
 
-## Quick start (development)
-
-```bash
-conda env create -f environment.yml -n monitor3d
-conda activate monitor3d
-pytest                                              # backbone + calibration suite
-```
-
-Run the Backbone and the dashboard:
+## Quick start (bare metal)
 
 ```bash
-python -m backbone.runtime --config config/backbone.yaml   # the vision pipeline
-python -m monitor_web                                      # operator UI on :8000
+conda env create -f environment.yml            # → monitor3d-cpu
+conda activate monitor3d-cpu
+pip install --no-deps -e monitor_web -e isicomms
+
+# dashboard (spawns backbone + isistream on START):
+MONITOR_WEB_PORT=8200 python -m monitor_web    # or the `3d_cpu` alias
 ```
 
-Refresh the env after `environment.yml` edits: `conda env update -f environment.yml -n monitor3d --prune`.
-Pip-only fallback: `pip install -e ".[dev,geometry,schemas]"`.
+Open `http://localhost:8200/`:
+1. **Settings ▸ Cameras** — set the cam_a RTSP URL (leave Cam 2 empty → Mode 1).
+2. **Calibrate** (ruler button) — click the 4 corners of a reference pallet on
+   the floor (TL→TR→BR→BL) + its size → writes `config/mode1/calibration.json`.
+3. **Settings ▸ Zones** — draw the floor zones (base height for platforms).
+4. **START** — detection + pose come up on the OpenVINO models in `models/`.
 
-## MQTT fabric + gateway (deployment)
-
-The broker and gateway run as two containers on the central server:
+## Docker
 
 ```bash
-docker compose -f deploy/onprem/docker-compose.yml up -d --build
+./up.sh          # app (:8200) + mosquitto (:1883) + isicomms gateway (:8080)
 ```
 
-- **mosquitto** (`:1883`) — MQTT broker; persistence keeps retained messages
-  (node `config`, per-zone state) across restarts.
-- **isi-gateway** (`:8080`) — subscribes `isiMonitor3D/#`, caches warehouse state,
-  serves `GET /v1/{nodes,tracks,zones,zones/<name>,passings,config,diagnostics}`
-  and `/healthz`.
+## Models
 
-Always deploy with `--build`: the gateway image vendors the `backbone/` schemas,
-so it must be rebuilt whenever the schema version bumps (a stale image silently
-rejects newer payloads). A secured cloud profile (TLS/auth) lives in `deploy/cloud/`.
+Ship IRs under `models/<name>/model.xml` (+ `model.bin` beside it):
 
-Per-node MQTT settings (broker host, topic prefix) are edited in the dashboard's
-Settings modal or in `config/backbone.yaml` (`metadata.sinks`).
+- `models/pallet_seg_openvino/` — pallet/carton/polybag seg (zone detection)
+- `models/yolo11n_pose_openvino/` — person pose (skeletons + person tracks)
 
-## Calibration
+Convert new models once in any env with openvino:
+`ovc model.onnx --output_model model.xml`. A path containing `pose` is
+offered in the pose dropdown; everything else in the object-model dropdown.
 
-- **isical Studio** (`isical/`, uvicorn `:8300`) walks an operator through the
-  2-camera capture → solve → export flow.
-- CLI backend: `python -m calibration.calibrate` (`calibrate-2cam` for stereo,
-  `single-cam` for the 1-camera floor fit). Multical runs in its own isolated
-  venv: `bash calibration/setup_multical.sh` (one-time).
+## Port map / coexistence with a GPU-line install
 
-## Training (external to the runtime)
+| Service | Port |
+|---|---|
+| Dashboard | **8200** |
+| Engine UDP sink (dashboard bus) | **9003** |
+| isistream → engine points ingest | **9012** |
+| MQTT broker (shared) | 1883 — this node publishes as `…_cpu` |
+| isicomms gateway | 8080 |
 
-`trainer/isidet/` (YOLO detection, `isi-train` conda env) produces the `.onnx`
-the Backbone consumes; `trainer/isiGen/` generates synthetic training data.
-The runtime is inference-only.
+Rules when the GPU line runs on the same machine:
+- **One capture stack per camera id** — the shared frame bus lives at
+  `/dev/shm/isi3d_frame_<cam>` (name-fixed); never run both stacks' capture
+  against the same camera ids at once.
+- **One mosquitto on 1883** — reuse the existing broker; don't `up.sh` a
+  second stack's broker while the first runs.
 
-## Repo layout
+## Tests
 
+```bash
+pytest tests calibration/tests        # runtime + calibration
+cd monitor_web && pytest              # dashboard
+cd isicomms && pytest                 # gateway
 ```
-backbone/         Vision pipeline package (core, shared, ingestion, detection,
-                  homography, triangulation, comms, runtime)
-monitor_web/      Operator dashboard (FastAPI, :8000)
-isi_gateway/      Central MQTT→REST aggregator (:8080)
-isical/           Calibration studio web app (:8300)
-calibration/      Calibration backend (Multical wrappers, boards, single-cam)
-trainer/          isidet (YOLO training) + isiGen (synthetic data)
-deploy/           Docker Compose profiles (onprem/, cloud/)
-config/           YAML configs (backbone.yaml, zones.yaml, zone_patches.yaml, …)
-docs/             RFC + architecture docs (docs/rfc.md, mqtt-architecture.md)
-tools/            Operational tools (latency probe, detection smoke, …)
-tests/            pytest suite
-```
-
-## Hardware
-
-- **Dev:** NVIDIA RTX 5070 12 GB, Linux/WSL2.
-- **Production (later):** NVIDIA Jetson Orin NX 16 GB — same `.onnx`, same
-  calibration, same MQTT contract; deploy/env job only.
