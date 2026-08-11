@@ -1,32 +1,24 @@
-"""Person-pose overlay for the dashboard preview — runs a YOLO-pose ONNX and
-draws the skeleton + the foot node (ankle midpoint) alongside the detection
-boxes drawn by ``detection_overlay``.
+"""Person-pose display sources for the dashboard — ZERO dashboard inference.
 
-Independent of the trainer package (onnxruntime + OpenCV); the ORT session is
-built via the shared ``backbone.shared.ort_session`` helper so it gets the same
-memory-safe arena options as every other session. Same raw-head decode the
-trainer's PoseOnnxInferencer uses: head ``(1, 4 + nc + K*3, A)`` → person boxes +
-``[K, 3]`` keypoints.
+CPU deployment branch: the perception producer (isistream) runs the OpenVINO
+pose model and its skeletons ride the observations echo; ``WirePoseSource``
+renders them and ``WireObjectSource`` renders the wire's object boxes. The
+in-dashboard ORT pose engines of the GPU line (``PoseEngine`` /
+``AsyncPoseRunner``) were removed with the onnxruntime dependency — the
+smoothing/foot helpers remain because the wire sources use them.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 import cv2
 import numpy as np
-from backbone.shared.ort_session import build_onnx_session
 
 logger = logging.getLogger(__name__)
-
-try:
-    import onnxruntime as ort
-except ImportError as exc:  # pragma: no cover
-    raise ImportError("onnxruntime required for pose overlay") from exc
 
 LEFT_ANKLE, RIGHT_ANKLE = 15, 16
 _COCO_SKELETON = [
@@ -138,236 +130,6 @@ def _foot(keypoints: np.ndarray, box: np.ndarray, kpt_conf: float) -> tuple[floa
     if vis:
         return float(np.mean([k[0] for k in vis])), float(np.mean([k[1] for k in vis]))
     return float((box[0] + box[2]) / 2.0), float(box[3])
-
-
-class PoseEngine:
-    """Lazy YOLO-pose ONNX runner (CUDA → CPU)."""
-
-    def __init__(self, model_path: str, conf: float = 0.3, kpt_conf: float = 0.3,
-                 device: str | None = None, imgsz: int | None = None) -> None:
-        self.conf, self.kpt_conf = float(conf), float(kpt_conf)
-        providers = (["CPUExecutionProvider"] if device == "cpu"
-                     or "CUDAExecutionProvider" not in ort.get_available_providers()
-                     else ["CUDAExecutionProvider", "CPUExecutionProvider"])
-        self.session = build_onnx_session(model_path, providers=providers)
-        inp = self.session.get_inputs()[0]
-        self.input_name = inp.name
-        _, _, h, w = inp.shape
-        # Dynamic exports carry SYMBOLIC spatial dims ('height'/'width') —
-        # letterbox needs concrete numbers; `imgsz` (detection.pose_imgsz)
-        # picks the runtime size there, else YOLO-pose's canonical 640. A
-        # STATIC export keeps its baked size — imgsz can't apply.
-        fallback = int(imgsz) if imgsz else 640
-        self.h = h if isinstance(h, int) else fallback
-        self.w = w if isinstance(w, int) else fallback
-        out_c = self.session.get_outputs()[0].shape[1]
-        self.k = (out_c - 4 - 1) // 3 if isinstance(out_c, int) else 17   # single person class
-        self._lb = (1.0, 0, 0)
-        logger.info("pose overlay: loaded %s (in=%sx%s, K=%s, %s)", model_path,
-                    self.w, self.h, self.k, self.session.get_providers()[0])
-
-    def _letterbox(self, frame: np.ndarray):
-        oh, ow = frame.shape[:2]
-        r = min(self.h / oh, self.w / ow)
-        nw, nh = round(ow * r), round(oh * r)
-        resized = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
-        pw, ph = self.w - nw, self.h - nh
-        left, top = pw // 2, ph // 2
-        padded = cv2.copyMakeBorder(resized, top, ph - top, left, pw - left,
-                                    cv2.BORDER_CONSTANT, value=(114, 114, 114))
-        self._lb = (r, left, top)
-        return padded
-
-    def predict(self, frame_bgr: np.ndarray) -> list[Pose]:
-        # BGR→RGB via channel flip fused into the float conversion — this
-        # OpenCV build's cvtColor has a ~8 ms fixed dispatch cost per call
-        # (see backbone.detection.preprocess).
-        padded = self._letterbox(frame_bgr)
-        tensor = padded[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32, order="C")
-        tensor *= 1.0 / 255.0
-        out = self.session.run(None, {self.input_name: tensor})[0]
-        return self._decode(out, frame_bgr.shape[1], frame_bgr.shape[0])
-
-    def _decode(self, raw: np.ndarray, ow: int, oh: int) -> list[Pose]:
-        preds = raw[0].T                      # (A, 4 + 1 + K*3)
-        scores = preds[:, 4].astype(np.float32)
-        keep = scores >= self.conf
-        if not np.any(keep):
-            return []
-        preds, scores = preds[keep], scores[keep]
-        cx, cy, w, h = preds[:, 0], preds[:, 1], preds[:, 2], preds[:, 3]
-        boxes = np.column_stack([cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2]).astype(np.float32)
-        kpts = preds[:, 5:5 + self.k * 3].reshape(-1, self.k, 3).astype(np.float32)
-        xywh = np.column_stack([boxes[:, 0], boxes[:, 1],
-                                boxes[:, 2] - boxes[:, 0], boxes[:, 3] - boxes[:, 1]]).tolist()
-        kept = cv2.dnn.NMSBoxes(xywh, scores.tolist(), self.conf, 0.45)
-        if len(kept) == 0:
-            return []
-        kept = np.array(kept).flatten()
-        boxes, scores, kpts = boxes[kept], scores[kept], kpts[kept]
-        r, px, py = self._lb
-        boxes[:, [0, 2]] = np.clip((boxes[:, [0, 2]] - px) / r, 0, ow)
-        boxes[:, [1, 3]] = np.clip((boxes[:, [1, 3]] - py) / r, 0, oh)
-        kpts[:, :, 0] = (kpts[:, :, 0] - px) / r
-        kpts[:, :, 1] = (kpts[:, :, 1] - py) / r
-        return [Pose(b, float(s), kp, _foot(kp, b, self.kpt_conf))
-                for b, s, kp in zip(boxes, scores, kpts, strict=True)]
-
-    def draw(self, image: np.ndarray, poses: list[Pose]) -> None:
-        """Draw skeleton + keypoints + foot node in place (no person bounding box)."""
-        for p in poses:
-            for a, b in _COCO_SKELETON:
-                if p.keypoints[a, 2] >= self.kpt_conf and p.keypoints[b, 2] >= self.kpt_conf:
-                    cv2.line(image, tuple(p.keypoints[a, :2].astype(int)),
-                             tuple(p.keypoints[b, :2].astype(int)), (255, 180, 0), 2)
-            for j in range(self.k):
-                if p.keypoints[j, 2] >= self.kpt_conf:
-                    cv2.circle(image, tuple(p.keypoints[j, :2].astype(int)), 3, (0, 0, 255), -1)
-            cv2.circle(image, (int(p.foot_uv[0]), int(p.foot_uv[1])), 6, (0, 255, 255), -1)
-
-
-class AsyncPoseRunner:
-    """``predict``/``draw``-compatible wrapper that DECOUPLES pose inference
-    from the video loop.
-
-    Running the pose model synchronously per rendered frame chains the video
-    rate to the model's latency — under GPU contention with the live Backbone
-    the whole cam view dropped to ~4 fps. Here a daemon worker runs the engine
-    on the NEWEST submitted frame at whatever rate the GPU allows, and
-    ``predict`` returns the latest completed result instantly: the video stays
-    at camera rate, skeletons refresh at the pose-achievable rate. Results
-    older than ``_STALE_S`` clear (no frozen skeletons); the worker parks after
-    ``_IDLE_STOP_S`` without frames (viewer closed) and restarts on demand.
-    """
-
-    _STALE_S = 2.0
-    _IDLE_STOP_S = 30.0
-    # Display smoothing: inference completes at ~10-15 Hz while the video
-    # renders at 17-24 fps, so a raw skeleton visibly "steps" every couple of
-    # frames. Each predict() (= one rendered frame) advances a smoothed copy
-    # toward the newest result with a time-based exponential (tau below); a
-    # person whose match moved further than _SNAP_PX snapped instead (fast
-    # motion / new person must not rubber-band across the frame).
-    _SMOOTH_TAU_S = 0.08
-    _SNAP_PX = 120.0
-    # Motion compensation: the newest result describes where a person WAS
-    # (inference latency + queue wait ≈ 80-150 ms under GPU contention) — a
-    # walking body moves 20-40 px in that window, so the raw skeleton draws
-    # visibly BESIDE the person. Velocity from the last two results projects
-    # it forward by the result's age, capped so a stalled worker never
-    # slingshots a skeleton across the frame.
-    _EXTRAP_MAX_S = 0.35
-
-    def __init__(self, engine: PoseEngine) -> None:
-        self.engine = engine
-        self._cond = threading.Condition()
-        self._pending: np.ndarray | None = None
-        self._pending_ts = 0.0
-        self._poses: list[Pose] = []
-        self._result_ts = 0.0
-        self._result_frame_ts = 0.0     # submit time of the frame behind _poses
-        self._prev_poses: list[Pose] = []
-        self._prev_frame_ts = 0.0
-        self._smoothed: list[Pose] = []
-        self._smooth_ts = 0.0
-        self._stopped = False
-        self._thread: threading.Thread | None = None
-
-    def stop(self) -> None:
-        """Tear the runner down NOW: exit the worker, drop the engine ref (its
-        CUDA session frees on the next gc), clear cached poses. Idempotent —
-        called by ``reset_detector()`` on backbone STOP / model change so pose
-        VRAM never outlives the run."""
-        with self._cond:
-            self._stopped = True
-            self._pending = None
-            self._poses = []
-            self._prev_poses = []
-            self._smoothed = []
-            self._cond.notify_all()
-        t = self._thread
-        if t is not None and t.is_alive():
-            # Brief join only — the worker is a daemon and exits at its next
-            # loop check; STOP must not pay for it. The engine ref drop below
-            # releases the CUDA session on the following gc pass either way.
-            t.join(timeout=0.2)
-        self._thread = None
-        self.engine = None
-
-    @property
-    def kpt_conf(self) -> float:
-        eng = self.engine
-        return eng.kpt_conf if eng is not None else 0.3
-
-    def predict(self, frame_bgr: np.ndarray) -> list[Pose]:
-        """Submit the frame for background inference; return the latest result."""
-        now = time.time()
-        with self._cond:
-            if self._stopped:
-                return []
-            self._pending = frame_bgr
-            self._pending_ts = now
-            if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(
-                    target=self._run, daemon=True, name="pose-async")
-                self._thread.start()
-            self._cond.notify()
-            if now - self._result_ts > self._STALE_S:
-                self._smoothed = []
-                return []
-            # Motion-compensate the (aged) result to *now*, then smooth toward
-            # that moving target — smoothing kills inter-result jitter without
-            # trailing, because the target itself tracks the person.
-            target = _extrapolate(
-                self._poses, self._prev_poses,
-                self._result_frame_ts - self._prev_frame_ts,
-                now - self._result_frame_ts,
-                max_age_s=self._EXTRAP_MAX_S, snap_px=self._SNAP_PX)
-            self._smoothed = _advance_smoothing(
-                self._smoothed, target, now - self._smooth_ts,
-                tau_s=self._SMOOTH_TAU_S, snap_px=self._SNAP_PX)
-            self._smooth_ts = now
-            return list(self._smoothed)
-
-    def draw(self, image: np.ndarray, poses: list[Pose]) -> None:
-        eng = self.engine
-        if eng is not None:
-            eng.draw(image, poses)
-
-    def _run(self) -> None:
-        idle_since = time.time()
-        while True:
-            with self._cond:
-                while self._pending is None:
-                    if self._stopped:
-                        return                      # torn down (reset_detector)
-                    self._cond.wait(timeout=1.0)
-                    if self._pending is None and time.time() - idle_since > self._IDLE_STOP_S:
-                        return                      # viewer gone — free the GPU
-                if self._stopped:
-                    return
-                frame = self._pending
-                frame_ts = self._pending_ts
-                self._pending = None
-                engine = self.engine
-            idle_since = time.time()
-            if engine is None:
-                return
-            try:
-                poses = engine.predict(frame)
-            except Exception:
-                logger.warning("pose overlay: async predict failed", exc_info=True)
-                poses = []
-            with self._cond:
-                if self._stopped:
-                    return
-                # Keep the previous result + its frame time: the pair is the
-                # velocity estimate that motion-compensates the render.
-                self._prev_poses = self._poses
-                self._prev_frame_ts = self._result_frame_ts
-                self._poses = poses
-                self._result_frame_ts = frame_ts
-                self._result_ts = time.time()
 
 
 class WirePoseSource:

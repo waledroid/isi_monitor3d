@@ -1,7 +1,7 @@
-"""Inference-session lifecycle — the ENGINES stage: lazy detector / pose /
-per-zone CUDA sessions, the shared GPU-memory guard, and reset_detector()
-(the STOP/model-change teardown). No file discovery (model_store.py), no
-drawing (overlay.py). Split out of detection_overlay.py.
+"""Inference-session lifecycle — the ENGINES stage: the lazy OpenVINO
+detector singleton and reset_detector() (the STOP/model-change teardown).
+No file discovery (model_store.py), no drawing (overlay.py). CPU branch:
+dashboard-side pose engines were removed — skeletons ride the wire.
 """
 
 from __future__ import annotations
@@ -14,8 +14,6 @@ from fastapi import HTTPException
 
 from .model_store import (
     _DEFAULT_CLASS_NAMES,
-    _RFDETR_DEFAULT_CLASS_NAMES,
-    latest_trained_onnx,
     latest_trained_openvino,
     model_label,
     read_backbone,
@@ -34,18 +32,6 @@ _DETECTOR = None
 # so the heartbeat / status can report the model in use, not just the configured
 # one. Set in get_detector(), cleared in reset_detector().
 _LOADED: dict | None = None
-
-
-# Lazy person-pose engine + the path/conf it loaded (None = no pose model configured).
-_POSE = None
-
-
-_POSE_PATH: str | None = None
-
-
-_POSE_CONF: float | None = None
-# Runtime pose input size (detection.pose_imgsz) the engine was built with.
-_POSE_IMGSZ: int | None = None
 
 
 # --- GPU memory guard --------------------------------------------------------
@@ -100,184 +86,75 @@ def reset_detector() -> None:
     the old and new sessions briefly coexistent on the 12 GB card and the swap
     OOMs (CUBLAS_STATUS_ALLOC_FAILED). The stream loop also drops its local
     detector ref before re-fetching (see _detect_iter) so nothing else pins it."""
-    global _DETECTOR, _LOADED, _POSE, _POSE_PATH, _POSE_CONF, _POSE_IMGSZ
+    global _DETECTOR, _LOADED
     _DETECTOR = None
     _LOADED = None
-    _POSE = None
-    _POSE_PATH = None
-    _POSE_CONF = None
-    _POSE_IMGSZ = None
-    # Drain the per-camera async pose runners: each pins its OWN PoseEngine
-    # CUDA session (independent of _POSE) plus a worker thread — without this,
-    # pose VRAM outlived STOP indefinitely.
-    for runner in list(_ASYNC_POSE.values()):
-        try:
-            runner.stop()
-        except Exception:
-            logger.warning("reset_detector: async pose runner stop failed",
-                           exc_info=True)
-    _ASYNC_POSE.clear()
     import gc
     gc.collect()
 
 
-def get_pose_detector(cfg):
-    """Lazy person-pose engine from ``detection.pose_onnx_path`` in backbone.yaml,
-    or None if none is configured/resolvable. Reloads when the configured path
-    changes (so the Settings pose dropdown applies live, like the detector)."""
-    global _POSE, _POSE_PATH, _POSE_CONF, _POSE_IMGSZ
-    det_cfg = read_backbone(cfg).get("detection") or {}
-    raw = det_cfg.get("pose_onnx_path")
-    resolved = resolve_model(raw, cfg) if raw else None
-    path = str(resolved) if resolved else None
-    try:
-        conf = float(det_cfg.get("pose_confidence_threshold", 0.3))
-    except (TypeError, ValueError):
-        conf = 0.3
-    try:
-        imgsz = int(det_cfg.get("pose_imgsz") or 0) or None
-    except (TypeError, ValueError):
-        imgsz = None
-    if path != _POSE_PATH or conf != _POSE_CONF or imgsz != _POSE_IMGSZ:
-        # config changed → drop stale engine
-        _POSE, _POSE_PATH, _POSE_CONF, _POSE_IMGSZ = None, path, conf, imgsz
-    if path is None:
-        return None
-    if _POSE is None:
-        try:
-            from .pose_overlay import PoseEngine
-
-            _POSE = PoseEngine(path, conf=conf, imgsz=_POSE_IMGSZ)
-            logger.info("pose overlay: using %s (conf=%.2f, imgsz=%s)",
-                        path, conf, _POSE_IMGSZ or "model default")
-        except Exception as exc:
-            logger.warning("pose overlay: failed to load %s: %s", path, exc)
-            _POSE = None
-            _POSE_PATH = None
-    return _POSE
-
-
-# One async pose runner per camera view — created on demand, rebuilt when the
-# underlying engine changes (Settings pose model change / reset_detector()).
-_ASYNC_POSE: dict[str, object] = {}
-
-
-def get_async_pose(cfg, camera_id: str):
-    """Per-camera :class:`~monitor_web.pose_overlay.AsyncPoseRunner` around the
-    configured pose engine, or ``None``. Same ``predict``/``draw`` interface as
-    the engine — but inference runs in a background worker so the cam-view
-    video rate is never chained to the pose model's latency."""
-    from .pose_overlay import AsyncPoseRunner
-
-    engine = get_pose_detector(cfg)
-    if engine is None:
-        _ASYNC_POSE.pop(camera_id, None)
-        return None
-    runner = _ASYNC_POSE.get(camera_id)
-    if runner is None or runner.engine is not engine:
-        runner = AsyncPoseRunner(engine)
-        _ASYNC_POSE[camera_id] = runner
-    return runner
-
-
 def get_detector(cfg):
-    """Load (once) the configured detector from backbone.yaml — whichever backend
-    (`yolo_onnx` / `yolo_openvino`) is set. Raises HTTPException(503) if no usable
-    model is configured. No calibration needed."""
+    """Load (once) the configured OpenVINO detector from backbone.yaml.
+    Raises HTTPException(503) if no usable IR is configured. No calibration
+    needed. CPU branch: the backend is always OpenVINO — `model_xml` is the
+    only model path key."""
     global _DETECTOR, _LOADED
     if _DETECTOR is not None:
         return _DETECTOR
     det_cfg = dict(read_backbone(cfg).get("detection") or {})
-    plugin = det_cfg.pop("plugin", "yolo_onnx")
-    # pose_onnx_path belongs to the separate pose engine (get_pose_detector), not
-    # the object detector — drop it so it isn't passed to the detector constructor.
-    det_cfg.pop("pose_onnx_path", None)
-    det_cfg.pop("pose_confidence_threshold", None)   # belongs to the pose engine, not the object detector
+    plugin = det_cfg.pop("plugin", "yolo_openvino")
+    if not plugin.startswith("yolo_openvino"):
+        plugin = "yolo_openvino"                     # legacy configs: force IR
+    # Pose keys belong to the producer's pose model, not the object detector.
+    for k in ("pose_model_xml", "pose_onnx_path", "pose_confidence_threshold",
+              "pose_enabled", "pose_imgsz", "pose_every_n", "onnx_path"):
+        det_cfg.pop(k, None)
     # inference_imgsz (the Settings slider) → the detector's square input_size.
-    # Only effective on a DYNAMIC model; a fixed-size export ignores it (the
-    # detector adopts the model's own size). Drop the raw key so it isn't passed
-    # as an unknown kwarg to the constructor.
     imgsz = det_cfg.pop("inference_imgsz", None)
     if imgsz:
         det_cfg["input_size"] = (int(imgsz), int(imgsz))
-    path_key = "model_xml" if plugin == "yolo_openvino" else "onnx_path"
-    raw_path = det_cfg.get(path_key)
+    raw_path = det_cfg.get("model_xml")
     resolved = resolve_model(raw_path, cfg) if raw_path else None
     if resolved is None:
-        # Nothing configured / unresolved → fall back to the latest trained model
-        # so the preview "just works" without the operator hunting for the path.
-        fallback = latest_trained_openvino() if plugin == "yolo_openvino" else latest_trained_onnx()
+        # Nothing configured / unresolved → fall back to the latest IR under
+        # models/ so the preview "just works".
+        fallback = latest_trained_openvino()
         if not fallback:
             raise HTTPException(
-                503, f"no detection.{path_key} configured and no trained model found"
+                503, "no detection.model_xml configured and no IR found under models/"
             )
-        logger.info("detection overlay: %s unset/unresolved — using latest trained %s",
-                    path_key, fallback)
+        logger.info("detection overlay: model_xml unset/unresolved — using %s", fallback)
         resolved = Path(fallback)
-    det_cfg[path_key] = str(resolved)
+    det_cfg["model_xml"] = str(resolved)
 
-    # Auto-pick the task plugin from the model's output names/arity. RF-DETR is
-    # detected by its named outputs (dets/labels/masks → rfdetr_onnx_seg); 2 outputs
-    # (head + mask protos) ⇒ {base}_seg; 1 output ⇒ detect. Same rule for ONNX and
-    # OpenVINO IR. The operator just drops the file in Settings — no manual "task"
-    # picker. select_plugin() is pure; here we only do the introspection I/O.
-    if plugin == "yolo_onnx":
-        try:
-            if str(resolved).endswith(".engine"):
-                # native TRT engine: output names come from the conversion
-                # sidecar (no cheap CPU introspection for a serialized engine)
-                from backbone.shared.trt_session import read_sidecar
-                names = list((read_sidecar(resolved) or {}).get("outputs") or [])
-            else:
-                import onnx as _onnx
-                names = [o.name for o in _onnx.load(str(resolved)).graph.output]
-            chosen = select_plugin(plugin, names)
-            if chosen != plugin:
-                logger.info("detection overlay: %s outputs %s → using %s",
-                            resolved.name, names, chosen)
-                plugin = chosen
-        except Exception as exc:
-            logger.warning("detection overlay: could not introspect %s outputs: %s",
-                           resolved.name, exc)
-    elif plugin == "yolo_openvino":
-        try:
-            import openvino as _ov
-            model = _ov.Core().read_model(str(resolved))
-            names = [next(iter(o.names), "") for o in model.outputs]
-            chosen = select_plugin(plugin, names)
-            if chosen != plugin:
-                logger.info("detection overlay: %s outputs %s → using %s",
-                            resolved.name, names, chosen)
-                plugin = chosen
-        except Exception as exc:
-            logger.warning("detection overlay: could not introspect %s outputs: %s",
-                           resolved.name, exc)
+    # Auto-pick the task plugin from the IR's output arity/names (2 outputs =
+    # head + mask protos ⇒ seg; 1 output ⇒ detect). The operator just drops
+    # the .xml in Settings — no manual "task" picker.
+    try:
+        import openvino as _ov
+        model = _ov.Core().read_model(str(resolved))
+        names = [next(iter(o.names), "") for o in model.outputs]
+        chosen = select_plugin("yolo_openvino", names)
+        if chosen != plugin:
+            logger.info("detection overlay: %s outputs %s → using %s",
+                        resolved.name, names, chosen)
+            plugin = chosen
+    except Exception as exc:
+        logger.warning("detection overlay: could not introspect %s outputs: %s",
+                       resolved.name, exc)
 
     class_names = det_cfg.get("class_names") or det_cfg.get("keep_classes")
     if not class_names:
         class_names = list(_DEFAULT_CLASS_NAMES)   # single-class pallet default
         det_cfg["class_names"] = class_names
 
-    if plugin == "rfdetr_onnx_seg":
-        # RF-DETR reads its own fixed square input from the ONNX and is NMS-free —
-        # drop the YOLO-only kwargs (iou/keep_classes/input_size) so they aren't
-        # passed to its constructor. Default class_names to the trained palette/
-        # carton/polybag triplet (not the single-class pallet default) unless the
-        # operator configured names explicitly.
-        if not det_cfg.get("class_names"):
-            class_names = list(_RFDETR_DEFAULT_CLASS_NAMES)
-        det_cfg = {
-            "onnx_path": det_cfg["onnx_path"],
-            "class_names": class_names,
-            "confidence_threshold": float(det_cfg.get("confidence_threshold", 0.3)),
-        }
-        if "mask_threshold" in (read_backbone(cfg).get("detection") or {}):
-            det_cfg["mask_threshold"] = float(
-                (read_backbone(cfg).get("detection") or {})["mask_threshold"]
-            )
+    if not plugin.endswith("_seg"):
+        # Seg-only kwargs would be a constructor TypeError on the detect plugin.
+        det_cfg.pop("decode_masks", None)
+        det_cfg.pop("mask_threshold", None)
 
     try:
-        import backbone.detection  # noqa: F401 — registers yolo_onnx{,_seg}, yolo_openvino{,_seg}, rfdetr_onnx_seg
+        import backbone.detection  # noqa: F401 — registers yolo_openvino{,_seg,_pose}
         from backbone.core.interfaces import detector_registry
 
         _DETECTOR = detector_registry.create(plugin, **det_cfg)
@@ -298,9 +175,8 @@ def current_model_info(cfg) -> dict:
     is pending a reload, which is what makes this worth logging.
     """
     det_cfg = read_backbone(cfg).get("detection") or {}
-    plugin = det_cfg.get("plugin", "yolo_onnx")
-    path_key = "model_xml" if plugin == "yolo_openvino" else "onnx_path"
-    raw = det_cfg.get(path_key)
+    plugin = det_cfg.get("plugin", "yolo_openvino")
+    raw = det_cfg.get("model_xml")
     resolved = resolve_model(raw, cfg) if raw else None
     conf_path = str(resolved) if resolved else (raw or None)
     loaded_path = _LOADED["path"] if _LOADED else None

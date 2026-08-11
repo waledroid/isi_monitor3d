@@ -61,17 +61,10 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
     if not det_cfg or not det_cfg.get("plugin"):
         return None
     det_plugin = det_cfg.pop("plugin")
-    for pose_key in ("pose_onnx_path", "pose_enabled", "pose_confidence_threshold",
-                     "pose_imgsz", "pose_every_n", "person_pallet_max_distance_m",
-                     "trt_enabled"):
+    for pose_key in ("pose_onnx_path", "pose_model_xml", "pose_enabled",
+                     "pose_confidence_threshold", "pose_imgsz", "pose_every_n",
+                     "person_pallet_max_distance_m", "trt_enabled"):
         det_cfg.pop(pose_key, None)
-    if det_plugin == "rfdetr_onnx_seg":
-        # RF-DETR is NMS-free and always decodes its masks — these are YOLO-only
-        # knobs. A plugin switch in Settings leaves them behind in the YAML, and
-        # forwarding them here is a constructor TypeError that kills the whole
-        # producer at boot (same whitelist as engines.get_detector).
-        for yolo_key in ("iou_threshold", "keep_classes", "decode_masks"):
-            det_cfg.pop(yolo_key, None)
     # Global zone-inference options (Settings ▸ Isistream). ONE model, ONE
     # batched call for every zone of every camera — these apply to all zones.
     sahi_cfg = det_cfg.pop("sahi", None)
@@ -89,21 +82,19 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
     zone_tol = float(det_cfg.pop("zone_membership_tol_m", 0.15))
     fill_on = bool(det_cfg.pop("zone_crop_polygon_fill", True))
     scope_is_zones = scope == "zones"
-    if det_plugin in ("yolo_onnx_seg", "yolo_openvino_seg"):
+    if det_plugin.endswith("_seg"):
         det_cfg.setdefault("decode_masks", scope_is_zones)
+    else:
+        # Seg-only knobs left behind by a plugin switch in Settings would be a
+        # constructor TypeError that kills the producer at boot.
+        det_cfg.pop("decode_masks", None)
+        det_cfg.pop("mask_threshold", None)
     if scope_is_zones and len(zones) == 0:
         logger.warning("isistream: zone scope with no zones — object detection OFF "
                        "(pose-only). Draw zones to enable it.")
         return None
     if scope_is_zones:
         det_cfg["input_size"] = (zone_imgsz, zone_imgsz)
-    if det_plugin == "rfdetr_onnx_seg":
-        # RF-DETR's exported graph is STATIC (e.g. 432x432): forcing the
-        # slider/zone size onto it fails ORT shape validation on every tick
-        # ("Got: 320 Expected: 432") — silently, since the tick loop swallows
-        # inference errors into empty sets. The plugin reads its own fixed
-        # input from the ONNX; crops are resized to it.
-        det_cfg.pop("input_size", None)
     detector = detector_registry.create(det_plugin, **det_cfg)
     if scope_is_zones:
         from backbone.detection.zone_scope import (
@@ -146,7 +137,7 @@ def _build_pose_detector(cfg: dict):
     if not det.get("pose_enabled", True):
         logger.info("isistream: pose detection DISABLED via settings")
         return None
-    pose_path = det.get("pose_onnx_path")
+    pose_path = det.get("pose_model_xml")
     if not pose_path:
         return None
     try:
@@ -154,8 +145,9 @@ def _build_pose_detector(cfg: dict):
         if det.get("pose_imgsz"):
             kwargs["input_size"] = (int(det["pose_imgsz"]), int(det["pose_imgsz"]))
         pose = detector_registry.create(
-            "yolo_onnx_pose", onnx_path=pose_path,
+            "yolo_openvino_pose", model_xml=pose_path,
             confidence_threshold=float(det.get("pose_confidence_threshold", 0.3)),
+            device=str(det.get("device", "CPU")),
             **kwargs)
         logger.info("isistream: pose detector enabled (%s)", pose_path)
         return pose

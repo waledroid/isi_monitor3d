@@ -29,7 +29,6 @@ from ..detection_overlay import (
     distance_line_style,
     distances_enabled,
     floor_zones_enabled,
-    get_async_pose,
     masks_enabled,
     nodes_enabled,
     person_pallet_max_m,
@@ -182,11 +181,10 @@ def _detect_iter(frames: Iterator, cfg, camera_id: str, *, is_running=None,
             continue
         dist_view = _warp_camera(cfg, camera_id) if distances_enabled(cfg) else None
         dist_style = distance_line_style(cfg)
-        # Skeleton source: in points mode (Direction 1) the producer's pose
-        # rides the observations echo — render it with ZERO dashboard
-        # inference (wire_pose). Frames mode keeps the async runner (the
-        # dashboard is then the only pose in the system for display).
-        pose = wire_pose if wire_pose is not None else get_async_pose(cfg, camera_id)
+        # Skeleton source: the producer's pose rides the observations echo —
+        # render it with ZERO dashboard inference (wire_pose). The CPU branch
+        # has no in-dashboard pose engine.
+        pose = wire_pose
         dets = get_zone_dets(image) if get_zone_dets is not None else []
         # Zone-based: membership is METRIC — each foot projects to the zone's
         # own plane (the engine's own geometry) and must land inside a zone

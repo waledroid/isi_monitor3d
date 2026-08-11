@@ -29,7 +29,6 @@ from ..detection_overlay import (
     annotate_frame,
     boxes_enabled,
     get_detector,
-    get_pose_detector,
     masks_enabled,
     nodes_enabled,
     occupancy_enabled,
@@ -139,7 +138,7 @@ async def stream_mp4(name: str, request: Request) -> StreamingResponse:
                          show_nodes=nodes_enabled(cfg),
                          show_masks=masks_enabled(cfg),
                          show_boxes=boxes_enabled(cfg),
-                         pose_detector=get_pose_detector(cfg),
+                         pose_detector=None,
                          show_occupancy=occupancy_enabled(cfg)),
         media_type=f"multipart/x-mixed-replace; boundary={JPEG_BOUNDARY}",
     )

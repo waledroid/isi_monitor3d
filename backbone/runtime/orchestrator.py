@@ -238,10 +238,10 @@ class Orchestrator:
         # so configs that still carry the key don't crash detector constructors.
         det_cfg.pop("trt_enabled", None)
         det_plugin = det_cfg.pop("plugin")
-        # `pose_onnx_path` configures a separate person-pose model (consumed by the
-        # dashboard overlay today; the S5.5 `yolo_onnx_pose` plugin later) — it is
-        # not a kwarg of the object detector, so drop it before constructing one.
-        det_cfg.pop("pose_onnx_path", None)
+        # `pose_model_xml` configures a separate person-pose model — it is not
+        # a kwarg of the object detector, so drop it before constructing one.
+        det_cfg.pop("pose_model_xml", None)
+        det_cfg.pop("pose_onnx_path", None)              # legacy GPU-branch key
         det_cfg.pop("pose_enabled", None)                # pose-engine setting, not an object-detector kwarg
         det_cfg.pop("pose_confidence_threshold", None)   # pose-engine setting, not an object-detector kwarg
         det_cfg.pop("pose_imgsz", None)                  # pose-engine setting, not an object-detector kwarg
@@ -260,8 +260,11 @@ class Orchestrator:
         # masks are per-detection frame-sized canvases (pure CPU cost the
         # pipeline never needs) — OFF by default. Explicit config wins.
         scope_peek = str(det_cfg.get("scope", "zones"))
-        if det_plugin in ("yolo_onnx_seg", "yolo_openvino_seg"):
+        if det_plugin.endswith("_seg"):
             det_cfg.setdefault("decode_masks", scope_peek == "zones")
+        else:
+            det_cfg.pop("decode_masks", None)
+            det_cfg.pop("mask_threshold", None)
         # The system is ZONE-BASED: with `detection.scope: zones` (the default)
         # the object detector sees only the configured floor zones' crops —
         # and with NO zones configured it is not built at all (pose stays
@@ -315,27 +318,26 @@ class Orchestrator:
                     {cid: self._rig[cid].image_size_wh for cid in self._rig.camera_ids},
                     **zsd_kwargs)
 
-        # Optional person-pose detector — reuses the SAME config keys the dashboard
-        # overlay uses (`detection.pose_onnx_path` / `pose_confidence_threshold`), so
-        # configuring a pose model lights up person tracking with no extra config.
-        # When set, the orchestrator runs it alongside the object detector and emits
-        # person `Track2D` (foot = ankle midpoint) for person↔pallet distance. A
-        # missing/unloadable model degrades cleanly to "no persons".
+        # Optional person-pose detector (`detection.pose_model_xml` — OpenVINO
+        # IR, same key isistream uses), so configuring a pose model lights up
+        # person tracking with no extra config. When set, the orchestrator runs
+        # it alongside the object detector and emits person `Track2D` (foot =
+        # ankle midpoint) for person↔pallet distance. A missing/unloadable
+        # model degrades cleanly to "no persons".
         self._person_detector = None
-        pose_path = (cfg["detection"].get("pose_onnx_path")
+        pose_path = (cfg["detection"].get("pose_model_xml")
                      if cfg["detection"].get("pose_enabled", True) else None)
         if pose_path:
             try:
                 pose_conf = float(cfg["detection"].get("pose_confidence_threshold", 0.3))
-                # `pose_imgsz` shrinks the pose input on a dynamic export (a
-                # static export keeps its baked size — same rule as the object
-                # detector's `inference_imgsz`). 480 ≈ half the 640 cost.
                 pose_kwargs: dict = {}
                 pose_imgsz = cfg["detection"].get("pose_imgsz")
                 if pose_imgsz:
                     pose_kwargs["input_size"] = (int(pose_imgsz), int(pose_imgsz))
                 self._person_detector = detector_registry.create(
-                    "yolo_onnx_pose", onnx_path=pose_path, confidence_threshold=pose_conf,
+                    "yolo_openvino_pose", model_xml=pose_path,
+                    confidence_threshold=pose_conf,
+                    device=str(cfg["detection"].get("device", "CPU")),
                     **pose_kwargs,
                 )
                 logger.info("orchestrator: person-pose detector enabled (%s)", pose_path)
