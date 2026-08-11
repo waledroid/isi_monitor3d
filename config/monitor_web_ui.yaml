@@ -1,5 +1,50 @@
 zone_patches:
-  patches: []
+  patches:
+  - id: zp_msohq0og
+    name: sortie_machine_4
+    camera: cam_a
+    rect:
+    - 370.2728127939793
+    - 64.22075885857632
+    - 683.3490122295391
+    - 258.48855440576983
+    polygon:
+    - - 370.2728127939793
+      - 123.62496080275945
+    - - 561.329570398244
+      - 64.22075885857632
+    - - 683.3490122295391
+      - 170.1850109752273
+    - - 452.1542803386642
+      - 258.48855440576983
+    frame_wh:
+    - 1280
+    - 720
+    color: '#b31e1e'
+    twin_of: null
+  - id: zp_msohrams
+    name: sortie_machine_5
+    camera: cam_a
+    rect:
+    - 167.26315789473682
+    - 194.21052631578948
+    - 378.52631578947364
+    - 412.10526315789474
+    polygon:
+    - - 167.26315789473682
+      - 270.0
+    - - 312.2105263157895
+      - 194.21052631578948
+    - - 378.52631578947364
+      - 317.36842105263156
+    - - 204.21052631578945
+      - 412.10526315789474
+    frame_wh:
+    - 1280
+    - 720
+    color: '#61a51d'
+    twin_of: null
+  calibration_sig: /home/aatanda/isi_monitor3d_cpu/config/mode1/calibration.json:1786436103331585530|/home/aatanda/isi_monitor3d_cpu/config/zones.yaml:1786442552502042931
 warehouse_map:
   elements: []
   outline: null
@@ -13,7 +58,7 @@ link_lines:
 model_xml_path: /home/aatanda/isi_monitor3d_cpu/models/pallet_seg_openvino/model.xml
 show_nodes: false
 show_masks: true
-show_boxes: false
+show_boxes: true
 gateway_url: ''
 gateway_token: ''
 video_passthrough: false

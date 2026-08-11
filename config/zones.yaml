@@ -1,1 +1,31 @@
-zones: []
+zones:
+- id: zp_msohq0og
+  name: sortie_machine_4
+  type: palette
+  kind: palette
+  severity: info
+  polygon:
+  - - -0.296
+    - -0.489
+  - - 0.775
+    - -0.637
+  - - 1.256
+    - -0.058
+  - - 0.145
+    - 0.144
+  derived_from: zone_patch
+- id: zp_msohrams
+  name: sortie_machine_5
+  type: palette
+  kind: palette
+  severity: info
+  polygon:
+  - - -1.254
+    - 0.026
+  - - -0.571
+    - -0.198
+  - - -0.184
+    - 0.309
+  - - -0.904
+    - 0.526
+  derived_from: zone_patch
