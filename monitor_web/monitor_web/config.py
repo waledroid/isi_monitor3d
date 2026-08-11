@@ -69,13 +69,14 @@ class Settings(BaseSettings):
         ),
     )
 
-    # UDP listener for Track2D / Track3D envelopes.
-    # NOTE: 9001 (not 50001) — under WSL2 *mirrored* networking, ports in the
-    # Windows dynamic/Hyper-V reserved range (~49152+) fail to bind with
-    # EADDRINUSE even when free. A low port avoids that. Must match the Backbone's
-    # metadata.sinks port in backbone.yaml.
+    # UDP listener for the engine's metadata envelopes. CPU branch: 9003 —
+    # offset from the GPU line's 9001 so both stacks can coexist on one dev
+    # box (a shared port would REUSEPORT-steal each other's flows). Must
+    # match the Backbone's metadata.sinks udp port in backbone.yaml (9003).
+    # Low port on purpose: under WSL2 mirrored networking, ports in the
+    # Windows dynamic/Hyper-V reserved range (~49152+) fail to bind.
     udp_host: str = "127.0.0.1"
-    udp_port: int = 9001
+    udp_port: int = 9003
 
     # Status panel — how stale before the green dot goes red.
     freshness_threshold_s: float = 2.0
