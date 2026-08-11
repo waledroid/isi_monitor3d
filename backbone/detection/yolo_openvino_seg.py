@@ -91,6 +91,17 @@ class YoloOpenvinoSegDetector(Detector):
 
         core = ov.Core()
         model = core.read_model(str(xml_file))
+        # Adopt the model's own input size when it's FIXED (static export) —
+        # same rule as the GPU line's ONNX plugin: a static model keeps its
+        # baked size regardless of the configured input_size/slider.
+        ishape = model.inputs[0].get_partial_shape()
+        if len(ishape) == 4 and ishape[2].is_static and ishape[3].is_static:
+            model_wh = (int(ishape[3].get_length()), int(ishape[2].get_length()))
+            if model_wh != tuple(self._input_size):
+                logger.info("%s: model expects fixed %dx%d input — overriding %s",
+                            type(self).__name__, model_wh[0], model_wh[1],
+                            self._input_size)
+                self._input_size = model_wh
         if len(model.outputs) != 2:
             raise ValueError(
                 f"YoloOpenvinoSegDetector: IR has {len(model.outputs)} outputs; expected 2 "
@@ -151,34 +162,58 @@ class YoloOpenvinoSegDetector(Detector):
             f"Got shape {raw_one.shape}. Did class_names match the IR?"
         )
 
+    def _infer_batch(self, batch_tensor: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(head, protos) with one row per input image: batched call for a
+        dynamic-batch IR, transparent per-image fallback for a fixed batch=1
+        export."""
+        n = batch_tensor.shape[0]
+        try:
+            outs = self._compiled([batch_tensor])
+            head_raw = outs[self._head_output]
+            protos_raw = outs[self._protos_output]
+            # >= n: a fixed-batch model (or a constant test stub) may return
+            # more rows than inputs — first n rows map to the input order.
+            if (head_raw.ndim == 3 and head_raw.shape[0] >= n
+                    and protos_raw.ndim == 4 and protos_raw.shape[0] >= n):
+                return head_raw[:n], protos_raw[:n]
+        except Exception:
+            pass                                 # static batch=1 IR → per image
+        heads, protos = [], []
+        for i in range(n):
+            outs = self._compiled([batch_tensor[i:i + 1]])
+            head_raw = outs[self._head_output]      # (1, 4+nc+nm, A) or (1, A, 4+nc+nm)
+            protos_raw = outs[self._protos_output]  # (1, nm, mh, mw)
+            if head_raw.ndim != 3 or head_raw.shape[0] < 1:
+                raise RuntimeError(
+                    f"YoloOpenvinoSegDetector: unexpected head shape {head_raw.shape}"
+                )
+            if protos_raw.ndim != 4 or protos_raw.shape[0] < 1:
+                raise RuntimeError(
+                    f"YoloOpenvinoSegDetector: unexpected protos shape {protos_raw.shape}"
+                )
+            heads.append(head_raw[0])
+            protos.append(protos_raw[0])
+        return np.stack(heads), np.stack(protos)
+
     def detect(self, pair: FramePair) -> dict[str, list[Detection]]:
         if not pair.frames:
             return {}
         # `_input_size` is (w, h); target_hw needed by the decode is (h, w).
         target_hw = (self._input_size[1], self._input_size[0])
-        # OpenVINO IR is fixed batch=1 (dynamic=False export), so infer per camera.
+        cam_ids = list(pair.frames.keys())
+        images = [pair.frames[cid].image for cid in cam_ids]
+        batch_tensor, lb_results = batch_letterbox(images, target=self._input_size)
+        head_batch, protos_batch = self._infer_batch(batch_tensor)
+        nm = protos_batch.shape[1]
         result: dict[str, list[Detection]] = {}
-        for cam_id, frame in pair.frames.items():
-            batch_tensor, lb_results = batch_letterbox([frame.image], target=self._input_size)
-            outs = self._compiled([batch_tensor])
-            head_raw = outs[self._head_output]      # (1, 4+nc+nm, A) or (1, A, 4+nc+nm)
-            protos_raw = outs[self._protos_output]  # (1, nm, mh, mw)
-            if head_raw.ndim != 3 or head_raw.shape[0] != 1:
-                raise RuntimeError(
-                    f"YoloOpenvinoSegDetector: unexpected head shape {head_raw.shape}"
-                )
-            if protos_raw.ndim != 4 or protos_raw.shape[0] != 1:
-                raise RuntimeError(
-                    f"YoloOpenvinoSegDetector: unexpected protos shape {protos_raw.shape}"
-                )
-            nm = protos_raw.shape[1]
-            head_per_image = self._to_head_channels_first(head_raw[0], nm)
+        for i, cam_id in enumerate(cam_ids):
+            head_per_image = self._to_head_channels_first(head_batch[i], nm)
             result[cam_id] = decode_yolo11_seg(
                 head_per_image,
-                protos_raw[0],
+                protos_batch[i],
                 camera_id=cam_id,
-                capture_ts=frame.capture_ts,
-                letterbox_meta=lb_results[0],
+                capture_ts=pair.frames[cam_id].capture_ts,
+                letterbox_meta=lb_results[i],
                 target_hw=target_hw,
                 class_names=self._class_names,
                 confidence_threshold=self._confidence_threshold,

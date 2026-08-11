@@ -158,10 +158,9 @@ def _write_config(
             "frame_bus": {"default_maxsize": 8},
         },
         "detection": {
-            "plugin": "yolo_onnx", "scope": "full_frame",
-            "onnx_path": str(onnx_path),
+            "plugin": "yolo_openvino", "scope": "full_frame",
+            "model_xml": str(onnx_path),
             "class_names": CLASS_NAMES,
-            "providers": ["CPUExecutionProvider"],
             "confidence_threshold": 0.25,
         },
         "homography": {
@@ -307,8 +306,8 @@ def test_orchestrator_rejects_config_without_sinks(tmp_path: Path) -> None:
             "cam_a": {"source": {"name": "replay", "frames": []}},
             "cam_b": {"source": {"name": "replay", "frames": []}},
         },
-        "detection": {"plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
-                      "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"]},
+        "detection": {"plugin": "yolo_openvino", "scope": "full_frame", "model_xml": str(onnx_path),
+                      "class_names": CLASS_NAMES,},
         "metadata": {"sinks": []},
     }))
 
@@ -378,8 +377,8 @@ def test_mode1_build_skips_triangulator(tmp_path: Path) -> None:
                 "cam_a": {"source": {"name": "replay", "frames": []}},
             },
             "detection": {
-                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
-                "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
+                "plugin": "yolo_openvino", "scope": "full_frame", "model_xml": str(onnx_path),
+                "class_names": CLASS_NAMES,
             },
             "homography": {
                 "tracker": {"plugin": "bytetrack"},
@@ -414,8 +413,8 @@ def test_mode1_emits_track2d_only_no_track3d(tmp_path: Path) -> None:
                 "cam_a": {"source": {"name": "replay", "frames": []}},
             },
             "detection": {
-                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
-                "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
+                "plugin": "yolo_openvino", "scope": "full_frame", "model_xml": str(onnx_path),
+                "class_names": CLASS_NAMES,
             },
             "homography": {
                 "tracker": {"plugin": "bytetrack"},
@@ -534,9 +533,9 @@ def test_mode1_pose_detector_emits_person_and_pallet(tmp_path: Path) -> None:
             "calibration_path": str(cal_path),
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
             "detection": {
-                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(obj_onnx),
-                "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
-                "pose_onnx_path": str(pose_onnx), "pose_confidence_threshold": 0.25,
+                "plugin": "yolo_openvino", "scope": "full_frame", "model_xml": str(obj_onnx),
+                "class_names": CLASS_NAMES,
+                "pose_model_xml": str(pose_onnx), "pose_confidence_threshold": 0.25,
                 # pose-engine-only key: must be POPPED before the object
                 # detector is constructed (unknown kwarg would raise) and passed
                 # to the pose detector as input_size (a static stub keeps its
@@ -610,8 +609,8 @@ def test_mode1_pallet_occupancy_full_carton(tmp_path: Path) -> None:
             "calibration_path": str(cal_path),
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
             "detection": {
-                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
-                "class_names": _OCC_CLASSES, "providers": ["CPUExecutionProvider"],
+                "plugin": "yolo_openvino", "scope": "full_frame", "model_xml": str(onnx_path),
+                "class_names": _OCC_CLASSES,
                 "confidence_threshold": 0.25,
             },
             "homography": {
@@ -665,10 +664,9 @@ def _write_config_with_diag(
             "frame_bus": {"default_maxsize": 8},
         },
         "detection": {
-            "plugin": "yolo_onnx", "scope": "full_frame",
-            "onnx_path": str(onnx_path),
+            "plugin": "yolo_openvino", "scope": "full_frame",
+            "model_xml": str(onnx_path),
             "class_names": CLASS_NAMES,
-            "providers": ["CPUExecutionProvider"],
             "confidence_threshold": 0.25,
         },
         "homography": {
@@ -894,8 +892,8 @@ def test_orchestrator_zone_state_carries_pallet_decision(tmp_path: Path) -> None
             "zones_path": str(zones_path),
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
             "detection": {
-                "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(onnx_path),
-                "class_names": _OCC_CLASSES, "providers": ["CPUExecutionProvider"],
+                "plugin": "yolo_openvino", "scope": "full_frame", "model_xml": str(onnx_path),
+                "class_names": _OCC_CLASSES,
                 "confidence_threshold": 0.25,
             },
             "homography": {
@@ -1071,8 +1069,8 @@ def test_output_wh_scale_guard_keeps_world_coords(tmp_path: Path) -> None:
                 "calibration_path": str(cal_path),
                 "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
                 "detection": {
-                    "plugin": "yolo_onnx", "scope": "full_frame", "onnx_path": str(obj_onnx),
-                    "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
+                    "plugin": "yolo_openvino", "scope": "full_frame", "model_xml": str(obj_onnx),
+                    "class_names": CLASS_NAMES,
                 },
                 "homography": {
                     "tracker": {"plugin": "bytetrack"},
@@ -1119,10 +1117,10 @@ def test_proximity_message_published_for_person_near_pallet(tmp_path: Path) -> N
             "calibration_path": str(cal_path),
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
             "detection": {
-                "plugin": "yolo_onnx", "scope": "full_frame",
-                "onnx_path": str(obj_onnx),
-                "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
-                "pose_onnx_path": str(pose_onnx), "pose_confidence_threshold": 0.25,
+                "plugin": "yolo_openvino", "scope": "full_frame",
+                "model_xml": str(obj_onnx),
+                "class_names": CLASS_NAMES,
+                "pose_model_xml": str(pose_onnx), "pose_confidence_threshold": 0.25,
             },
             "homography": {
                 "tracker": {"plugin": "bytetrack"},
@@ -1180,9 +1178,9 @@ def test_observations_published_per_camera(tmp_path: Path) -> None:
             "calibration_path": str(cal_path),
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
             "detection": {
-                "plugin": "yolo_onnx", "scope": "full_frame",
-                "onnx_path": str(obj_onnx),
-                "class_names": CLASS_NAMES, "providers": ["CPUExecutionProvider"],
+                "plugin": "yolo_openvino", "scope": "full_frame",
+                "model_xml": str(obj_onnx),
+                "class_names": CLASS_NAMES,
             },
             "homography": {
                 "tracker": {"plugin": "bytetrack"},

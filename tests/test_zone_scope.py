@@ -258,11 +258,10 @@ def test_orchestrator_no_zones_means_no_object_detector(tmp_path) -> None:
         cfg.write_text(yaml.safe_dump({
             "calibration_path": str(cal),
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
-            "detection": {"plugin": "yolo_onnx", "onnx_path": str(onnx_path),
+            "detection": {"plugin": "yolo_openvino", "model_xml": str(onnx_path),
                           "class_names": CLASS_NAMES,
                           # static-batch stub: keep the crop count == cameras
-                          "zone_crop_max_aspect": 0,
-                          "providers": ["CPUExecutionProvider"]},
+                          "zone_crop_max_aspect": 0,},
             "homography": {"tracker": {"plugin": "bytetrack"},
                            "track_config": {"min_hits_to_confirm": 1}},
             "metadata": {"sinks": [{"plugin": "udp", "host": "127.0.0.1", "port": port}]},
@@ -305,11 +304,10 @@ def test_orchestrator_zone_scope_detects_inside_zone(tmp_path) -> None:
             "zones_path": str(zones_path),
             "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}},
                         "cam_b": {"source": {"name": "replay", "frames": []}}},
-            "detection": {"plugin": "yolo_onnx", "onnx_path": str(onnx_path),
+            "detection": {"plugin": "yolo_openvino", "model_xml": str(onnx_path),
                           "class_names": CLASS_NAMES,
                           # static-batch stub: keep the crop count == cameras
-                          "zone_crop_max_aspect": 0,
-                          "providers": ["CPUExecutionProvider"]},
+                          "zone_crop_max_aspect": 0,},
             "homography": {"tracker": {"plugin": "bytetrack"},
                            "track_config": {"min_hits_to_confirm": 1}},
             "metadata": {"sinks": [{"plugin": "udp", "host": "127.0.0.1", "port": port}]},
@@ -351,7 +349,7 @@ def test_decode_masks_defaults_by_scope(tmp_path, monkeypatch) -> None:
     real_create = detector_registry.create
 
     def spy(name, **kwargs):
-        if name == "yolo_onnx_seg":
+        if name == "yolo_openvino_seg":
             captured[kwargs.get("scope_tag")] = kwargs.get("decode_masks")
 
             class _Stub:
@@ -374,9 +372,9 @@ def test_decode_masks_defaults_by_scope(tmp_path, monkeypatch) -> None:
                 "calibration_path": str(cal),
                 "zones_path": str(zones_path),
                 "cameras": {"cam_a": {"source": {"name": "replay", "frames": []}}},
-                "detection": {"plugin": "yolo_onnx_seg", "scope": scope,
+                "detection": {"plugin": "yolo_openvino_seg", "scope": scope,
                               "scope_tag": tag,   # spy correlation only
-                              "onnx_path": "/nonexistent-ok-stubbed.onnx",
+                              "model_xml": "/nonexistent-ok-stubbed.onnx",
                               "class_names": CLASS_NAMES},
                 "homography": {"tracker": {"plugin": "bytetrack"}},
                 "metadata": {"sinks": [{"plugin": "udp", "host": "127.0.0.1",

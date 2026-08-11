@@ -24,11 +24,10 @@ def test_gpu_true_when_nvidia_smi_lists_a_gpu(monkeypatch) -> None:
     hw.gpu_available.cache_clear()
 
 
-def test_cpu_when_no_nvidia_and_no_ort_cuda(monkeypatch) -> None:
+def test_cpu_when_no_nvidia_and_no_ort(monkeypatch) -> None:
+    """CPU branch: no onnxruntime wheel at all — the guarded fallback import
+    fails and gpu_available() must come back False, not raise."""
     hw.gpu_available.cache_clear()
     monkeypatch.setattr(hw.shutil, "which", lambda _name: None)  # nvidia-smi absent
-    import onnxruntime as ort
-
-    monkeypatch.setattr(ort, "get_available_providers", lambda: ["CPUExecutionProvider"])
     assert hw.gpu_available() is False
     hw.gpu_available.cache_clear()

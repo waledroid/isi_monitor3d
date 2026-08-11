@@ -167,10 +167,10 @@ def test_core_run_loop_paces_and_stops() -> None:
         ing.stop()
 
 
-def test_build_object_detector_drops_yolo_only_keys_for_rfdetr(monkeypatch) -> None:
-    """A plugin switch in Settings can leave YOLO-only keys behind in the
-    detection block; forwarding them to RF-DETR's constructor is a TypeError
-    that kills the producer at boot. They must be dropped for RF-DETR."""
+def test_build_object_detector_drops_seg_keys_for_detect_plugin(monkeypatch) -> None:
+    """A plugin switch in Settings can leave seg-only keys behind in the
+    detection block; forwarding them to the detect plugin's constructor is a
+    TypeError that kills the producer at boot. They must be dropped."""
     from isistream import core as isicore
 
     captured: dict = {}
@@ -182,25 +182,21 @@ def test_build_object_detector_drops_yolo_only_keys_for_rfdetr(monkeypatch) -> N
 
     monkeypatch.setattr(isicore.detector_registry, "create", fake_create)
     cfg = {"detection": {
-        "plugin": "rfdetr_onnx_seg",
-        "onnx_path": "m.onnx",
+        "plugin": "yolo_openvino",
+        "model_xml": "m.xml",
         "class_names": ["palette", "carton", "polybag"],
         "confidence_threshold": 0.3,
         "scope": "full_frame",
-        # leftovers from a previous yolo_onnx_seg config
-        "iou_threshold": 0.45,
-        "keep_classes": ["palette"],
+        # leftovers from a previous yolo_openvino_seg config
         "decode_masks": True,
-        # slider size: fine for dynamic YOLO exports, poison for the static
-        # RF-DETR graph (ORT: Got 640 Expected 432)
-        "inference_imgsz": 640,
+        "mask_threshold": 0.5,
     }}
     det = isicore._build_object_detector(cfg, rig=None, zones=None)
     assert det is not None
-    assert captured["plugin"] == "rfdetr_onnx_seg"
-    for yolo_key in ("iou_threshold", "keep_classes", "decode_masks", "input_size"):
-        assert yolo_key not in captured["kwargs"]
-    assert captured["kwargs"]["onnx_path"] == "m.onnx"
+    assert captured["plugin"] == "yolo_openvino"
+    for seg_key in ("decode_masks", "mask_threshold"):
+        assert seg_key not in captured["kwargs"]
+    assert captured["kwargs"]["model_xml"] == "m.xml"
 
 
 def test_build_object_detector_keeps_yolo_keys_for_yolo(monkeypatch) -> None:
@@ -216,8 +212,8 @@ def test_build_object_detector_keeps_yolo_keys_for_yolo(monkeypatch) -> None:
 
     monkeypatch.setattr(isicore.detector_registry, "create", fake_create)
     cfg = {"detection": {
-        "plugin": "yolo_onnx_seg",
-        "onnx_path": "m.onnx",
+        "plugin": "yolo_openvino_seg",
+        "model_xml": "m.xml",
         "scope": "full_frame",
         "iou_threshold": 0.45,
         "decode_masks": True,
