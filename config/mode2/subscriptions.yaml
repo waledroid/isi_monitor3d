@@ -1,14 +1,1 @@
-- name: palette_3d
-  module: palettes
-  match:
-    cls: palette
-    cameras_seeing_min: 2
-  request: xyz
-  rate_hz: 5.0
-- name: carton_3d
-  module: palettes
-  match:
-    cls: carton
-    cameras_seeing_min: 2
-  request: xyz
-  rate_hz: 5.0
+[]

@@ -103,8 +103,11 @@ function renderStatus(status) {
   const fmtLat = (v) => (v == null ? "—" : `${v} ms`);
   const latCls = k.latency_p95_ms == null
     ? "" : (k.latency_p95_ms < (k.latency_target_ms || 200) ? "kpi-ok" : "kpi-bad");
+  // Single-camera branch: only show per-camera rows for CONFIGURED cameras —
+  // stale diagnostics from another node must not resurrect a cam_b row.
+  const camKnown = (cam) => Object.keys(camsLive).length === 0 || cam in camsLive;
   const reproj = k.reproj_rms_px || {};
-  const reprojRows = Object.entries(reproj).map(([cam, v]) => {
+  const reprojRows = Object.entries(reproj).filter(([cam]) => camKnown(cam)).map(([cam, v]) => {
     const cls = v <= (k.reproj_target_px || 2) ? "kpi-ok" : "kpi-bad";
     return `<div class="kpi-row"><span class="kpi-key">${strings.reproj_label || "Reproj"} ${cam}</span>`
       + `<span class="kpi-val ${cls}">${v} px<span class="kpi-target">≤2</span></span></div>`;
@@ -118,7 +121,7 @@ function renderStatus(status) {
   const perCamLabel = k.points_mode
     ? (strings.det_rate_label || "Detections") : (strings.fps_label || "FPS");
   const perCamUnit = k.points_mode ? "/s" : " fps";
-  const fpsRows = Object.entries(fpsByCam).map(([cam, v]) => {
+  const fpsRows = Object.entries(fpsByCam).filter(([cam]) => camKnown(cam)).map(([cam, v]) => {
     const cls = v < 1.0 ? "kpi-bad" : "";
     return `<div class="kpi-row"><span class="kpi-key">${perCamLabel} ${cam}</span>`
       + `<span class="kpi-val ${cls}">${Number(v).toFixed(1)}${perCamUnit}</span></div>`;
@@ -146,21 +149,16 @@ function renderStatus(status) {
       ${uiLagRow}
       ${reprojRows}
     </div>`;
-  // Live memory rows (used out of total): GPU VRAM + system RAM (+ GPU util %).
+  // Live memory row: system RAM only (CPU-only build — no VRAM/GPU rows).
   const res = status.resources || {};
   const fmtMem = (u, t) => (u == null || t == null) ? "—" : `${u} / ${t} MB`;
   const memCls = (u, t) => (u != null && t > 0 && u / t > 0.9) ? "kpi-bad" : "";
   const resHtml = `
     <div class="kpi-group">
       <div class="kpi-row">
-        <span class="kpi-key">${strings.vram_label || "VRAM (GPU)"}</span>
-        <span class="kpi-val ${memCls(res.vram_used_mb, res.vram_total_mb)}">${fmtMem(res.vram_used_mb, res.vram_total_mb)}</span>
-      </div>
-      <div class="kpi-row">
         <span class="kpi-key">${strings.ram_label || "RAM (CPU)"}</span>
         <span class="kpi-val ${memCls(res.ram_used_mb, res.ram_total_mb)}">${fmtMem(res.ram_used_mb, res.ram_total_mb)}</span>
       </div>
-      ${res.gpu_util_pct == null ? "" : `<div class="kpi-row"><span class="kpi-key">${strings.gpu_util_label || "GPU util"}</span><span class="kpi-val">${res.gpu_util_pct}%</span></div>`}
     </div>`;
   target.innerHTML = `
     <div class="status-row">
@@ -185,10 +183,6 @@ function renderStatus(status) {
     <div class="status-row">
       <span class="status-key">Tracks 2D</span>
       <span class="status-value">${status.tracks.active_2d}</span>
-    </div>
-    <div class="status-row">
-      <span class="status-key">Tracks 3D</span>
-      <span class="status-value">${status.tracks.active_3d}</span>
     </div>
     <div class="status-row">
       <span class="status-key">Last UDP</span>

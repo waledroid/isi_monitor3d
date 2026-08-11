@@ -305,10 +305,6 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><path d="M5 12h14"/><circle cx="5" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
           <span data-i18n="lines_tab">Distance Lines</span>
         </button>
-        <button type="button" class="settings-tab-btn" data-tab="loc3d">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
-          <span data-i18n="loc3d_tab">{{ t.loc3d_tab or '3D Localization' }}</span>
-        </button>
         <button type="button" class="settings-tab-btn" data-tab="communication">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="tab-icon"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.64 3.37 2 2 0 0 1 3.62 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6a16 16 0 0 0 6.06 6.06l1.06-.97a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
           <span data-i18n="communication_tab">Communication</span>
@@ -497,17 +493,6 @@
             <div id="zm-link-lines" class="config-link-list"></div>
             <button id="zm-link-add" class="glass-btn config-link-add" type="button"
                     data-i18n="link_add">{{ t.link_add or '+ Add rule' }}</button>
-          </section>
-        </div>
-
-        <!-- Tab 5: 3D localization — triangulation subscriptions (Mode 2).
-             Checkboxes are built by zone_manager.js from the detection model's
-             classes; person is never offered (dead triangulation path). -->
-        <div class="settings-tab-content" id="tab-loc3d">
-          <section class="config-section">
-            <h3 data-i18n="loc3d_section">{{ t.loc3d_section or '3D localization' }}</h3>
-            <span class="zm-hint" data-i18n="loc3d_hint">{{ t.loc3d_hint or 'Checked classes are triangulated to a 3D position (XYZ) when both cameras see them. Applies on the next Backbone STOP/START.' }}</span>
-            <div id="zm-loc3d-classes" class="config-model"></div>
           </section>
         </div>
 
