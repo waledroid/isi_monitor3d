@@ -38,6 +38,21 @@ def _frame(w=1280, h=960) -> Frame:
                  image=np.zeros((h, w, 3), dtype=np.uint8))
 
 
+def _cfg_two_zones(max_fps=2.0, margin=0.08) -> EtagereConfig:
+    """Two zones on the same camera — 9 cells each, 18 crops total."""
+    cells = [EtagereCell(r=r, c=c, rect=(c * 100, r * 100, c * 100 + 80, r * 100 + 80))
+             for r in (1, 2, 3) for c in (1, 2, 3)]
+    return EtagereConfig(
+        model=EtagereModel(onnx_path="x.onnx", crop_margin=margin, max_fps=max_fps),
+        zones=(
+            EtagereZone(id="et_1", name="A", camera="cam_a", frame_wh=(640, 480),
+                       cells=tuple(cells)),
+            EtagereZone(id="et_2", name="B", camera="cam_a", frame_wh=(640, 480),
+                       cells=tuple(cells)),
+        ),
+    )
+
+
 def test_run_batches_nine_crops_and_maps_scale_and_margin() -> None:
     fake = _FakeDet({})
     ed = EtagereDetector(_cfg(), fake, producer_id="p", fingerprint="fp")
@@ -82,3 +97,49 @@ def test_zone_without_fresh_frame_skipped() -> None:
     ed = EtagereDetector(_cfg(), fake)
     assert ed.run({"cam_b": _frame()}, now=0.0) == []
     assert fake.pairs == []
+
+
+def test_tick_isolates_per_message_send_failures() -> None:
+    """One zone's failed UDP send must not drop another zone's message this
+    tick — mirrors the DetectionSetMessage emit loop's per-camera isolation
+    (a failure in the outer ``EtagereDetector.run()`` call is a different,
+    already-guarded failure mode; this covers a failure in the per-message
+    ``send_json_datagram`` call inside the loop over its results)."""
+    from isistream import core as isicore
+    from isistream.core import IsistreamCore
+
+    fake = _FakeDet({})
+    ed = EtagereDetector(_cfg_two_zones(), fake)
+
+    calls = {"n": 0}
+
+    def flaky_send(sock, addr, data):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("boom")
+
+    orig_send = isicore.send_json_datagram
+    isicore.send_json_datagram = flaky_send
+    try:
+        core = IsistreamCore(
+            camera_ids=["cam_a"],
+            frame_provider=lambda cam_id: (np.zeros((960, 1280, 3), dtype=np.uint8), 1.0),
+            object_detector=None, pose_detector=None,
+            ingest_addr=("127.0.0.1", 0), etagere_detector=ed)
+        core.tick()
+    finally:
+        isicore.send_json_datagram = orig_send
+
+    # ONE detect() call batching both zones' crops (9 cells x 2 zones).
+    assert len(fake.pairs) == 1 and len(fake.pairs[0].frames) == 18
+    # Both zone messages were attempted, plus cam_a's DetectionSetMessage
+    # heartbeat (object_detector=None ⇒ explicit-empty) — 3 sends total.
+    assert calls["n"] == 3
+    # ...but only the surviving étagère send is counted — the failed first
+    # send did not abort the loop and drop the second zone's message.
+    assert sum(core.etagere_sent.values()) == 1
+    # The DetectionSetMessage stage's own send (3rd call) succeeded and is
+    # unaffected by the étagère stage's earlier failure.
+    assert core.sets_sent["cam_a"] == 1
+    # A per-message send failure is not the detector-stage failure mode.
+    assert core.last_error is None

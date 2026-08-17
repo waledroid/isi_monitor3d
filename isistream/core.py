@@ -340,13 +340,18 @@ class IsistreamCore:
         if self._etagere is not None:
             t = now()
             try:
-                for msg in self._etagere.run(fresh, now()):
+                etagere_msgs = self._etagere.run(fresh, now())
+            except Exception:
+                etagere_msgs = ()
+                self.last_error = "etagere"
+                logger.warning("isistream: étagère stage failed", exc_info=True)
+            for msg in etagere_msgs:
+                try:
                     send_json_datagram(self._sock, self._addr,
                                        msg.model_dump_json().encode("utf-8"))
                     self.etagere_sent[msg.zone_id] = self.etagere_sent.get(msg.zone_id, 0) + 1
-            except Exception:
-                self.last_error = "etagere"
-                logger.warning("isistream: étagère stage failed", exc_info=True)
+                except OSError:
+                    logger.warning("isistream: étagère emit failed", exc_info=True)
             self.stage_ms["etagere"] = (now() - t) * 1000.0
 
         t = now()
