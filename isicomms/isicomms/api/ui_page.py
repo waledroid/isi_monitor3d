@@ -146,6 +146,12 @@ td{padding:4px 8px 4px 0;border-bottom:1px solid rgba(255,255,255,.04);
   overflow:auto;max-height:260px}
 .testfoot{color:var(--muted2);font-size:12px;margin-top:14px}
 .testfoot code{font-family:var(--mono)}
+#etag>.etag{margin-bottom:10px}
+.etgrid{border-collapse:collapse;margin-top:5px}
+.etgrid td{width:22px;height:22px;border:1px solid var(--border)}
+.et-filled{background:#2ea043}
+.et-empty{background:#444}
+.et-unknown{background:repeating-linear-gradient(45deg,#333,#333 4px,#555 4px,#555 8px)}
 </style>
 </head>
 <body>
@@ -168,6 +174,8 @@ td{padding:4px 8px 4px 0;border-bottom:1px solid rgba(255,255,255,.04);
     <div id="nodes"></div></div>
   <div class="card"><h2>Zones <span class="n" id="n-zones"></span></h2>
     <div id="zones"></div></div>
+  <div class="card"><h2>Étagères <span class="n" id="n-etag"></span></h2>
+    <div id="etag"></div></div>
   <div class="card"><h2>Tracks <span class="n" id="n-tracks"></span></h2>
     <div id="tracks"></div></div>
   <div class="card"><h2>Consumers <span class="n" id="n-cons"></span></h2>
@@ -249,6 +257,16 @@ function renderZones(d){
       :'<span class="mut">–</span>',
     z.state_ts?'<span class="mut">'+ago(z.state_ts)+"</span>":'<span class="mut">–</span>',
   ]),["zone","node","count","objects","palette","state"]);
+}
+function renderEtagere(d){
+  if(bad(d))return;
+  $("n-etag").textContent=d.count;
+  const cell=s=>'<td class="et-'+s+'" title="'+s+'"></td>';
+  $("etag").innerHTML=(d.etageres||[]).map(e=>
+    '<div class="etag"><b>'+esc(e.name||e.zone_id)+'</b> <span class="mut">'+esc(e.node_id)+
+    ' · '+esc(e.camera_id)+' · '+ago(e.ts)+'</span><table class="etgrid">'+
+    e.matrix.map(row=>'<tr>'+row.map(cell).join('')+'</tr>').join('')+'</table></div>'
+  ).join('')||'<div class="empty">— none —</div>';
 }
 function renderTracks(d){
   if(bad(d))return;
@@ -510,8 +528,8 @@ $("runall").addEventListener("click",runAll);
 
 // ---- live poll --------------------------------------------------------
 async function tick(){
-  const [h,nodes,zones,tracks,cons,tail]=await Promise.all([
-    j("/healthz"),j("/nodes"),j("/zones"),j("/tracks"),
+  const [h,nodes,zones,etag,tracks,cons,tail]=await Promise.all([
+    j("/healthz"),j("/nodes"),j("/zones"),j("/etagere"),j("/tracks"),
     j("/clients"),j("/recent?limit=80")]);
   const alive=!bad(nodes)&&(nodes.nodes||[]).some(n=>n.status==="alive");
   $("health").className="dot"+(!bad(h)&&h.ok?(alive?" ok":" warn"):"");
@@ -520,7 +538,7 @@ async function tick(){
   zonePlanes=(bad(zones)?[]:(zones.zones||[]))
     .filter(z=>+z.z_base_m>0&&Array.isArray(z.polygon)&&z.polygon.length>=3)
     .map(z=>({poly:z.polygon,z:+z.z_base_m}));
-  renderNodes(nodes);renderZones(zones);renderTracks(tracks);
+  renderNodes(nodes);renderZones(zones);renderEtagere(etag);renderTracks(tracks);
   renderConsumers(cons);renderStats(tail);
   if(!bad(tail)&&tail.topics)renderTree(tail.topics);
 }

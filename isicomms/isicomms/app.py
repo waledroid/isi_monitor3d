@@ -12,6 +12,7 @@ from .api import (
     routes_clients,
     routes_config,
     routes_diagnostics,
+    routes_etagere,
     routes_health,
     routes_nodes,
     routes_passings,
@@ -109,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         routes_diagnostics.router,
         routes_passings.router,
         routes_zones.router,
+        routes_etagere.router,
         routes_config.router,
         routes_clients.router,     # /clients — REST consumers + MQTT count
         routes_ui.router,          # /recent — the raw tail + ingest counters
