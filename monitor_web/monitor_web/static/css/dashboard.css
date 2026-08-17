@@ -1340,6 +1340,45 @@ button.btn-stop:hover {
 }
 .zm-iconbtn svg { display: block; }
 
+/* Small inline text button (Settings ▸ Zones ▸ Étagères "Adjust cells") —
+   a lighter-weight sibling of .config-link-add for a row-scoped action. */
+.zm-small-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+/* ── Étagère (bin-rack) rows + matrix widget ─────────────────────────────── */
+
+.etag-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.etag-dims {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+/* COMMUNICATION-card matrix (comms_nodes.js) — one <td> per cell, coloured
+   by live state from GET /api/etagere/state. */
+.etag-grid {
+  border-collapse: collapse;
+  margin-top: 6px;
+}
+.etag-grid td {
+  width: 20px;
+  height: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+.et-filled { background: #2ea043; }
+.et-empty { background: #666; }
+.et-unknown {
+  background: repeating-linear-gradient(45deg, #444, #444 4px, #777 4px, #777 8px);
+}
+
 /* .zm-polygon — used in floor zones (retained for compatibility) */
 .zm-polygon {
   font-family: "JetBrains Mono", "Menlo", monospace;

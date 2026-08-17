@@ -217,6 +217,52 @@ function _cardHtml(name, color, st) {
     </div>`;
 }
 
+// ---- étagère (bin-rack) matrix cards -----------------------------------
+
+// Same kind colour as the "etagere" floor-zone kind (live_overlay.js /
+// floor_map_3d.js's _KIND_COLORS above).
+const _ETAG_COLOR = _KIND_COLORS.etagere;
+
+function _etagCellClass(v) {
+  if (v === "filled") return "et-filled";
+  if (v === "empty") return "et-empty";
+  return "et-unknown";
+}
+
+// One card per étagère zone from etagere.js's live poller
+// (window.__etagere.getStates(), fed by GET /api/etagere/state) — a
+// rows×cols <table> of coloured cells, same dashed/dimmed-until-live
+// convention as the palette zone cards above.
+function _etagCardHtml(zoneId, st) {
+  const rows = st.rows || (Array.isArray(st.matrix) ? st.matrix.length : 0);
+  const cols = st.cols || (Array.isArray(st.matrix?.[0]) ? st.matrix[0].length : 0);
+  const matrix = st.matrix || [];
+  let table = '<table class="etag-grid">';
+  for (let r = 0; r < rows; r++) {
+    table += "<tr>";
+    for (let c = 0; c < cols; c++) {
+      const v = matrix[r] ? matrix[r][c] : null;
+      table += `<td class="${_etagCellClass(v)}" title="r${r + 1}c${c + 1}: ${_esc(v || "unknown")}"></td>`;
+    }
+    table += "</tr>";
+  }
+  table += "</table>";
+  return `
+    <div class="comms-zone-card is-live" style="border-color:${_ETAG_COLOR};background:${_ETAG_COLOR}2e;">
+      <div class="comms-zone-head">
+        <span class="status-dot status-dot-green" aria-hidden="true"></span>
+        <span class="comms-zone-name">${_esc(st.name || zoneId)}</span>
+      </div>
+      ${table}
+    </div>`;
+}
+
+function _etagereCards() {
+  const getStates = window.__etagere && window.__etagere.getStates;
+  const states = typeof getStates === "function" ? getStates() : {};
+  return Object.entries(states || {}).map(([id, st]) => _etagCardHtml(id, st));
+}
+
 function _renderZoneCards(patches, patchStates, zonesList, localState, gwData) {
   const divs = _panelDivs();
   if (!divs) return;
@@ -269,7 +315,7 @@ function _renderZoneCards(patches, patchStates, zonesList, localState, gwData) {
     .map((z) =>
       _cardHtml(z.name, _zoneColor(z), _stateForZone(z.name, gwByName, localState)));
 
-  const cards = patchCards.concat(floorCards);
+  const cards = patchCards.concat(floorCards, _etagereCards());
   if (!cards.length) {
     // No zones of either kind — say so instead of a silently empty panel.
     host.innerHTML =
