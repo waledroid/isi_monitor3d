@@ -129,6 +129,14 @@ class MetadataSink(ABC):
         """
         return None
 
+    def publish_etagere_state(self, msg: object) -> None:
+        """Publish an ``EtagereStateMessage`` — one shelf rack's cell matrix.
+
+        Non-abstract default no-op (same rationale as ``publish_zone_state``);
+        MQTT sinks override to publish retained on ``{prefix}/etagere/{zone_id}``.
+        """
+        return None
+
     def publish_observations(self, msg: object) -> None:
         """Publish an ``ObservationsMessage`` — per-camera raw detections.
 

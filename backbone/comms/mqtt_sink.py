@@ -18,6 +18,7 @@ Topic scheme (defaults)::
     {prefix}/track2d/{cls}              — Track2DMessage JSON
     {prefix}/track3d/{cls}              — Track3DMessage JSON
     {prefix}/zone/{zone}                — ZoneStateMessage JSON (retained, QoS 1)
+    {prefix}/etagere/{zone_id}          — EtagereStateMessage JSON (retained, QoS 1)
     {prefix}/zone/{zone}/passings       — PassingEventMessage JSON
     {prefix}/zone/{zone}/images/{id}    — ImageRefMessage JSON
     {prefix}/diagnostics/heartbeat      — DiagnosticsMessage JSON
@@ -56,6 +57,7 @@ from backbone.core.types import Track2D, Track3D
 from .schemas import (
     ConfigMessage,
     DiagnosticsMessage,
+    EtagereStateMessage,
     ImageRefMessage,
     PassingEventMessage,
     ProximityMessage,
@@ -98,6 +100,7 @@ class MqttSink(MetadataSink):
         image_topic: str = "{prefix}/zone/{zone}/images/{track_id}",
         zone_state_topic: str = "{prefix}/zone/{zone}",
         zone_state_qos: int = 1,
+        etagere_topic: str = "{prefix}/etagere/{zone_id}",
         proximity_topic: str = "{prefix}/proximity",
         diag_topic: str = "{prefix}/diagnostics/heartbeat",
         config_topic: str = "{prefix}/config",
@@ -153,6 +156,11 @@ class MqttSink(MetadataSink):
             zone_state_qos: QoS for zone-state publishes (default 1 — low-rate,
                            WMS-consequential; duplicates are harmless because
                            the payload is absolute state, not a delta).
+            etagere_topic: Topic template for the retained ``EtagereStateMessage``
+                           (one topic per étagère); supports ``{prefix}`` and
+                           ``{zone_id}`` tokens (zone_id sanitised). Always
+                           published with ``retain=True`` at ``zone_state_qos``.
+                           Default: ``"{prefix}/etagere/{zone_id}"``.
             diag_topic:    Topic for ``DiagnosticsMessage`` heartbeats; supports
                            ``{prefix}``.  Published at the instance qos/retain.
                            Default: ``"{prefix}/diagnostics/heartbeat"``.
@@ -196,6 +204,7 @@ class MqttSink(MetadataSink):
         self._image_topic = image_topic
         self._zone_state_topic = zone_state_topic
         self._zone_state_qos = zone_state_qos
+        self._etagere_topic = etagere_topic
         self._proximity_topic = proximity_topic
         self._diag_topic = diag_topic
         self._config_topic = config_topic
@@ -343,6 +352,22 @@ class MqttSink(MetadataSink):
         except Exception:
             logger.warning(
                 "MqttSink.publish_zone_state failed on topic %r", topic, exc_info=True
+            )
+
+    def publish_etagere_state(self, msg: object) -> None:
+        """Publish an ``EtagereStateMessage`` retained on ``{prefix}/etagere/{zone_id}``
+        at ``zone_state_qos`` — the same late-joiner hygiene as zone_state."""
+        assert isinstance(msg, EtagereStateMessage)
+        topic = self._etagere_topic.format(
+            prefix=self._prefix,
+            zone_id=_sanitize_cls(msg.zone_id),
+        )
+        payload = msg.model_dump_json().encode("utf-8")
+        try:
+            self._client.publish(topic, payload, qos=self._zone_state_qos, retain=True)
+        except Exception:
+            logger.warning(
+                "MqttSink.publish_etagere_state failed on topic %r", topic, exc_info=True
             )
 
     def publish_proximity(self, msg: object) -> None:

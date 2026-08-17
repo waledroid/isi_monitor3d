@@ -877,3 +877,41 @@ def test_topic_zone_id_falls_back_to_name_when_id_absent() -> None:
         )
         assert mock_instance.publish.call_args[0][0] == "isiMonitor3D/v1/node/zone/B3D"
         sink.close()
+
+
+def _make_etagere_state():
+    from backbone.comms.schemas import EtagereCellState, EtagereStateMessage
+    cells = tuple(EtagereCellState(r=r, c=c, state="filled", confidence=0.9)
+                  for r in (1, 2, 3) for c in (1, 2, 3))
+    return EtagereStateMessage(ts=1.0, camera_id="cam_a", zone_id="et_1",
+                               name="A", cells=cells, stabilized=True)
+
+
+def test_publish_etagere_state_topic_retained() -> None:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="isiMonitor3D/v1/node_a",
+                        retain=False)
+        sink.publish_etagere_state(_make_etagere_state())
+        topic, payload = mock_instance.publish.call_args[0][:2]
+        kwargs = mock_instance.publish.call_args[1]
+        assert topic == "isiMonitor3D/v1/node_a/etagere/et_1"
+        assert kwargs.get("retain") is True and kwargs.get("qos") == 1
+        msg = json.loads(payload.decode("utf-8"))
+        assert msg["type"] == "etagere_state" and len(msg["cells"]) == 9
+        sink.close()
+
+
+def test_publish_etagere_state_custom_topic() -> None:
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="p",
+                        etagere_topic="{prefix}/shelf/{zone_id}", zone_state_qos=2)
+        sink.publish_etagere_state(_make_etagere_state())
+        assert mock_instance.publish.call_args[0][0] == "p/shelf/et_1"
+        assert mock_instance.publish.call_args[1]["qos"] == 2
+        sink.close()
