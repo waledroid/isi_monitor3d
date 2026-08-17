@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 from backbone.comms.schemas import (
     DiagnosticsMessage,
+    EtagereStateMessage,
     FragmentBuffer,
     FragmentMessage,
     ObservationsMessage,
@@ -70,6 +71,9 @@ class BusState:
     # Latest per-camera raw detections (ObservationsMessage) — the single-
     # perception feed the zone panels / cards / cam-view boxes render from.
     observations_by_camera: dict[str, ObservationsMessage] = field(default_factory=dict)
+    # Latest per-zone étagère (bin-rack) cell-occupancy state — the étagère
+    # panel renders this; keyed by the wire's stable zone_id.
+    etagere_by_zone: dict[str, EtagereStateMessage] = field(default_factory=dict)
     received: int = 0
     dropped_malformed: int = 0
     dropped_version: int = 0
@@ -163,6 +167,7 @@ class BusSubscriber:
             self._state.last_track3d_by_id.clear()
             self._state.zone_state_by_zone.clear()
             self._state.observations_by_camera.clear()
+            self._state.etagere_by_zone.clear()
             self._state.fps_by_camera = {}
             self._state.pipeline_fps = None
             self._state.diagnostics_ts = 0.0
@@ -177,6 +182,7 @@ class BusSubscriber:
                 last_track3d_by_id=dict(self._state.last_track3d_by_id),
                 zone_state_by_zone=dict(self._state.zone_state_by_zone),
                 observations_by_camera=dict(self._state.observations_by_camera),
+                etagere_by_zone=dict(self._state.etagere_by_zone),
                 received=self._state.received,
                 dropped_malformed=self._state.dropped_malformed,
                 dropped_version=self._state.dropped_version,
@@ -276,6 +282,8 @@ class BusSubscriber:
                 ] = msg
             elif isinstance(msg, ObservationsMessage):
                 self._state.observations_by_camera[msg.camera_id] = msg
+            elif isinstance(msg, EtagereStateMessage):
+                self._state.etagere_by_zone[msg.zone_id] = msg
             elif isinstance(msg, DiagnosticsMessage):
                 self._state.fps_by_camera = dict(msg.fps_by_camera)
                 self._state.pipeline_fps = float(msg.fps)
