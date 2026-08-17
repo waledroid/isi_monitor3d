@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 import numpy as np
+import yaml
 
 from backbone.core.types import Detection, Frame, FramePair
 from backbone.shared.etagere import EtagereCell, EtagereConfig, EtagereModel, EtagereZone
+from isistream.core import _build_etagere_stage
 from isistream.etagere import EtagereDetector
 
 
@@ -99,6 +103,58 @@ def test_zone_without_fresh_frame_skipped() -> None:
     assert fake.pairs == []
 
 
+def test_run_isolates_a_zone_whose_crop_building_raises() -> None:
+    """One zone's crop-building blowing up (degenerate rects, off-frame
+    scaling, any exception) must not abort run() and drop every other zone's
+    message (I3) — the other zone still batches its crops and gets a
+    message."""
+    fake = _FakeDet({})
+    ed = EtagereDetector(_cfg_two_zones(), fake)
+    orig_crop = ed._crop
+
+    def flaky_crop(frame, zone, rect):
+        if zone.id == "et_1":
+            raise ValueError("boom")
+        return orig_crop(frame, zone, rect)
+
+    ed._crop = flaky_crop
+    msgs = ed.run({"cam_a": _frame()}, now=0.0)
+    assert [m.zone_id for m in msgs] == ["et_2"]
+    # Only zone et_2's 9 crops made it into the (single) detect() batch.
+    assert len(fake.pairs) == 1 and len(fake.pairs[0].frames) == 9
+    assert all(k.startswith("et_2:") for k in fake.pairs[0].frames)
+
+
+def test_run_isolates_a_zone_whose_message_building_raises() -> None:
+    """A failure while assembling a zone's EtagereStateMessage (the second
+    per-zone try/except) must likewise skip only that zone."""
+    fake = _FakeDet({})
+    ed = EtagereDetector(_cfg_two_zones(), fake)
+
+    import isistream.etagere as et_mod
+
+    # Patch EtagereStateMessage so the FIRST call (zone et_1, since due_zones
+    # preserves cfg.zones order) raises, the second succeeds.
+    calls = {"n": 0}
+    orig_msg_cls = et_mod.EtagereStateMessage
+
+    def flaky_message(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return orig_msg_cls(*a, **kw)
+
+    et_mod.EtagereStateMessage = flaky_message
+    try:
+        msgs = ed.run({"cam_a": _frame()}, now=0.0)
+    finally:
+        et_mod.EtagereStateMessage = orig_msg_cls
+    assert [m.zone_id for m in msgs] == ["et_2"]
+    # Both zones' crops WERE batched into the one detect() call — the
+    # message-build failure happens after detection, not before.
+    assert len(fake.pairs) == 1 and len(fake.pairs[0].frames) == 18
+
+
 def test_tick_isolates_per_message_send_failures() -> None:
     """One zone's failed UDP send must not drop another zone's message this
     tick — mirrors the DetectionSetMessage emit loop's per-camera isolation
@@ -143,3 +199,67 @@ def test_tick_isolates_per_message_send_failures() -> None:
     assert core.sets_sent["cam_a"] == 1
     # A per-message send failure is not the detector-stage failure mode.
     assert core.last_error is None
+
+
+# ---- C1(c): _build_etagere_stage distinguishes "disabled" (silent) from
+# "configured but broken" (ERROR + traceback) ----
+
+def test_build_etagere_stage_none_config_path_is_silent(caplog) -> None:
+    with caplog.at_level(logging.WARNING):
+        assert _build_etagere_stage({}, None, producer_id="p") is None
+    assert caplog.records == []
+
+
+def test_build_etagere_stage_missing_file_is_silent(tmp_path, caplog) -> None:
+    """No etagere.yaml beside backbone.yaml — the documented "missing file ⇒
+    feature off, no error" contract. Most deployments never touch étagère."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text("cameras: {}\n")
+    with caplog.at_level(logging.WARNING):
+        result = _build_etagere_stage({}, str(backbone_yaml), producer_id="p")
+    assert result is None
+    assert caplog.records == []
+
+
+def test_build_etagere_stage_invalid_yaml_logs_error(tmp_path, caplog) -> None:
+    """A PRESENT but broken config (fails pydantic validation) is an operator
+    mistake, not a disabled feature — must be loud."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text("cameras: {}\n")
+    (tmp_path / "etagere.yaml").write_text(yaml.safe_dump({
+        "model": {"onnx_path": "x.onnx"},
+        "zones": [{"id": "z", "camera": "cam_a", "frame_wh": [10, 10],
+                   "cells": [{"r": 1, "c": 1, "rect": [0, 0, 5, 5]}]}],  # only 1 of 9 cells
+    }))
+    with caplog.at_level(logging.ERROR):
+        result = _build_etagere_stage({}, str(backbone_yaml), producer_id="p")
+    assert result is None
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.ERROR
+    assert "étagère config" in caplog.records[0].message
+
+
+def test_build_etagere_stage_detector_build_failure_logs_error(tmp_path, caplog, monkeypatch) -> None:
+    """A valid, enabled config whose detector fails to build (unreachable
+    onnx_path, bad providers, ...) must not silently leave the feature off —
+    ERROR + traceback, never a bare WARNING (and never onnxruntime/CUDA
+    actually touched here — the detector builder itself is stubbed out)."""
+    backbone_yaml = tmp_path / "backbone.yaml"
+    backbone_yaml.write_text("cameras: {}\n")
+    (tmp_path / "etagere.yaml").write_text(yaml.safe_dump({
+        "model": {"onnx_path": "/nonexistent/model.onnx"},
+        "zones": [{"id": "et_1", "camera": "cam_a", "frame_wh": [1920, 1080],
+                   "cells": [{"r": r, "c": c, "rect": [c * 10, r * 10, c * 10 + 8, r * 10 + 8]}
+                             for r in (1, 2, 3) for c in (1, 2, 3)]}],
+    }))
+
+    def _raise(*a, **kw):
+        raise RuntimeError("onnx session build failed")
+
+    monkeypatch.setattr("isistream.etagere.build_etagere_detector", _raise)
+    with caplog.at_level(logging.ERROR):
+        result = _build_etagere_stage({}, str(backbone_yaml), producer_id="p")
+    assert result is None
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.ERROR
+    assert "detector failed to build" in caplog.records[0].message

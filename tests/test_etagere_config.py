@@ -9,6 +9,8 @@ from pydantic import ValidationError
 from backbone.shared.etagere import (
     EtagereCell,
     EtagereConfig,
+    EtagereModel,
+    EtagereZone,
     cells_from_corners,
     load_etagere_config,
     resolve_config_path,
@@ -81,3 +83,67 @@ def test_resolve_config_path(tmp_path: Path) -> None:
     by = tmp_path / "config" / "backbone.yaml"
     assert resolve_config_path({}, by) == by.parent / "etagere.yaml"
     assert resolve_config_path({"etagere": {"config_path": "/x/e.yaml"}}, by) == Path("/x/e.yaml")
+
+
+# ---- C1: relative onnx_path resolves against the repo root ----
+
+def test_relative_onnx_path_resolves_against_repo_root(tmp_path: Path) -> None:
+    # <root>/config/etagere.yaml + <root>/models/x.onnx (mirrors backbone.yaml's
+    # own layout convention: config/ sits directly under the repo root).
+    root = tmp_path
+    (root / "config").mkdir()
+    (root / "models").mkdir()
+    (root / "models" / "x.onnx").write_bytes(b"")
+    yaml_path = root / "config" / "etagere.yaml"
+    yaml_path.write_text(yaml.safe_dump({
+        "model": {"onnx_path": "models/x.onnx"},
+        "zones": [{"id": "et_1", "camera": "cam_a", "frame_wh": [1920, 1080],
+                   "cells": _cells9()}],
+    }))
+    cfg = load_etagere_config(yaml_path)
+    assert cfg.model.onnx_path == str((root / "models" / "x.onnx").resolve())
+    assert Path(cfg.model.onnx_path).is_absolute()
+
+
+def test_absolute_onnx_path_untouched(tmp_path: Path) -> None:
+    abs_path = "/some/absolute/models/x.onnx"
+    cfg = load_etagere_config(_cfg(tmp_path, model={"onnx_path": abs_path}))
+    assert cfg.model.onnx_path == abs_path
+
+
+def test_committed_config_onnx_path_is_absolute() -> None:
+    # Do NOT assert the file exists — CI machines won't have the trained
+    # artifact; only that a relative path in the repo's shipped config can
+    # never again silently no-op a live isistream (C1).
+    repo_root = Path(__file__).resolve().parent.parent
+    cfg = load_etagere_config(repo_root / "config" / "etagere.yaml")
+    assert cfg.model is not None
+    assert Path(cfg.model.onnx_path).is_absolute()
+
+
+# ---- I2: a 0x0 frame_wh must be rejected, not ZeroDivisionError at inference ----
+
+def test_zero_frame_wh_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        EtagereZone(id="z", camera="cam_a", frame_wh=(0, 0), cells=tuple(_cells9_models()))
+    with pytest.raises(ValidationError):
+        EtagereZone(id="z", camera="cam_a", frame_wh=(1920, 0), cells=tuple(_cells9_models()))
+    with pytest.raises(ValidationError):
+        load_etagere_config(_cfg(tmp_path, zones=[{
+            "id": "z", "camera": "cam_a", "frame_wh": [0, 0], "cells": _cells9()}]))
+
+
+def _cells9_models():
+    return [EtagereCell(**c) for c in _cells9()]
+
+
+# ---- I4: class_names must cover the labels decide() matches on ----
+
+def test_class_names_must_include_decide_labels(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError):
+        EtagereModel(onnx_path="x.onnx", class_names=["palette", "carton"])
+    with pytest.raises(ValidationError):
+        load_etagere_config(_cfg(tmp_path, model={
+            "onnx_path": "x.onnx", "class_names": ["empty_box"]}))
+    # both present, in any order/superset, is fine
+    EtagereModel(onnx_path="x.onnx", class_names=["filled_box", "empty_box", "extra"])

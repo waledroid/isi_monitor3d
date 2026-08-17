@@ -25,6 +25,12 @@ function naturalSize(img, camId) {
   const pt = window.__passthrough;
   return (pt && pt.frameSize && pt.frameSize(camId)) || [0, 0];
 }
+// Exposed for modules that must not import this one (e.g. etagere.js, whose
+// browser-only absolute-path imports make it un-importable from live_overlay)
+// but still need the SAME "naturalWidth, or the passthrough player's decoded
+// frame size" fallback — see __displayToSource just below for the sibling
+// export convention.
+window.__naturalSize = naturalSize;
 
 // `box` is the overlay canvas's OWN layout box {w, h} — never the <img>'s.
 // The img's layout transiently collapses during view switches / expand

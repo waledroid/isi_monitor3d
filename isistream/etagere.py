@@ -55,6 +55,7 @@ class EtagereDetector:
         self._fingerprint = fingerprint
         self._seq: dict[str, int] = {z.id: 0 for z in cfg.zones}
         self._last_run: dict[str, float] = {}
+        self._warned: set[str] = set()   # zone ids already logged this run — no log spam
 
     def due_zones(self, frames: dict[str, Frame], now: float) -> list[EtagereZone]:
         """Zones whose camera has a fresh frame AND whose max_fps interval elapsed."""
@@ -85,20 +86,34 @@ class EtagereDetector:
             return None
         return frame.image[cy0:cy1, cx0:cx1]
 
+    def _warn_once(self, zone_id: str, what: str) -> None:
+        if zone_id in self._warned:
+            return
+        self._warned.add(zone_id)
+        logger.warning("isistream: étagère zone %r %s — skipping this zone", zone_id, what,
+                       exc_info=True)
+
     def run(self, frames: dict[str, Frame], now: float) -> list[EtagereStateMessage]:
         due = self.due_zones(frames, now)
         if not due:
             return []
         crops: dict[str, Frame] = {}
+        good: list[EtagereZone] = []   # zones whose crop-building didn't raise
         for z in due:
+            self._last_run[z.id] = now   # rate-gate applies even if this zone fails below
             frame = frames[z.camera]
-            for cell in z.cells:
-                img = self._crop(frame, z, cell.rect)
-                if img is None:
-                    continue
-                key = f"{z.id}{_SEP}{cell.r}{_SEP}{cell.c}"
-                crops[key] = Frame(camera_id=key, capture_ts=frame.capture_ts,
-                                   frame_idx=frame.frame_idx, image=img)
+            try:
+                for cell in z.cells:
+                    img = self._crop(frame, z, cell.rect)
+                    if img is None:
+                        continue
+                    key = f"{z.id}{_SEP}{cell.r}{_SEP}{cell.c}"
+                    crops[key] = Frame(camera_id=key, capture_ts=frame.capture_ts,
+                                       frame_idx=frame.frame_idx, image=img)
+            except Exception:
+                self._warn_once(z.id, "failed while building crops")
+                continue
+            good.append(z)
         results: dict[str, list[Detection]] = {}
         if crops:
             first = frames[due[0].camera]
@@ -107,19 +122,24 @@ class EtagereDetector:
             results = self._det.detect(pair)
         thr = self._cfg.model.confidence_threshold
         out: list[EtagereStateMessage] = []
-        for z in due:
-            self._last_run[z.id] = now
-            frame = frames[z.camera]
-            cells = []
-            for cell in z.cells:
-                key = f"{z.id}{_SEP}{cell.r}{_SEP}{cell.c}"
-                state, conf = decide(list(results.get(key, [])), thr)
-                cells.append(EtagereCellState(r=cell.r, c=cell.c, state=state, confidence=conf))
-            out.append(EtagereStateMessage(
-                ts=frame.capture_ts, camera_id=z.camera, zone_id=z.id, name=z.name,
-                rows=z.rows, cols=z.cols, cells=tuple(cells), seq=self._seq[z.id],
-                producer_id=self._producer_id, config_fingerprint=self._fingerprint,
-            ))
+        for z in good:
+            try:
+                frame = frames[z.camera]
+                cells = []
+                for cell in z.cells:
+                    key = f"{z.id}{_SEP}{cell.r}{_SEP}{cell.c}"
+                    state, conf = decide(list(results.get(key, [])), thr)
+                    cells.append(EtagereCellState(r=cell.r, c=cell.c, state=state,
+                                                  confidence=conf))
+                msg = EtagereStateMessage(
+                    ts=frame.capture_ts, camera_id=z.camera, zone_id=z.id, name=z.name,
+                    rows=z.rows, cols=z.cols, cells=tuple(cells), seq=self._seq[z.id],
+                    producer_id=self._producer_id, config_fingerprint=self._fingerprint,
+                )
+            except Exception:
+                self._warn_once(z.id, "failed while building its message")
+                continue
+            out.append(msg)
             self._seq[z.id] += 1
         return out
 

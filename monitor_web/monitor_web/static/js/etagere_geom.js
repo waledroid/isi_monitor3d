@@ -22,6 +22,16 @@ export function applyDrag(rect, handle, dx, dy) {
 // zone's cells. Corner handles (within `tol` px) win over a plain move;
 // later cells (drawn on top) win ties. Returns {cellIdx: -1, handle: null}
 // on a miss.
+// [w, h] if both are positive integers, else null — a 0x0 (or missing)
+// frame size must never reach a saved zone: EtagereDetector._crop() divides
+// the actual frame's width/height BY frame_wh, so a 0 there is a
+// ZeroDivisionError that kills every cell on every tick. Callers should
+// alert the operator and abort the draw when this returns null.
+export function frameWhOrNull(w, h) {
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 1 || h < 1) return null;
+  return [Math.round(w), Math.round(h)];
+}
+
 export function hitTest(zone, x, y, tol = HANDLE_PX) {
   const cells = zone.cells || [];
   for (let i = cells.length - 1; i >= 0; i--) {          // top-most first

@@ -8,7 +8,19 @@
 // two pure helpers live in the DOM-free sibling module etagere_geom.js
 // instead; etagere.js re-exports them for the browser. Import from there.
 import assert from "node:assert/strict";
-import { applyDrag, hitTest } from "../monitor_web/static/js/etagere_geom.js";
+import { applyDrag, frameWhOrNull, hitTest } from "../monitor_web/static/js/etagere_geom.js";
+
+// frameWhOrNull: the I2 guard against a 0x0 frame_wh (would ZeroDivisionError
+// EtagereDetector._crop on every tick). Valid sizes round-trip (rounded);
+// zero, negative, missing or non-finite dimensions all reject.
+assert.deepEqual(frameWhOrNull(1920, 1080), [1920, 1080]);
+assert.deepEqual(frameWhOrNull(1920.4, 1080.6), [1920, 1081]);
+assert.equal(frameWhOrNull(0, 1080), null);
+assert.equal(frameWhOrNull(1920, 0), null);
+assert.equal(frameWhOrNull(0, 0), null);
+assert.equal(frameWhOrNull(-1, 100), null);
+assert.equal(frameWhOrNull(undefined, undefined), null);
+assert.equal(frameWhOrNull(NaN, 100), null);
 
 // move: whole rect translates
 assert.deepEqual(applyDrag([10, 10, 50, 50], "move", 5, -5), [15, 5, 55, 45]);

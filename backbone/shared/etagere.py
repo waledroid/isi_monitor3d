@@ -47,6 +47,11 @@ class EtagereZone(BaseModel):
 
     @model_validator(mode="after")
     def _grid(self) -> "EtagereZone":  # noqa: UP037
+        if self.frame_wh[0] < 1 or self.frame_wh[1] < 1:
+            raise ValueError(
+                f"zone {self.id!r}: frame_wh must be >= 1x1 (got {self.frame_wh}) — "
+                "a 0x0 frame_wh means the camera's frame size wasn't known when the "
+                "zone was drawn and would ZeroDivisionError every crop at inference time")
         if self.corners and len(self.corners) != 4:
             raise ValueError("corners must be empty or exactly 4 points (TL,TR,BR,BL)")
         expect = [(r, c) for r in range(1, self.rows + 1) for c in range(1, self.cols + 1)]
@@ -68,6 +73,19 @@ class EtagereModel(BaseModel):
     max_fps: float = Field(2.0, gt=0.0)
     providers: str | None = None
 
+    @model_validator(mode="after")
+    def _decide_labels_present(self) -> "EtagereModel":  # noqa: UP037
+        # isistream.etagere.decide() hardcodes these two label names — a
+        # differently-labelled model would silently classify every cell
+        # "unknown" forever. Fail loudly at config load instead.
+        missing = {"empty_box", "filled_box"} - set(self.class_names)
+        if missing:
+            raise ValueError(
+                f"class_names must include {sorted(missing)} — decide() matches "
+                "on these exact labels; a model without them would leave every "
+                "cell 'unknown'")
+        return self
+
 
 class EtagereConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -79,6 +97,27 @@ class EtagereConfig(BaseModel):
         return self.model is not None and len(self.zones) > 0
 
 
+def _resolve_model_path(cfg: EtagereConfig, yaml_path: str | Path) -> EtagereConfig:
+    """Resolve a relative ``model.onnx_path`` against the REPO ROOT — the
+    parent of the yaml's own directory (``config/etagere.yaml`` → repo root is
+    ``yaml_path.parent.parent``, matching ``backbone.yaml``'s convention).
+
+    isistream is spawned by the dashboard (cwd inherited, usually
+    ``monitor_web``) or by systemd (cwd ``/``) — a relative ``onnx_path``
+    resolves against neither, so ORT fails to find the file and the failure
+    is swallowed upstream, leaving every cell silently ``unknown``. Absolute
+    paths pass through untouched.
+    """
+    if cfg.model is None:
+        return cfg
+    onnx = Path(cfg.model.onnx_path)
+    if onnx.is_absolute():
+        return cfg
+    repo_root = Path(yaml_path).resolve().parent.parent
+    resolved = str((repo_root / onnx).resolve())
+    return cfg.model_copy(update={"model": cfg.model.model_copy(update={"onnx_path": resolved})})
+
+
 def load_etagere_config(path: str | Path | None) -> EtagereConfig:
     """Load ``etagere.yaml``; a missing/None path is the disabled config."""
     if path is None:
@@ -87,7 +126,8 @@ def load_etagere_config(path: str | Path | None) -> EtagereConfig:
     if not p.exists():
         return EtagereConfig()
     data = yaml.safe_load(p.read_text()) or {}
-    return EtagereConfig.model_validate(data)
+    cfg = EtagereConfig.model_validate(data)
+    return _resolve_model_path(cfg, p)
 
 
 def resolve_config_path(backbone_cfg: dict, backbone_yaml_path: str | Path) -> Path:

@@ -377,6 +377,39 @@ class IsistreamCore:
         self.stage_ms["emit"] = (now() - t) * 1000.0
 
 
+def _build_etagere_stage(cfg: dict, config_path: str | None, *, producer_id: str):
+    """Build the étagère detector, or ``None`` if the feature is off.
+
+    Two distinct failure modes here, logged at two distinct levels: no
+    config file / an empty (no-model-or-zones) one is a normal DISABLED
+    state (silent) — most deployments never touch étagère at all. A
+    PRESENT, non-trivial config that fails to load or whose detector fails
+    to build is an operator mistake (bad YAML, unreachable onnx_path,
+    missing labels) and must be loud (ERROR + traceback), or the feature
+    silently no-ops forever with every cell stuck "unknown"."""
+    if config_path is None:
+        return None
+    from backbone.shared.etagere import load_etagere_config, resolve_config_path
+    et_path = resolve_config_path(cfg, config_path)
+    et_cfg = None
+    try:
+        et_cfg = load_etagere_config(et_path)
+    except Exception:
+        logger.error("isistream: étagère config at %s is invalid — feature off",
+                     et_path, exc_info=True)
+        return None
+    if et_cfg is None or not et_cfg.enabled:
+        return None
+    try:
+        from isistream.etagere import build_etagere_detector
+        return build_etagere_detector(et_cfg, producer_id=producer_id,
+                                      fingerprint=config_fingerprint(cfg))
+    except Exception:
+        logger.error("isistream: étagère detector failed to build — feature off",
+                     exc_info=True)
+        return None
+
+
 def build_isistream_core(
     cfg: dict,
     frame_provider: FrameProvider,
@@ -428,17 +461,7 @@ def build_isistream_core(
             min_cutoff=float(det.get("pose_smooth_min_cutoff", 1.0)),
             beta=float(det.get("pose_smooth_beta", 0.01)))
 
-    etagere = None
-    if config_path is not None:
-        try:
-            from backbone.shared.etagere import load_etagere_config, resolve_config_path
-            from isistream.etagere import build_etagere_detector
-            et_cfg = load_etagere_config(resolve_config_path(cfg, config_path))
-            etagere = build_etagere_detector(et_cfg, producer_id=producer_id,
-                                             fingerprint=config_fingerprint(cfg))
-        except Exception:
-            logger.warning("isistream: étagère config/model failed — feature off",
-                           exc_info=True)
+    etagere = _build_etagere_stage(cfg, config_path, producer_id=producer_id)
 
     return IsistreamCore(
         camera_ids=list(cfg["cameras"]),

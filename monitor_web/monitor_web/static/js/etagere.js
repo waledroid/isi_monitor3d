@@ -12,7 +12,7 @@
 // it drives the shared #draw-toolbar's Done/Cancel buttons directly.
 import { startDraw } from "/static/js/draw_mode.js";
 import { openPicker } from "/static/js/draw_target_picker.js";
-import { applyDrag, hitTest } from "/static/js/etagere_geom.js";
+import { applyDrag, frameWhOrNull, hitTest } from "/static/js/etagere_geom.js";
 
 export { applyDrag, hitTest };
 
@@ -105,6 +105,23 @@ export function startEtagereDraw(camId) {
         const name = window.prompt("Étagère name", nextDefaultName());
         if (!name) { reopenSettingsOnZonesTab(); return; }
         const img = el(`${cam}-img`);
+        // Read the frame size the SAME way live_overlay.js's overlays do
+        // (naturalWidth/Height, falling back to the passthrough player's
+        // decoded size when the <img> has no src) — etagere.js must not
+        // import live_overlay.js (browser-absolute-path import cycle risk /
+        // Node test unimportability), so read its helper off `window` at
+        // call time instead. A still-0x0 result means the live view hasn't
+        // produced a frame yet; saving that would ZeroDivisionError every
+        // crop at inference time (I2), so abort the draw instead.
+        const natural = window.__naturalSize
+          ? window.__naturalSize(img, cam)
+          : [img?.naturalWidth || 0, img?.naturalHeight || 0];
+        const frameWh = frameWhOrNull(natural[0], natural[1]);
+        if (!frameWh) {
+          window.alert("camera frame size unknown — wait for the live view, then draw again");
+          reopenSettingsOnZonesTab();
+          return;
+        }
         // Autosplit is load-bearing: a failed/short response must NOT reach
         // cfg.zones. Pushing a zone with too few/no cells would (a) make the
         // very next save() 422 server-side and (b) leave cfg permanently
@@ -139,7 +156,7 @@ export function startEtagereDraw(camId) {
           id: "et_" + Date.now().toString(36),
           name,
           camera: cam,
-          frame_wh: [img?.naturalWidth || 0, img?.naturalHeight || 0],
+          frame_wh: frameWh,
           corners: points,
           rows: DEFAULT_ROWS,
           cols: DEFAULT_COLS,
