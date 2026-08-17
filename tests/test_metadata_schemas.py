@@ -13,6 +13,8 @@ from backbone.comms.schemas import (
     CalibrationFactCheck,
     ConfigMessage,
     DiagnosticsMessage,
+    EtagereCellState,
+    EtagereStateMessage,
     LatencyStats,
     MessageType,
     PassingEventMessage,
@@ -749,3 +751,41 @@ def test_legacy_v6_payload_without_zone_id_still_parses() -> None:
         "objects": [], "count": 0,
     }
     assert parse_envelope(legacy_zone_state).zone_id == ""
+
+
+# ---------------------------------------------------------------------------
+# EtagereStateMessage (v6 additive: etagere_state — occupancy matrix)
+# ---------------------------------------------------------------------------
+
+
+def test_etagere_state_round_trip() -> None:
+    cells = tuple(
+        EtagereCellState(r=r, c=c, state="filled" if (r + c) % 2 else "empty",
+                         confidence=0.9)
+        for r in (1, 2, 3) for c in (1, 2, 3)
+    )
+    msg = EtagereStateMessage(ts=1.5, camera_id="cam_a", zone_id="et_1",
+                              name="Étagère A", cells=cells, seq=4,
+                              producer_id="isistream")
+    data = json.loads(msg.model_dump_json())
+    assert data["type"] == "etagere_state"
+    assert data["rows"] == 3 and data["cols"] == 3
+    assert len(data["cells"]) == 9
+    back = parse_envelope(data)
+    assert isinstance(back, EtagereStateMessage)
+    assert back == msg
+    assert MessageType.ETAGERE_STATE.value == "etagere_state"
+
+
+def test_etagere_state_rejects_bad_state_and_extra() -> None:
+    with pytest.raises(ValidationError):
+        EtagereCellState(r=1, c=1, state="half")
+    with pytest.raises(ValidationError):
+        EtagereStateMessage(ts=0.0, camera_id="cam_a", zone_id="z", cells=(),
+                            bogus=1)
+
+
+def test_etagere_state_defaults() -> None:
+    msg = EtagereStateMessage(ts=0.0, camera_id="cam_a", zone_id="z", cells=())
+    assert msg.stabilized is False and msg.seq == 0 and msg.name == ""
+    assert msg.schema_version == SCHEMA_VERSION

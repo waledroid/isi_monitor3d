@@ -80,7 +80,10 @@ older Backbone still parses everywhere.
 Within v6 (no bump — additive + default-valued): ``z_base_m`` (height in
 meters of the plane a zone's polygon lives on — mirrors ``Zone.z_base_m``)
 added to ``ZoneSpec``. Defaults to 0.0 (the floor) so a legacy retained
-``ConfigMessage`` advert still parses."""
+``ConfigMessage`` advert still parses.
+
+v6 additive (2026-08-17): etagere_state — EtagereStateMessage; defaulted fields,
+no bump."""
 
 _ACCEPTED_VERSIONS = frozenset({3, 4, 5, 6})
 
@@ -105,6 +108,7 @@ class MessageType(str, Enum):
     CONFIG = "config"
     FRAGMENT = "fragment"
     DETECTION_SET = "detection_set"
+    ETAGERE_STATE = "etagere_state"
 
 
 class Track2DMessage(BaseModel):
@@ -470,6 +474,45 @@ class DetectionSetMessage(BaseModel):
     dets: tuple[WireDetection, ...]
 
 
+class EtagereCellState(BaseModel):
+    """One shelf cell (row r, col c, 1-based) of an étagère grid."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    r: int = Field(..., ge=1)
+    c: int = Field(..., ge=1)
+    state: Literal["filled", "empty", "unknown"]
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+
+
+class EtagereStateMessage(BaseModel):
+    """Occupancy matrix of one étagère (bin rack) as seen by one camera.
+
+    Produced RAW by the perception producer (isistream) per tick on the
+    Backbone's points ingest port (``stabilized=False``), and re-published
+    STABILISED by the Backbone (``stabilized=True``) on the metadata sinks —
+    on MQTT retained at ``{prefix}/etagere/{zone_id}``. ``cells`` holds
+    exactly ``rows*cols`` entries in reading order (r1c1, r1c2, …).
+    ``unknown`` = no confident detection for that cell.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=SCHEMA_VERSION, ge=1)
+    type: Literal[MessageType.ETAGERE_STATE] = MessageType.ETAGERE_STATE
+    ts: float = Field(..., description="capture_ts of the source frame")
+    camera_id: str
+    zone_id: str
+    name: str = ""
+    rows: int = Field(3, ge=1)
+    cols: int = Field(3, ge=1)
+    cells: tuple[EtagereCellState, ...]
+    seq: int = Field(0, ge=0)
+    producer_id: str = ""
+    config_fingerprint: str | None = None
+    stabilized: bool = False
+
+
 class FragmentMessage(BaseModel):
     """One UDP-transport fragment of a larger JSON message.
 
@@ -648,6 +691,7 @@ def parse_envelope(
     | ConfigMessage
     | FragmentMessage
     | DetectionSetMessage
+    | EtagereStateMessage
 ):
     """Discriminate by ``type`` field and parse with the right model.
 
@@ -688,4 +732,6 @@ def parse_envelope(
         return FragmentMessage.model_validate(data)
     if msg_type == MessageType.DETECTION_SET.value:
         return DetectionSetMessage.model_validate(data)
+    if msg_type == MessageType.ETAGERE_STATE.value:
+        return EtagereStateMessage.model_validate(data)
     raise ValueError(f"unknown message type: {msg_type!r}")
