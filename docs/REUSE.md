@@ -28,6 +28,12 @@ The single source of truth stays in `backbone/`.
   contract between the metric engine and its consumers. isistream publishes
   `DetectionSetMessage`s to the engine; the engine publishes tracks/zone
   state/observations on the bus.
+
+  | Message | Topic (MQTT) | Retained | Payload summary |
+  |---|---|---|---|
+  | `zone_state` | `{prefix}/zone/<zone>` | yes | a floor zone's current occupants/count |
+  | `etagere_state` | `{prefix}/etagere/{zone_id}` | yes | one bin-rack zone's stabilised 3x3 (or rows*cols) cell grid — `cells[].state` in `filled`/`empty`/`unknown` + `confidence`, `stabilized: true` |
+
 - **isicomms (MQTT in, REST out)** — a live probe UI ships at
   ``http://<host>:8080/ui`` (nodes / zones / tracks / passings + a raw MQTT
   tail; Swagger at ``/docs``) — any producer publishing the versioned
