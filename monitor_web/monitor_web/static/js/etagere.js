@@ -105,17 +105,35 @@ export function startEtagereDraw(camId) {
         const name = window.prompt("Étagère name", nextDefaultName());
         if (!name) { reopenSettingsOnZonesTab(); return; }
         const img = el(`${cam}-img`);
-        let cells = [];
+        // Autosplit is load-bearing: a failed/short response must NOT reach
+        // cfg.zones. Pushing a zone with too few/no cells would (a) make the
+        // very next save() 422 server-side and (b) leave cfg permanently
+        // holding that invalid zone client-side (every later save() 422s
+        // too, until a full page reload) — so bail out before touching cfg.
+        const expectedCells = DEFAULT_ROWS * DEFAULT_COLS;
+        let cells;
         try {
           const r = await fetch("/api/etagere/autosplit", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ corners: points, rows: DEFAULT_ROWS, cols: DEFAULT_COLS }),
           });
-          if (r.ok) cells = (await r.json()).cells || [];
-          else window.alert("Auto-split failed: " + (await r.text()));
+          if (!r.ok) {
+            window.alert("Auto-split failed: " + (await r.text()));
+            reopenSettingsOnZonesTab();
+            return;
+          }
+          cells = (await r.json()).cells;
         } catch (e) {
           window.alert("Auto-split failed: " + e);
+          reopenSettingsOnZonesTab();
+          return;
+        }
+        if (!Array.isArray(cells) || cells.length !== expectedCells) {
+          window.alert(`Auto-split failed: expected ${expectedCells} cells, got ` +
+            `${Array.isArray(cells) ? cells.length : 0}.`);
+          reopenSettingsOnZonesTab();
+          return;
         }
         const zone = {
           id: "et_" + Date.now().toString(36),
@@ -135,36 +153,52 @@ export function startEtagereDraw(camId) {
     }), 200);   // let the cam view mount before attaching the draw layer
   };
   if (camId === "cam_a" || camId === "cam_b") { beginOn(camId); return; }
-  openPicker({ onPick: beginOn, onCancel: reopenSettingsOnZonesTab });
+  // Étagère drawing is pure image-space (mode:"raw") — it must work on an
+  // UNCALIBRATED rig, so the calibration gate other pickers apply is skipped.
+  openPicker({ onPick: beginOn, onCancel: reopenSettingsOnZonesTab, ignoreCalibration: true });
 }
 
 // ---- drag-adjust an existing étagère's cell corners on the cam overlay ----
 // Not a click-collect flow (startDraw's contract), so it wires the SAME
 // shared #draw-toolbar DOM directly instead of going through startDraw.
+let adjustTimer = null;   // pending "attach after the cam view mounts" timer, if any
+
 export function startAdjust(zoneId) {
   const zone = (cfg.zones || []).find((z) => z.id === zoneId);
   if (!zone) return;
-  if (editing) stopEditing?.();   // only one edit session at a time — tear down the old one first
+  // Re-entry guard, BOTH cases: (a) a session already attached — tear it
+  // down; (b) a PREVIOUS call's 200 ms mount-wait hasn't fired yet — cancel
+  // it synchronously so it can never attach after this one (that race would
+  // otherwise leak the first session's listeners + stomp its toolbar wiring).
+  if (adjustTimer) { clearTimeout(adjustTimer); adjustTimer = null; }
+  if (editing) stopEditing?.();
 
   hideSettings();
   selectCam(zone.camera);
   editing = { zoneId };
 
-  setTimeout(() => {
+  adjustTimer = setTimeout(() => {
+    adjustTimer = null;
     const canvas = el(`${zone.camera}-overlay`);
     if (!canvas) { editing = null; reopenSettingsOnZonesTab(); return; }
     canvas.style.pointerEvents = "auto";
 
     let drag = null;
-    const toSrc = (ev) => window.__displayToSource(canvas, zone.camera, ev.offsetX, ev.offsetY, zone.frame_wh);
+    // A missing live_overlay.js (load-order hiccup, or this module used
+    // outside the dashboard) must never throw inside a mouse handler.
+    const toSrc = (ev) => window.__displayToSource
+      ? window.__displayToSource(canvas, zone.camera, ev.offsetX, ev.offsetY, zone.frame_wh)
+      : null;
     const down = (ev) => {
       const p = toSrc(ev);
+      if (!p) return;
       const h = hitTest(zone, p[0], p[1]);
       if (h.cellIdx >= 0) drag = { ...h, last: p };
     };
     const move = (ev) => {
       if (!drag) return;
       const p = toSrc(ev);
+      if (!p) return;
       zone.cells[drag.cellIdx].rect = applyDrag(
         zone.cells[drag.cellIdx].rect, drag.handle, p[0] - drag.last[0], p[1] - drag.last[1]);
       drag.last = p;

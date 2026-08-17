@@ -67,10 +67,18 @@ function teardown() {
  * the operator picks a CAM or cancels. Only one picker can be open at a time;
  * a second `openPicker` call closes the first.
  *
+ * `ignoreCalibration` (default false — unchanged behaviour for floor zones /
+ * calibration-dependent callers): when true, skips the /api/project/cameras
+ * calibration check entirely — every CAM button is enabled and the "no
+ * calibrated camera" block message never shows. For calibration-FREE authoring
+ * flows (e.g. étagère zones, drawn in raw pixel space with no projection),
+ * gating on calibration would block a feature that has no calibration
+ * dependency at all.
+ *
  * Translation lookup (`t(key, fallback)`) is taken from the global string
  * bundle (`window.__monitor_web.strings`) — same convention as zone_manager.
  */
-export async function openPicker({ onPick, onCancel } = {}) {
+export async function openPicker({ onPick, onCancel, ignoreCalibration = false } = {}) {
   if (_session) teardown();   // close any prior session first
 
   const root = document.getElementById(DOM_IDS.root);
@@ -81,23 +89,25 @@ export async function openPicker({ onPick, onCancel } = {}) {
   const strings = (window.__monitor_web && window.__monitor_web.strings) || {};
   const t = (key, fb) => strings[key] || fb;
 
-  const cams = await fetchCalibratedCameraIds();
+  const cams = ignoreCalibration ? null : await fetchCalibratedCameraIds();
 
   // Enable / disable each CAM button based on calibration. `data-target`
-  // (cam_a / cam_b) on each button is the source of truth.
+  // (cam_a / cam_b) on each button is the source of truth. ignoreCalibration
+  // enables every button unconditionally — no fetch, no per-cam check.
   for (const btn of root.querySelectorAll(BTN_SELECTOR)) {
     const target = btn.dataset.target;
-    const calibrated = cams.includes(target);
-    btn.disabled = !calibrated;
-    btn.title = calibrated ? "" : t("draw_target_cam_uncalibrated",
+    const enabled = ignoreCalibration || cams.includes(target);
+    btn.disabled = !enabled;
+    btn.title = enabled ? "" : t("draw_target_cam_uncalibrated",
       "Camera not calibrated yet — run `python -m calibration.calibrate` first.");
-    btn.onclick = calibrated
+    btn.onclick = enabled
       ? () => { teardown(); onPick?.(target); }
       : null;
   }
 
-  // No calibrated camera at all → block with the inline message.
-  if (msg) msg.classList.toggle("hidden", cams.length > 0);
+  // No calibrated camera at all → block with the inline message. Never
+  // blocks when ignoreCalibration is set.
+  if (msg) msg.classList.toggle("hidden", ignoreCalibration || cams.length > 0);
 
   // Cancel via button + ESC + outside-click.
   const cancelAndTeardown = () => { teardown(); onCancel?.(); };
