@@ -202,11 +202,20 @@ class Orchestrator:
 
         # Points-mode ingest listener (built here, started in run()).
         self._points_ingest = None
+        self._etagere_tracker = None
         if self._ingest_mode == "points":
             from backbone.ingestion.points_in import DetectionIngest
             from backbone.shared.config_fingerprint import config_fingerprint
+            from backbone.shared.etagere_state import EtagereStateTracker
 
             points_cfg = dict(ing_cfg.get("points", {}))
+            etagere_cfg = dict(cfg.get("etagere", {}) or {})
+            self._etagere_tracker = EtagereStateTracker(
+                window=int(etagere_cfg.get("stabilize_window", 15)),
+                flip_ratio=float(etagere_cfg.get("stabilize_flip_ratio", 0.7)),
+                unknown_after_s=float(etagere_cfg.get("unknown_after_s", 5.0)),
+                heartbeat_s=float(etagere_cfg.get("heartbeat_s", 5.0)),
+            )
 
             def _deliver(det_set) -> None:
                 self._source_status[det_set.camera_id] = "alive"
@@ -216,11 +225,17 @@ class Orchestrator:
                 if pair is not None:
                     self._bus.publish(pair)
 
+            def _deliver_etagere(msg) -> None:
+                out = self._etagere_tracker.update(msg)
+                if out is not None and self._publisher is not None:
+                    self._publisher.publish_etagere_state(out)
+
             self._points_ingest = DetectionIngest(
                 camera_ids,
                 host=str(points_cfg.get("listen_host", "127.0.0.1")),
                 port=int(points_cfg.get("listen_port", 9010)),
                 on_set=_deliver,
+                on_etagere=_deliver_etagere,
                 expected_fingerprint=config_fingerprint(cfg),
             )
 

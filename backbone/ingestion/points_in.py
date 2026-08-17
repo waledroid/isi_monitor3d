@@ -35,6 +35,7 @@ import numpy as np
 
 from backbone.comms.schemas import (
     DetectionSetMessage,
+    EtagereStateMessage,
     FragmentBuffer,
     FragmentMessage,
     parse_envelope,
@@ -122,12 +123,14 @@ class DetectionIngest:
         host: str = "127.0.0.1",
         port: int = 9010,
         on_set,
+        on_etagere=None,
         expected_fingerprint: str | None = None,
     ) -> None:
         self._camera_ids = set(camera_ids)
         self._host = host
         self._port = int(port)
         self._on_set = on_set
+        self._on_etagere = on_etagere
         self._expected_fingerprint = expected_fingerprint
         self._warned_fingerprint: str | None = None
 
@@ -141,11 +144,16 @@ class DetectionIngest:
         self.seq_gaps_by_camera: dict[str, int] = {cid: 0 for cid in camera_ids}
         self.last_seen_by_camera: dict[str, float] = {}
         self.dropped_malformed = 0
+        self.etagere_by_zone: dict[str, int] = {}
         self._last_seq: dict[str, int] = {}
 
     @property
     def address(self) -> tuple[str, int]:
         return (self._host, self._port)
+
+    @property
+    def port(self) -> int:
+        return self._port
 
     def start(self) -> None:
         if self._thread is not None:
@@ -203,6 +211,22 @@ class DetectionIngest:
                 with self._lock:
                     self.dropped_malformed += 1
                 return
+        if isinstance(msg, EtagereStateMessage):
+            if msg.camera_id not in self._camera_ids:
+                logger.debug(
+                    "points ingest: etagere for unknown camera %r ignored", msg.camera_id)
+                return
+            if self._on_etagere is None:
+                with self._lock:
+                    self.dropped_malformed += 1
+                return
+            with self._lock:
+                self.etagere_by_zone[msg.zone_id] = self.etagere_by_zone.get(msg.zone_id, 0) + 1
+            try:
+                self._on_etagere(msg)
+            except Exception:
+                logger.warning("points ingest: etagere delivery failed", exc_info=True)
+            return
         if not isinstance(msg, DetectionSetMessage):
             with self._lock:
                 self.dropped_malformed += 1
