@@ -51,6 +51,27 @@ def test_autosplit_rejects_bad_corner_count(tmp_path):
         assert r.status_code == 422
 
 
+def test_autosplit_rejects_malformed_point(tmp_path):
+    # A point with the wrong element count (3 instead of 2) must 422 via
+    # pydantic validation, not reach cells_from_corners and bare-500 on a
+    # ValueError ("too many values to unpack").
+    app, _ = _app(tmp_path)
+    with TestClient(app) as c:
+        r = c.post("/api/etagere/autosplit",
+                   json={"corners": [[0, 0], [90, 0], [90, 90], [0, 90, 5]],
+                         "rows": 3, "cols": 3})
+        assert r.status_code == 422
+
+
+def test_autosplit_rejects_zero_rows(tmp_path):
+    app, _ = _app(tmp_path)
+    with TestClient(app) as c:
+        r = c.post("/api/etagere/autosplit",
+                   json={"corners": [[0, 0], [90, 0], [90, 90], [0, 90]],
+                         "rows": 0, "cols": 3})
+        assert r.status_code == 422
+
+
 def test_post_writes_yaml_and_roundtrips(tmp_path):
     app, root = _app(tmp_path)
     body = {"model": {"onnx_path": "m.onnx"},

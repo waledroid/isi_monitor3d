@@ -21,7 +21,7 @@ from backbone.shared.etagere import (
     resolve_config_path,
 )
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from .routes_config import _write_yaml_atomic
 
@@ -46,15 +46,16 @@ def get_etagere(request: Request) -> dict[str, Any]:
 
 
 class AutosplitBody(BaseModel):
-    corners: list[list[float]]
-    rows: int = 3
-    cols: int = 3
+    # Each point must be exactly (u, v) — pydantic 422s a malformed point
+    # (wrong tuple length) instead of it reaching cells_from_corners and
+    # raising a bare ValueError -> 500. Exactly 4 points (TL,TR,BR,BL).
+    corners: list[tuple[float, float]] = Field(..., min_length=4, max_length=4)
+    rows: int = Field(3, ge=1)
+    cols: int = Field(3, ge=1)
 
 
 @router.post("/api/etagere/autosplit")
 def autosplit(body: AutosplitBody) -> dict[str, Any]:
-    if len(body.corners) != 4:
-        raise HTTPException(status_code=422, detail="corners must have exactly 4 points")
     cells = cells_from_corners(body.corners, body.rows, body.cols)
     out = []
     for cell in cells:
