@@ -1,0 +1,52 @@
+# isidet/configs/train_etagere.yaml
+# 2-class étagère bin DETECTION — empty_box / filled_box (YOLO26-nano, 320 px).
+# Data = per-cell crops from grid_click.py (drag-box) -> etagere_dataset.py
+# (bg + augment + split) : data/etagere/dataset_split/{images,labels}/{train,val}
+#
+# Run FROM trainer/isidet/ :
+#   conda activate isi-train
+#   python scripts/run_train.py --config configs/train_etagere.yaml
+
+project_name: "etagere_bins"
+nc: 2
+class_names: ["empty_box", "filled_box"]
+hooks:
+  - "IndustrialLogger"
+
+model_type: "yolo"
+model_size: "n"
+weights: "yolo26n.pt"          # nano DETECT (no -seg): boxes only
+dataset_path: "data/etagere/dataset_split"
+optimizer_config: "configs/optimizers/yolo_optim.yaml"
+batch_size: 32
+imgsz: 320                     # crops are letterboxed 320x320 -> train == infer
+mixed_precision: true
+epochs: 100
+workers: 2
+
+export_model: true
+export_formats: ["onnx", "openvino"]
+export_nms: false              # raw head (1, 4+nc, N); Backbone runs its own NMS
+export_opset: 17
+
+# --- online augmentation, tuned for single-bin 320 crops (offline set already
+#     has flip / brightness-contrast / blur variants) ---
+hsv_h: 0.015
+hsv_s: 0.5
+hsv_v: 0.4
+degrees: 5.0                   # fixed camera: tiny rotations only
+translate: 0.1
+scale: 0.3                     # bins fill the crop; no wide zoom range needed
+shear: 0.0
+perspective: 0.0
+fliplr: 0.5
+flipud: 0.0
+mosaic: 0.5                    # 4-tile mosaic at 320 shrinks bins a lot -> halved
+close_mosaic: 10
+mixup: 0.0
+copy_paste: 0.0
+erasing: 0.2
+camera_aug: true               # MotionBlur + JPEG + noise + downscale
+
+inference:
+  conf_threshold: 0.3
