@@ -179,7 +179,8 @@ def main() -> None:
             return latest.get(camera_id)
 
     from isistream import build_isistream_core
-    core = build_isistream_core(cfg, frame_provider, producer_id="isistream")
+    core = build_isistream_core(cfg, frame_provider, producer_id="isistream",
+                                config_path=args.config)
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())

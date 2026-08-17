@@ -199,11 +199,13 @@ class IsistreamCore:
         producer_id: str = "isistream",
         motion_gate=None,
         pose_smoother=None,
+        etagere_detector=None,
     ) -> None:
         self._camera_ids = list(camera_ids)
         self._frames = frame_provider
         self._detector = object_detector
         self._pose = pose_detector
+        self._etagere = etagere_detector
         self._addr = (str(ingest_addr[0]), int(ingest_addr[1]))
         self._fingerprint = fingerprint
         self._interval = 1.0 / max(0.5, float(perception_fps))
@@ -223,6 +225,7 @@ class IsistreamCore:
 
         # Operator-visible stats (read by the host's status endpoint).
         self.sets_sent: dict[str, int] = dict.fromkeys(self._camera_ids, 0)
+        self.etagere_sent: dict[str, int] = {}
         self.last_tick_ms: float = 0.0
         self.stage_ms: dict[str, float] = {}   # per-stage timing of the last tick
         self.last_error: str | None = None
@@ -334,6 +337,18 @@ class IsistreamCore:
                 logger.debug("isistream: pose failed this tick", exc_info=True)
         self.stage_ms["pose"] = (now() - t) * 1000.0
 
+        if self._etagere is not None:
+            t = now()
+            try:
+                for msg in self._etagere.run(fresh, now()):
+                    send_json_datagram(self._sock, self._addr,
+                                       msg.model_dump_json().encode("utf-8"))
+                    self.etagere_sent[msg.zone_id] = self.etagere_sent.get(msg.zone_id, 0) + 1
+            except Exception:
+                self.last_error = "etagere"
+                logger.warning("isistream: étagère stage failed", exc_info=True)
+            self.stage_ms["etagere"] = (now() - t) * 1000.0
+
         t = now()
         for cam_id, frame in fresh.items():
             h, w = frame.image.shape[:2]
@@ -362,11 +377,16 @@ def build_isistream_core(
     frame_provider: FrameProvider,
     *,
     producer_id: str = "isistream",
+    config_path: str | None = None,
 ) -> IsistreamCore:
     """Build a core from a loaded ``backbone.yaml`` dict — the shared recipe
     for the in-process (monitor_web) and standalone (``python -m isistream``)
     hosts. Reads the SAME config the metric engine reads, so the fingerprint
-    matches by construction."""
+    matches by construction.
+
+    ``config_path`` is ``backbone.yaml``'s own path — needed only to resolve
+    the sibling ``etagere.yaml`` (``etagere.config_path`` or ``<dir>/etagere.yaml``).
+    ``None`` (or a broken étagère config/model) leaves the feature off."""
     rig = CameraRig.from_file(cfg["calibration_path"])
     zones_path = cfg.get("zones_path")
     zones = ZoneRegistry.load(zones_path) if zones_path else ZoneRegistry.empty()
@@ -403,6 +423,18 @@ def build_isistream_core(
             min_cutoff=float(det.get("pose_smooth_min_cutoff", 1.0)),
             beta=float(det.get("pose_smooth_beta", 0.01)))
 
+    etagere = None
+    if config_path is not None:
+        try:
+            from backbone.shared.etagere import load_etagere_config, resolve_config_path
+            from isistream.etagere import build_etagere_detector
+            et_cfg = load_etagere_config(resolve_config_path(cfg, config_path))
+            etagere = build_etagere_detector(et_cfg, producer_id=producer_id,
+                                             fingerprint=config_fingerprint(cfg))
+        except Exception:
+            logger.warning("isistream: étagère config/model failed — feature off",
+                           exc_info=True)
+
     return IsistreamCore(
         camera_ids=list(cfg["cameras"]),
         frame_provider=frame_provider,
@@ -416,4 +448,5 @@ def build_isistream_core(
         producer_id=producer_id,
         motion_gate=gate,
         pose_smoother=smoother,
+        etagere_detector=etagere,
     )
