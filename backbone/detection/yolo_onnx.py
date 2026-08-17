@@ -33,7 +33,7 @@ from backbone.core.types import Detection, FramePair
 from backbone.shared.ort_session import build_onnx_session
 
 from .onnx_meta import read_embedded_class_names
-from .postprocess import decode_yolo11_detect
+from .postprocess import decode_detect_end2end, decode_yolo11_detect, is_end2end_detect_output
 from .preprocess import batch_letterbox, pad_batch
 
 logger = logging.getLogger(__name__)
@@ -217,6 +217,25 @@ class YoloOnnxDetector(Detector):
                 f"YoloOnnxDetector: unexpected output shape {raw.shape} "
                 f"(expected (N={batch_tensor.shape[0]}, 4+nc, A))"
             )
+        # YOLO26 / YOLOv10 END-TO-END (NMS-free) head: (N, num_det, 6) rows of
+        # [x1,y1,x2,y2,score,cls]. Must be tested BEFORE the channel heuristic:
+        # at nc == 2 the row width (6) equals 4+nc, and the raw-transposed branch
+        # would silently misread score/cls as class scores (conf 1.0 garbage).
+        if is_end2end_detect_output(raw):
+            result: dict[str, list[Detection]] = {}
+            for i, cam_id in enumerate(cam_ids):
+                cam_frame = pair.frames[cam_id]
+                result[cam_id] = decode_detect_end2end(
+                    raw[i],
+                    camera_id=cam_id,
+                    capture_ts=cam_frame.capture_ts,
+                    letterbox_meta=lb_results[i],
+                    class_names=self._class_names,
+                    confidence_threshold=self._confidence_threshold,
+                    keep_classes=self._keep_classes,
+                )
+            return result
+
         expected_channels = 4 + len(self._class_names)
         if raw.shape[1] == expected_channels:
             per_image = raw  # (N, 4+nc, A) — Ultralytics canonical

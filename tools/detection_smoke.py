@@ -112,6 +112,7 @@ def _build_detector(args: argparse.Namespace):
         confidence_threshold=args.conf,
         iou_threshold=args.iou,
         keep_classes=keep,
+        input_size=(args.input_size, args.input_size),
         providers=providers,
     )
     return plugin, det
@@ -157,6 +158,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--keep", default=None, help="comma-separated names to emit (YOLO only)")
     parser.add_argument("--conf", type=float, default=0.25)
+    parser.add_argument("--input-size", type=int, default=640,
+                        help="letterbox size for dynamic-input YOLO exports (e.g. 320 for a "
+                             "320-trained model); fixed-input exports override it (YOLO only)")
     parser.add_argument("--iou", type=float, default=0.45, help="NMS IoU (YOLO only)")
     parser.add_argument(
         "--annotate",

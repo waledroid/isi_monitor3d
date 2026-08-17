@@ -426,3 +426,58 @@ def test_raw_seg_decode_masks_off_returns_none_masks() -> None:
         decode_masks=False,
     )
     assert dets and all(d.mask is None for d in dets)
+
+
+# ---------- END-TO-END (NMS-free) detect head — YOLO26 / YOLOv10 ----------
+
+from backbone.detection.postprocess import (  # noqa: E402
+    decode_detect_end2end,
+    is_end2end_detect_output,
+)
+
+
+def _e2e_rows(num_det: int = 300) -> np.ndarray:
+    """(num_det, 6) padded end-to-end output: rows [x1,y1,x2,y2,score,cls]."""
+    rows = np.zeros((num_det, 6), dtype=np.float32)
+    rows[:, 5] = 0.0  # padding rows: cls 0, score 0
+    return rows
+
+
+def test_e2e_rows_decoded_without_nms_or_argmax() -> None:
+    rows = _e2e_rows()
+    rows[0] = [10, 20, 110, 220, 0.97, 1]
+    rows[1] = [12, 22, 112, 222, 0.30, 0]      # overlapping but a DIFFERENT class:
+    dets = decode_detect_end2end(               # E2E must NOT NMS it away
+        rows, camera_id="cam", capture_ts=0.0,
+        letterbox_meta=_identity_letterbox(), class_names=["empty_box", "filled_box"],
+        confidence_threshold=0.25,
+    )
+    assert [d.cls for d in dets] == ["filled_box", "empty_box"]
+    assert dets[0].bbox_xyxy == pytest.approx((10, 20, 110, 220))
+    assert dets[0].confidence == pytest.approx(0.97)
+    assert dets[0].foot_uv == pytest.approx((60.0, 220.0))
+
+
+def test_e2e_padding_and_out_of_range_class_dropped() -> None:
+    rows = _e2e_rows()
+    rows[0] = [0, 0, 50, 50, 0.9, 7]           # class id outside nc=2 -> dropped
+    dets = decode_detect_end2end(
+        rows, camera_id="cam", capture_ts=0.0,
+        letterbox_meta=_identity_letterbox(), class_names=["empty_box", "filled_box"],
+    )
+    assert dets == []
+
+
+def test_e2e_detector_distinguished_from_raw_head_at_nc2() -> None:
+    """nc == 2 makes 4+nc == 6: the E2E (N, 300, 6) output must NOT be mistaken
+    for a transposed raw head (N, A, 4+nc) — the bug that produced conf-1.0
+    garbage on the etagere model."""
+    e2e = np.zeros((1, 300, 6), dtype=np.float32)
+    e2e[0, 0] = [1, 2, 3, 4, 0.9, 1]
+    assert is_end2end_detect_output(e2e)
+    # raw transposed head at nc=2, 320px (2100 anchors): fractional "class" col
+    raw_t = np.random.default_rng(0).random((1, 2100, 6), dtype=np.float32)
+    assert not is_end2end_detect_output(raw_t)
+    # raw canonical head (N, 4+nc, A) never matches
+    raw = np.zeros((1, 6, 2100), dtype=np.float32)
+    assert not is_end2end_detect_output(raw)

@@ -21,6 +21,79 @@ from backbone.core.types import Detection
 
 from .preprocess import LetterboxResult, invert_letterbox_xyxy
 
+END2END_MAX_DET = 300  # Ultralytics end-to-end exports cap num_det at max_det=300
+
+
+def is_end2end_detect_output(raw: np.ndarray) -> bool:
+    """True when a batched detect output is a YOLO26/YOLOv10 END-TO-END head.
+
+    End-to-end (NMS-free) exports emit ``(N, num_det, 6)`` rows of
+    ``[x1, y1, x2, y2, score, class_id]``. The raw anchor-grid head is
+    ``(N, 4+nc, A)`` (or transposed). The two are ambiguous ONLY when nc == 2
+    (4 + nc == 6), so decide on structure, not just width: an E2E head has at
+    most END2END_MAX_DET rows and an integral class-id column, whereas a raw
+    head at any usable imgsz has hundreds to thousands of anchors and a
+    fractional score column.
+    """
+    if raw.ndim != 3 or raw.shape[2] != 6 or raw.shape[1] > END2END_MAX_DET:
+        return False
+    cls_col = raw[..., 5]
+    return bool(np.all(np.isfinite(cls_col)) and np.allclose(cls_col, np.round(cls_col)))
+
+
+def decode_detect_end2end(
+    rows: np.ndarray,
+    *,
+    camera_id: str,
+    capture_ts: float,
+    letterbox_meta: LetterboxResult,
+    class_names: list[str],
+    confidence_threshold: float = 0.25,
+    keep_classes: list[str] | None = None,
+) -> list[Detection]:
+    """Decode one image's END-TO-END (NMS-free) YOLO detect output.
+
+    ``rows`` is ``(num_det, 6)`` — ``[x1, y1, x2, y2, score, class_id]`` in
+    letterbox-target pixels, already NMS-filtered by the model and padded with
+    low-score rows. No transpose, no argmax, no NMS: gate on score/class, invert
+    the letterbox, build ``Detection`` objects (same shape as
+    :func:`decode_yolo11_detect`).
+    """
+    if rows.ndim != 2 or rows.shape[1] != 6:
+        raise ValueError(f"expected (num_det, 6) end-to-end output, got shape {rows.shape}")
+    nc = len(class_names)
+    xyxy_target = rows[:, :4].astype(np.float32)
+    scores = rows[:, 4].astype(np.float32)
+    cls_idx = rows[:, 5].astype(np.int64)
+    keep = scores >= confidence_threshold
+    keep &= (cls_idx >= 0) & (cls_idx < nc)
+    if keep_classes is not None:
+        keep_set = {class_names.index(c) for c in keep_classes if c in class_names}
+        if not keep_set:
+            return []
+        keep &= np.isin(cls_idx, list(keep_set))
+    if not keep.any():
+        return []
+    xyxy_source = invert_letterbox_xyxy(xyxy_target[keep], letterbox_meta)
+    scores, cls_idx = scores[keep], cls_idx[keep]
+
+    detections: list[Detection] = []
+    for i in range(xyxy_source.shape[0]):
+        x1, y1, x2, y2 = (float(v) for v in xyxy_source[i])
+        detections.append(
+            Detection(
+                camera_id=camera_id,
+                capture_ts=capture_ts,
+                cls=class_names[int(cls_idx[i])],
+                confidence=float(scores[i]),
+                bbox_xyxy=(x1, y1, x2, y2),
+                foot_uv=((x1 + x2) / 2.0, y2),
+                keypoints_uv=None,
+            )
+        )
+    detections.sort(key=lambda d: d.confidence, reverse=True)
+    return detections
+
 
 def decode_yolo11_detect(
     raw_output: np.ndarray,
