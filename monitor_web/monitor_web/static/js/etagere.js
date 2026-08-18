@@ -48,6 +48,7 @@ async function load() {
   cfg.zones = cfg.zones || [];
   renderSettingsList();
   renderModelPicker();
+  window.dispatchEvent(new CustomEvent("etagere:changed"));   // ZONE panels re-slot
 }
 
 async function save() {
@@ -62,6 +63,7 @@ async function save() {
     window.alert("Étagère save failed: " + e);
   }
   renderSettingsList();
+  window.dispatchEvent(new CustomEvent("etagere:changed"));   // ZONE panels re-slot
 }
 
 async function pollStates() {

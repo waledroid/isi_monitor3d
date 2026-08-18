@@ -30,14 +30,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _path(request: Request) -> Path:
-    cfg = request.app.state.settings
+def etagere_config_path(cfg) -> Path:
+    """``config/etagere.yaml`` for these dashboard settings (mirrors
+    ``resolve_config_path``: backbone.yaml's ``etagere.config_path`` or the
+    default beside backbone.yaml)."""
     by = Path(cfg.backbone_config_path)
     try:
         backbone_cfg = yaml.safe_load(by.read_text()) or {}
     except (OSError, yaml.YAMLError):
         backbone_cfg = {}
     return resolve_config_path(backbone_cfg, by)
+
+
+def _path(request: Request) -> Path:
+    return etagere_config_path(request.app.state.settings)
 
 
 @router.get("/api/etagere")

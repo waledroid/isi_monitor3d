@@ -178,6 +178,100 @@ function addZoneFromPanel() {
   chooseKindThenDraw();
 }
 
+// --- Edit an existing camera zone's polygon (drag its vertices) ---------------
+// Same interaction model as the étagère adjuster: Settings hides, the cam
+// shows the zone with vertex handles (live_overlay draws them while
+// isPatchEditing(id)), the shared #draw-toolbar's Done saves / Cancel reverts.
+let editingPatch = null;      // { id, cam, orig } while a vertex-drag session is live
+let stopPatchEdit = null;
+const VERTEX_TOL_PX = 8;
+
+export function isPatchEditing(id) { return !!editingPatch && editingPatch.id === id; }
+
+function selectCamView(cam) {
+  const store = window.Alpine?.store?.("bigPanel");
+  if (store && store.view !== cam) store.select(cam);
+}
+
+export function startPatchEdit(id) {
+  const p = patches.find((q) => q.id === id && !q.twin_of);
+  if (!p || !Array.isArray(p.polygon) || p.polygon.length < 3) return;
+  if (editingPatch) stopPatchEdit?.();
+  document.getElementById("zone-manager")?.classList.add("hidden");   // reveal the cam
+  const cam = p.camera || "cam_a";
+  selectCamView(cam);
+  editingPatch = { id, cam, orig: p.polygon.map((v) => [v[0], v[1]]) };
+
+  setTimeout(() => {
+    const canvas = document.getElementById(`${cam}-overlay`);
+    const bar = document.getElementById("draw-toolbar");
+    const label = document.getElementById("draw-zone-label");
+    const doneBtn = document.getElementById("draw-done");
+    const cancelBtn = document.getElementById("draw-cancel");
+    const countWrap = document.getElementById("draw-count")?.parentElement;
+    const undoBtn = document.getElementById("draw-undo");
+    if (!canvas) { editingPatch = null; return; }
+    canvas.style.pointerEvents = "auto";
+    let drag = null;   // vertex index being dragged
+    const toSrc = (ev) => window.__displayToSource
+      ? window.__displayToSource(canvas, cam, ev.offsetX, ev.offsetY, p.frame_wh)
+      : null;
+    const down = (ev) => {
+      const s = toSrc(ev); if (!s) return;
+      // pick the nearest vertex within tolerance (source px scaled ≈ display px
+      // is close enough for a handle grab)
+      let best = -1, bestD = Infinity;
+      p.polygon.forEach(([vx, vy], i) => {
+        const d = Math.hypot(vx - s[0], vy - s[1]);
+        if (d < bestD) { bestD = d; best = i; }
+      });
+      const scale = window.__displayScale ? window.__displayScale(canvas, cam, p.frame_wh) : 1;
+      if (best >= 0 && bestD * scale <= VERTEX_TOL_PX * 1.5) drag = best;
+    };
+    const move = (ev) => {
+      if (drag == null) return;
+      const s = toSrc(ev); if (!s) return;
+      p.polygon[drag] = [s[0], s[1]];
+      const xs = p.polygon.map((v) => v[0]), ys = p.polygon.map((v) => v[1]);
+      p.rect = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    };
+    const up = () => { drag = null; };
+    canvas.addEventListener("mousedown", down);
+    canvas.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    if (label) label.textContent = `${p.name} — drag the polygon points, then Done`;
+    if (countWrap) countWrap.style.display = "none";
+    if (undoBtn) undoBtn.style.display = "none";
+    bar?.classList.remove("hidden");
+
+    const teardown = () => {
+      canvas.removeEventListener("mousedown", down);
+      canvas.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      canvas.style.pointerEvents = "";
+      if (doneBtn) doneBtn.onclick = null;
+      if (cancelBtn) cancelBtn.onclick = null;
+      bar?.classList.add("hidden");
+      if (countWrap) countWrap.style.display = "";
+      if (undoBtn) undoBtn.style.display = "";
+      editingPatch = null;
+      stopPatchEdit = null;
+    };
+    stopPatchEdit = teardown;
+    const reopen = () => {
+      document.getElementById("zone-manager")?.classList.remove("hidden");
+      document.querySelector('.settings-tab-btn[data-tab="zones"]')?.click();
+    };
+    if (doneBtn) doneBtn.onclick = () => { teardown(); save(); reopen(); };
+    if (cancelBtn) cancelBtn.onclick = () => {
+      p.polygon = editingPatch?.orig || p.polygon;   // captured before teardown
+      const xs = p.polygon.map((v) => v[0]), ys = p.polygon.map((v) => v[1]);
+      p.rect = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+      teardown(); reopen();
+    };
+  }, 200);
+}
+
 // Fill the three ZONE panels with the first three ROIs' cropped streams (over
 // the shared /ws/video socket — no per-panel HTTP connection). An undeclared
 // slot shows a clickable "+ Add zone" placeholder. Vanilla DOM — the panels'
@@ -195,7 +289,18 @@ function renderPanels() {
     body: `zone-${i + 1}-body`, badge: `zone-${i + 1}-badge`,
     fallback: `ZONE ${i + 1}`,
   }));
-  const own = userPatches();   // twins never occupy ZONE panels
+  // ZONE panels are shared by camera zones (this module) and étagères
+  // (etagere.js): one list, ordered by the "Zone N" number in the name so an
+  // étagère named "Zone 3" lands in panel 3 next to its siblings; unnumbered
+  // names keep creation order after the numbered ones. Twins never occupy
+  // panels; the 6-slot cap applies to the combined list.
+  const zoneNo = (n) => { const m = /^Zone (\d+)$/.exec(n || ""); return m ? +m[1] : Infinity; };
+  const own = [
+    ...userPatches().map((p) => ({ kind: "patch", id: p.id, name: p.name })),
+    ...(window.__etagere?.getZones?.() || []).map((z) => ({ kind: "etagere", id: z.id, name: z.name })),
+  ].map((e, i) => ({ ...e, order: i }))
+   .sort((a, b) => (zoneNo(a.name) - zoneNo(b.name)) || (a.order - b.order))
+   .slice(0, MAX_PATCHES);
   const container = document.getElementById("zones-container");
   if (container) {
     container.classList.toggle("zones-grid-6", own.length > 3);
@@ -222,7 +327,8 @@ function renderPanels() {
     // zones, not overlaid on the panel.
     body.innerHTML = `<img class="zone-patch-img" alt="${p.name}">`;
     if (VWS) {
-      const sid = `zone:${p.id}`;
+      // étagère panels stream the warped-cell mosaic (what the model sees)
+      const sid = p.kind === "etagere" ? `etagere:${p.id}` : `zone:${p.id}`;
       VWS.attach(body.querySelector("img"), sid);
       panelStreamIds.push(sid);
     }
@@ -260,6 +366,7 @@ function renderSettingsList() {
         `<span class="config-zone-num" title="Zone ${i + 1}">${i + 1}</span>` +
         `<input class="zm-name" value="${p.name || ""}" placeholder="zone name" title="Zone name" />` +
         `<span class="czr-cam-badge">${camLbl}</span>` +
+        `<button type="button" class="glass-btn zm-small-btn zm-edit-points" title="Drag this zone's points on the camera">Edit points</button>` +
         `<button type="button" class="glass-btn zm-iconbtn zm-delete"` +
           ` title="Delete zone ${i + 1}" aria-label="Delete zone ${i + 1}">` +
           `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"` +
@@ -304,6 +411,7 @@ function renderSettingsList() {
     // No per-zone confidence: ONE global model with ONE threshold
     // (Settings ▸ Isistream) serves every zone — the dashboard only renders.
     row.querySelector(".zm-color").addEventListener("change", (e) => { p.color = e.target.value; save(); });
+    row.querySelector(".zm-edit-points").addEventListener("click", () => startPatchEdit(p.id));
     row.querySelector(".zm-delete").addEventListener("click", () => deletePatch(p.id));
     host.appendChild(row);
   });
@@ -320,12 +428,14 @@ function updateDrawButton() {
 }
 
 function wire() {
+  // étagères share the ZONE panels — re-render when their list changes
+  window.addEventListener("etagere:changed", () => renderPanels());
   const draw = document.getElementById("btn-draw-patch");
   if (draw) draw.onclick = () => chooseKindThenDraw();
   load();
 }
 
-window.__zonePatch = { startPatchDraw, deletePatch, chooseKindThenDraw, allZoneNames, nextZoneNumberName };
+window.__zonePatch = { startPatchDraw, deletePatch, chooseKindThenDraw, allZoneNames, nextZoneNumberName, startPatchEdit, isPatchEditing };
 // NOTE: do NOT re-render here on "zone-patches:saved" — save() already re-rendered
 // the panels + settings list. A second render rebuilds the zone <img> (re-opening
 // its /stream/zone connection) for nothing. The event stays for OTHER listeners

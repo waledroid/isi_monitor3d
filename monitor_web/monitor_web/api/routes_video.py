@@ -53,6 +53,7 @@ from ..zone_projection import (
     zone_stencil,
 )
 from .routes_calibrate import _mode_calibration_path
+from .routes_etagere import etagere_config_path
 from .routes_projection import _load_rig_cached
 from .routes_zone_patches import find_patch, patch_pixel_box, patch_rect
 
@@ -444,6 +445,75 @@ def build_zone_stream(state, patch_id: str) -> Iterator:
         hull_calib=hull_calib, calib_wh=calib_wh,
         fill_poly_calib=fill_poly_calib,
     )
+
+
+# --- étagère panel: the warped cell crops, tiled -----------------------------
+_ETAGERE_TILE_PX = 160          # each cell letterboxed to this, then tiled rows x cols
+_ETAGERE_STATE_COLORS = {       # BGR — matches the cam-overlay palette
+    "filled": (67, 160, 46), "empty": (166, 160, 154), "unknown": (40, 160, 240),
+}
+
+
+def _etagere_mosaic(image, zone, margin: float, states) -> object:
+    """Tile the zone's cells (each cropped + uprighted exactly like isistream
+    does, via the shared ``crop_cell``, then letterboxed) into a rows x cols
+    mosaic; each tile gets a border in its live state colour + its r/c label."""
+    import numpy as np
+    from backbone.shared.etagere import crop_cell, letterbox_square
+    t = _ETAGERE_TILE_PX
+    rows, cols = int(zone.rows), int(zone.cols)
+    canvas = np.full((rows * t, cols * t, 3), 24, dtype=np.uint8)
+    for cell in zone.cells:
+        crop = crop_cell(image, zone.frame_wh, cell.rect, cell.angle_deg, margin)
+        tile = (letterbox_square(crop, t) if crop is not None
+                else np.full((t, t, 3), 114, dtype=np.uint8))
+        state = "unknown"
+        if states and 1 <= cell.r <= len(states) and 1 <= cell.c <= len(states[cell.r - 1]):
+            state = states[cell.r - 1][cell.c - 1] or "unknown"
+        color = _ETAGERE_STATE_COLORS.get(state, _ETAGERE_STATE_COLORS["unknown"])
+        cv2.rectangle(tile, (0, 0), (t - 1, t - 1), color, 3)
+        label = f"r{cell.r}c{cell.c}"
+        cv2.rectangle(tile, (3, 3), (3 + 8 * len(label) + 6, 19), (0, 0, 0), -1)
+        cv2.putText(tile, label, (6, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1,
+                    cv2.LINE_AA)
+        y0, x0 = (cell.r - 1) * t, (cell.c - 1) * t
+        canvas[y0:y0 + t, x0:x0 + t] = tile
+    return canvas
+
+
+def build_etagere_stream(state, zone_id: str) -> Iterator:
+    """Frame iterator for one étagère's ZONE panel: the rows x cols mosaic of
+    warped cell crops (what the model sees), bordered by the live cell state
+    from the bus. Raises ``LookupError`` if the zone / camera isn't configured."""
+    from backbone.shared.etagere import load_etagere_config
+    cfg = state.settings
+    et = load_etagere_config(etagere_config_path(cfg))
+    zone = next((z for z in et.zones if z.id == zone_id), None)
+    if zone is None:
+        raise LookupError(f"étagère zone {zone_id!r} not found")
+    cameras = _load_cameras_from_backbone_yaml(cfg.backbone_config_path)
+    if zone.camera not in cameras:
+        raise LookupError(f"camera {zone.camera!r} not configured")
+    src_cfg = cameras[zone.camera].get("source", {})
+    margin = float(et.model.crop_margin) if et.model is not None else 0.08
+    bus = getattr(state, "bus", None)
+
+    def _matrix():
+        if bus is None:
+            return None
+        msg = bus.snapshot().etagere_by_zone.get(zone_id)
+        if msg is None:
+            return None
+        m = [["unknown"] * msg.cols for _ in range(msg.rows)]
+        for c in msg.cells:
+            if 1 <= c.r <= msg.rows and 1 <= c.c <= msg.cols:
+                m[c.r - 1][c.c - 1] = c.state
+        return m
+
+    def _iter():
+        for image in _frame_iter(zone.camera, src_cfg):
+            yield _etagere_mosaic(image, zone, margin, _matrix())
+    return _iter()
 
 
 @router.get("/stream/zone/{patch_id}")

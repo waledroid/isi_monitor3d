@@ -57,6 +57,7 @@ from ..video_stream import encode_jpeg
 from .routes_video import (
     _load_cameras_from_backbone_yaml,
     build_cam_stream,
+    build_etagere_stream,
     build_unified_stream,
     build_zone_stream,
 )
@@ -88,6 +89,8 @@ def _build_stream(state, stream_id: str):
                                 warp=(flag == "warp"))
     if kind == "zone" and rest:
         return build_zone_stream(state, rest)
+    if kind == "etagere" and rest:
+        return build_etagere_stream(state, rest)
     if kind == "unified" and not rest:
         return build_unified_stream(state)
     raise LookupError(f"unknown stream id {stream_id!r}")

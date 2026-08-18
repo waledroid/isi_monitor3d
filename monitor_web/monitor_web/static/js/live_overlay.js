@@ -4,7 +4,7 @@
 // and floor-zone outlines are drawn SERVER-side into the frames themselves.
 
 import { renderActiveCamPreview } from "/static/js/draw_mode.js";
-import { getGhosts, getPatches } from "/static/js/zone_patch.js";
+import { getGhosts, getPatches, isPatchEditing } from "/static/js/zone_patch.js";
 import { getStates, getZones, isEditing } from "/static/js/etagere.js";
 import { cellCorners } from "/static/js/etagere_geom.js";
 
@@ -69,6 +69,20 @@ function displayToSourceForCam(canvas, camId, dx, dy, frameWh) {
 }
 window.__displayToSource = displayToSourceForCam;
 
+// Display pixels per frame_wh source pixel for a cam (mean of x/y) — lets an
+// editor express a grab tolerance in screen px while comparing source coords.
+function displayScaleForCam(canvas, camId, frameWh) {
+  const img = document.getElementById(`${camId}-img`);
+  const [natW, natH] = img ? naturalSize(img, camId) : [0, 0];
+  if (!natW || !natH) return 1;
+  const box = { w: canvas.clientWidth, h: canvas.clientHeight };
+  const scale = Math.min(box.w / natW, box.h / natH);
+  const fw = (frameWh && frameWh[0]) || natW;
+  const fh = (frameWh && frameWh[1]) || natH;
+  return scale * ((natW / fw + natH / fh) / 2);
+}
+window.__displayScale = displayScaleForCam;
+
 // Pixel-space zone-patch ROIs — bold red POLYGONS (no calibration). The polygon is
 // the drawn shape (its bounding rect is what gets cropped for detection); legacy
 // rect-only patches fall back to their box. Coords are source px at the size drawn
@@ -103,6 +117,14 @@ function drawZonePatches(ctx, box, img, camId) {
     ctx.closePath();
     ctx.stroke();
     ctx.setLineDash([]);              // reset so other overlays stay solid
+    if (isPatchEditing(p.id)) {       // vertex handles while "Edit points" is live
+      ctx.fillStyle = "#fff"; ctx.strokeStyle = "#111"; ctx.lineWidth = 1;
+      for (const [vx, vy] of poly) {
+        const [hx, hy] = sourceToDisplay(box, vx * sx, vy * sy, natW, natH);
+        ctx.fillRect(hx - 4, hy - 4, 8, 8); ctx.strokeRect(hx - 4, hy - 4, 8, 8);
+      }
+      ctx.lineWidth = 3;
+    }
     const label = p.name || "";
     const tw = ctx.measureText(label).width;
     // Tag hugs that corner: box right-aligned at the vertex, just above it;
@@ -199,12 +221,16 @@ function drawEtagere(ctx, box, img, camId) {
       ctx.stroke();
       ctx.setLineDash([]);
 
-      const label = `r${cell.r}c${cell.c}`;
-      const tw = ctx.measureText(label).width;
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(rx0 + 2, ry0 + 2, tw + 6, 13);
-      ctx.fillStyle = "#fff";
-      ctx.fillText(label, rx0 + 5, ry0 + 12);
+      // Cell labels only while adjusting this zone — once declared, the cam
+      // view shows just the state-coloured cells (labels live on the panel).
+      if (editingThis) {
+        const label = `r${cell.r}c${cell.c}`;
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(rx0 + 2, ry0 + 2, tw + 6, 13);
+        ctx.fillStyle = "#fff";
+        ctx.fillText(label, rx0 + 5, ry0 + 12);
+      }
 
       if (editingThis) {
         ctx.fillStyle = "#fff";

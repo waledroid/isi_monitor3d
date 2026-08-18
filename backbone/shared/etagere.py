@@ -167,3 +167,58 @@ def cells_from_corners(corners, rows: int = 3, cols: int = 3) -> list[EtagereCel
             out.append(EtagereCell(r=r + 1, c=c + 1,
                                    rect=(min(xs), min(ys), max(xs), max(ys))))
     return out
+
+
+# --- pixel helpers shared by isistream (inference) and monitor_web (panel) ---
+# ONE implementation of "what a cell crop looks like", so the dashboard's
+# étagère panel shows exactly the pixels the model sees.
+
+def crop_cell(image, frame_wh, rect, angle_deg: float = 0.0, margin: float = 0.08):
+    """Crop one cell out of ``image`` (H, W, 3).
+
+    ``rect`` (x0, y0, x1, y1) is in the zone's declared ``frame_wh`` pixel
+    space and is scaled to the actual image; the crop is padded by ``margin``
+    (fraction of the scaled rect's side). With ``angle_deg`` != 0 the cell is
+    a rectangle rotated about its own centre (positive = clockwise on screen);
+    the image is warped by the inverse rotation about that centre first, so
+    the crop is the cell's content UPRIGHT (the axis-aligned framing the
+    model was trained on). Returns ``None`` for a degenerate crop.
+    """
+    import cv2  # local import: keep the config models importable without OpenCV
+    h, w = image.shape[:2]
+    sx = w / float(frame_wh[0])
+    sy = h / float(frame_wh[1])
+    x0, y0, x1, y1 = rect[0] * sx, rect[1] * sy, rect[2] * sx, rect[3] * sy
+    mx, my = (x1 - x0) * margin, (y1 - y0) * margin
+    if abs(angle_deg) < 1e-6:
+        cx0, cy0 = max(int(x0 - mx), 0), max(int(y0 - my), 0)
+        cx1, cy1 = min(int(x1 + mx), w), min(int(y1 + my), h)
+        if cx1 - cx0 < 4 or cy1 - cy0 < 4:
+            return None
+        return image[cy0:cy1, cx0:cx1]
+    # cv2's positive angle is counter-clockwise on a y-down image, so a
+    # clockwise-tilted cell (angle_deg > 0) is uprighted by rotating the image
+    # by +angle_deg about the cell centre.
+    ccx, ccy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    cw, ch = round((x1 - x0) + 2 * mx), round((y1 - y0) + 2 * my)
+    if cw < 4 or ch < 4:
+        return None
+    rot = cv2.getRotationMatrix2D((ccx, ccy), float(angle_deg), 1.0)
+    rot[0, 2] += cw / 2.0 - ccx     # the upright padded rect's TL lands at (0, 0)
+    rot[1, 2] += ch / 2.0 - ccy
+    return cv2.warpAffine(image, rot, (cw, ch), flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT, borderValue=(114, 114, 114))
+
+
+def letterbox_square(image, size: int = 320, pad_value: int = 114):
+    """Aspect-preserving resize onto a ``size``x``size`` canvas (YOLO-style grey
+    pad) — the same framing the trainer/producer use for cell crops."""
+    import cv2
+    import numpy as np
+    h, w = image.shape[:2]
+    r = size / float(max(h, w))
+    nw, nh = max(1, round(w * r)), max(1, round(h * r))
+    canvas = np.full((size, size, 3), pad_value, dtype=np.uint8)
+    x0, y0 = (size - nw) // 2, (size - nh) // 2
+    canvas[y0:y0 + nh, x0:x0 + nw] = cv2.resize(image, (nw, nh), interpolation=cv2.INTER_AREA)
+    return canvas
