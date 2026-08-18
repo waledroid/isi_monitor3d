@@ -391,6 +391,22 @@
               <label class="zm-sub" data-i18n="model_pose_conf">{{ t.model_pose_conf or 'Pose confidence threshold' }}</label>
               <input id="zm-model-pose-conf" type="number" step="0.05" min="0" max="1" placeholder="0.3" />
 
+              <!-- ── ÉTAGÈRE — bin-rack cells: its OWN 2-class model (empty_box /
+                   filled_box), separate from the object model. Lives in
+                   etagere.yaml's model: block; Apply hot-restarts isistream.
+                   imgsz is fixed by the export (320) — shown, not editable. ── -->
+              <h4 class="config-subhead" data-i18n="group_etagere">{{ t.group_etagere or 'Étagère (bin-rack cells)' }}</h4>
+              <label class="zm-sub" data-i18n="etagere_model">{{ t.etagere_model or 'Étagère model (empty_box / filled_box, .onnx)' }}</label>
+              <select id="zm-etagere-model-onnx">
+                <option value="" data-i18n="model_object_placeholder">{{ t.model_object_placeholder or '— none —' }}</option>
+              </select>
+              <label class="zm-sub" data-i18n="etagere_model_conf">{{ t.etagere_model_conf or 'Cell confidence threshold' }}</label>
+              <input id="zm-etagere-model-conf" type="number" step="0.05" min="0" max="1" placeholder="0.3" />
+              <span class="layout-hint"><span data-i18n="etagere_model_imgsz">{{ t.etagere_model_imgsz or 'Inference size fixed by the export (px per cell):' }}</span>
+                <b id="zm-etagere-model-imgsz">320</b></span>
+              <button id="zm-etagere-model-save" class="glass-btn" type="button"
+                      data-i18n="etagere_model_save">{{ t.etagere_model_save or 'Apply étagère model' }}</button>
+
               <!-- ── PERFORMANCE — speed / hardware levers ── -->
               <h4 class="config-subhead" data-i18n="group_performance">{{ t.group_performance or 'Performance' }}</h4>
               <label data-i18n="detect_quality">{{ t.detect_quality or 'Detection quality (display always full)' }}</label>
@@ -613,6 +629,29 @@
   </div>
 </div>
 
+<!-- Zone KIND picker — first step of "add zone": a floor/camera zone (polygon)
+     or an étagère (bin rack: 4 corners → 3x3 cell grid). Étagères are stored
+     in etagere.yaml but share the "Zone N" numbering with camera zones. -->
+<div id="zm-kind-picker" class="zm-draw-picker hidden" role="dialog" aria-modal="true"
+     aria-labelledby="zm-kind-picker-title">
+  <div class="zm-draw-picker-panel panel">
+    <h3 id="zm-kind-picker-title" data-i18n="zone_kind_title">
+      {{ t.zone_kind_title or 'Add zone — which kind?' }}
+    </h3>
+    <div class="zm-draw-picker-buttons">
+      <button class="glass-btn zm-kind-btn" data-kind="floor"
+              data-i18n="zone_kind_floor">{{ t.zone_kind_floor or 'Floor zone (polygon)' }}</button>
+      <button class="glass-btn zm-kind-btn" data-kind="etagere"
+              data-i18n="zone_kind_etagere">{{ t.zone_kind_etagere or 'Étagère (bin rack, 3×3 cells)' }}</button>
+    </div>
+    <div class="zm-draw-picker-footer">
+      <button id="zm-kind-picker-cancel" class="glass-btn" data-i18n="cancel">
+        {{ t.cancel or 'Cancel' }}
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- S18: calibration picker — opens on btn-calibrate click. Mode is decided
      by len(configured_cameras): 1 → pallet flow, 2 → Multical (S18.B). -->
 <div id="calibration-picker" class="zm-draw-picker hidden" role="dialog" aria-modal="true"
@@ -682,6 +721,10 @@
   <span class="draw-hint" data-i18n="draw_hint">{{ t.draw_hint or 'Click points on the map to define the polygon.' }}</span>
   <span class="draw-count"><span id="draw-count">0</span> <span data-i18n="points_label">{{ t.points_label or 'points' }}</span></span>
   <button id="draw-undo" class="glass-btn" data-i18n="undo">{{ t.undo or 'Undo' }}</button>
+  <!-- Étagère adjust mode only: rotate the whole grid (outer corners around
+       their centre, cells re-derived) a few degrees per click. -->
+  <button id="draw-rotate-ccw" class="glass-btn draw-rotate hidden" title="{{ t.rotate_ccw or 'Rotate grid anticlockwise' }}" aria-label="Rotate anticlockwise">&lsaquo;</button>
+  <button id="draw-rotate-cw" class="glass-btn draw-rotate hidden" title="{{ t.rotate_cw or 'Rotate grid clockwise' }}" aria-label="Rotate clockwise">&rsaquo;</button>
   <button id="draw-done" class="glass-btn draw-confirm" title="{{ t.done or 'Done' }}" aria-label="Done">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
   </button>

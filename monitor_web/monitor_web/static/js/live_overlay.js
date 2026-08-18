@@ -6,6 +6,7 @@
 import { renderActiveCamPreview } from "/static/js/draw_mode.js";
 import { getGhosts, getPatches } from "/static/js/zone_patch.js";
 import { getStates, getZones, isEditing } from "/static/js/etagere.js";
+import { cellCorners } from "/static/js/etagere_geom.js";
 
 const OVERLAYS = [
   { camId: "cam_a", canvasId: "cam_a-overlay", imgId: "cam_a-img" },
@@ -175,11 +176,9 @@ function drawEtagere(ctx, box, img, camId) {
     const matrix = st && st.matrix;
     const editingThis = isEditing(z.id);
     for (const cell of z.cells || []) {
-      const [x0, y0, x1, y1] = cell.rect;
-      const [dx0, dy0] = sourceToDisplay(box, x0 * sx, y0 * sy, natW, natH);
-      const [dx1, dy1] = sourceToDisplay(box, x1 * sx, y1 * sy, natW, natH);
-      const rx0 = Math.min(dx0, dx1), ry0 = Math.min(dy0, dy1);
-      const rw = Math.abs(dx1 - dx0), rh = Math.abs(dy1 - dy0);
+      // Screen-space quad of the (possibly rotated) cell, mapped to display px.
+      const quad = cellCorners(cell).map(([x, y]) => sourceToDisplay(box, x * sx, y * sy, natW, natH));
+      const rx0 = Math.min(...quad.map((p) => p[0])), ry0 = Math.min(...quad.map((p) => p[1]));
 
       let state = "unknown";
       if (matrix && matrix[cell.r - 1] && matrix[cell.r - 1][cell.c - 1] != null) {
@@ -192,9 +191,12 @@ function drawEtagere(ctx, box, img, camId) {
 
       ctx.setLineDash(dash);
       ctx.fillStyle = fill;
-      ctx.fillRect(rx0, ry0, rw, rh);
       ctx.strokeStyle = stroke;
-      ctx.strokeRect(rx0, ry0, rw, rh);
+      ctx.beginPath();
+      quad.forEach(([px, py], i) => (i ? ctx.lineTo(px, py) : ctx.moveTo(px, py)));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
       ctx.setLineDash([]);
 
       const label = `r${cell.r}c${cell.c}`;
@@ -208,7 +210,7 @@ function drawEtagere(ctx, box, img, camId) {
         ctx.fillStyle = "#fff";
         ctx.strokeStyle = "#111";
         ctx.lineWidth = 1;
-        for (const [hx, hy] of [[rx0, ry0], [rx0 + rw, ry0], [rx0 + rw, ry0 + rh], [rx0, ry0 + rh]]) {
+        for (const [hx, hy] of quad) {
           ctx.fillRect(hx - 3, hy - 3, 6, 6);
           ctx.strokeRect(hx - 3, hy - 3, 6, 6);
         }

@@ -23,6 +23,7 @@ from backbone.shared.etagere import (
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 
+from ..model_store import list_trained_onnx
 from .routes_config import _write_yaml_atomic
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,11 @@ def _path(request: Request) -> Path:
 @router.get("/api/etagere")
 def get_etagere(request: Request) -> dict[str, Any]:
     cfg = load_etagere_config(_path(request))
-    return cfg.model_dump(mode="json")
+    out = cfg.model_dump(mode="json")
+    # Candidates for the Settings model picker (same scanner as the pallet
+    # model dropdown): absolute ``path`` + trainer-relative ``label``.
+    out["available_models"] = list_trained_onnx()
+    return out
 
 
 class AutosplitBody(BaseModel):
@@ -71,7 +76,9 @@ def autosplit(body: AutosplitBody) -> dict[str, Any]:
 @router.post("/api/etagere")
 def post_etagere(body: dict[str, Any], request: Request) -> dict[str, Any]:
     try:
-        cfg = EtagereConfig.model_validate(body)
+        # The picker POSTs GET's payload back; ``available_models`` is read-only.
+        cfg = EtagereConfig.model_validate(
+            {k: v for k, v in body.items() if k != "available_models"})
     except ValidationError as e:
         # include_context=False drops pydantic's raw exception objects from
         # the "ctx" field of custom (model_validator) errors, which are not

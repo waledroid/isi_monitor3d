@@ -65,3 +65,48 @@ const cornerBeatsMove = { cells: [
 assert.deepEqual(hitTest(cornerBeatsMove, 50, 50, 8), { cellIdx: 0, handle: "br" });
 
 console.log("etagere.js helpers OK");
+
+// rotateCorners: rotates around the centroid; 90° cw maps TL→TR on screen (y down);
+// 0° is identity; ±deg round-trips.
+{
+  const { rotateCorners } = await import("../monitor_web/static/js/etagere_geom.js");
+  const sq = [[0, 0], [10, 0], [10, 10], [0, 10]];   // TL,TR,BR,BL, centre (5,5)
+  const same = rotateCorners(sq, 0);
+  assert.deepEqual(same.map((p) => p.map(Math.round)), sq);
+  const cw = rotateCorners(sq, 90).map((p) => p.map((v) => Math.round(v) + 0));   // +0 folds -0
+  assert.deepEqual(cw, [[10, 0], [10, 10], [0, 10], [0, 0]]);   // TL moved to TR's spot
+  const back = rotateCorners(rotateCorners(sq, 7), -7).map((p) => p.map((v) => Math.round(v * 1000) / 1000));
+  assert.deepEqual(back, sq);
+  // centroid preserved
+  const r = rotateCorners(sq, 33);
+  const cx = r.reduce((a, p) => a + p[0], 0) / 4, cy = r.reduce((a, p) => a + p[1], 0) / 4;
+  assert.ok(Math.abs(cx - 5) < 1e-9 && Math.abs(cy - 5) < 1e-9);
+  console.log("rotateCorners OK");
+}
+
+// Rotated cells: local-frame hit-test + corner drag along the tilted axes.
+{
+  const { cellCorners, toCellLocal, hitTest, applyCellDrag } =
+    await import("../monitor_web/static/js/etagere_geom.js");
+  const cell = { r: 1, c: 1, rect: [0, 0, 100, 40], angle_deg: 90 };   // centre (50,20)
+  // 90° cw: TL(0,0) → (70,-30); TR(100,0) → (70,70)
+  const cs = cellCorners(cell).map((p) => p.map((v) => Math.round(v) + 0));
+  assert.deepEqual(cs[0], [70, -30]);
+  assert.deepEqual(cs[1], [70, 70]);
+  // a screen point at the rotated TL corner hits handle "tl"
+  assert.deepEqual(hitTest({ cells: [cell] }, 70, -30, 8), { cellIdx: 0, handle: "tl" });
+  // screen point inside the rotated body (near centre) → move
+  assert.deepEqual(hitTest({ cells: [cell] }, 52, 22, 8), { cellIdx: 0, handle: "move" });
+  // a point that would be inside the UNrotated rect but outside the rotated one → miss
+  assert.deepEqual(hitTest({ cells: [cell] }, 5, 20, 8), { cellIdx: -1, handle: null });
+  // toCellLocal round-trips a corner back to the axis-aligned rect corner
+  assert.deepEqual(toCellLocal(cell, 70, -30).map((v) => Math.round(v) + 0), [0, 0]);
+  // dragging BR "down the screen" by 10 px on a 90° cell shrinks/extends along
+  // the LOCAL x axis (screen-down == local +x for a 90° cw rotation)
+  const out = applyCellDrag(cell, "br", 0, 10);
+  assert.deepEqual(out.rect.map((v) => Math.round(v) + 0), [0, 0, 110, 40]);
+  assert.equal(out.angle_deg, 90);
+  // move ignores rotation
+  assert.deepEqual(applyCellDrag(cell, "move", 5, 5).rect, [5, 5, 105, 45]);
+  console.log("rotated cells OK");
+}

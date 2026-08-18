@@ -122,5 +122,15 @@
   "floor_zone_redraw_hint_plane": "Click ≥3 edge points ON the raised surface",
   "floor_zone_height_prompt": "Base height of the zone's surface in metres (0 = floor; e.g. 0.304 for a platform)",
   "etagere_section": "Étagères (bin racks, drawn on CAM)",
-  "etagere_add": "+ Draw étagère (4 corners) on camera"
+  "etagere_add": "+ Draw étagère (4 corners) on camera",
+  "etagere_model": "Étagère model (empty_box / filled_box, .onnx)",
+  "etagere_model_conf": "Cell confidence threshold",
+  "etagere_model_save": "Apply étagère model",
+  "etagere_model_imgsz": "Inference size fixed by the export (px per cell):",
+  "group_etagere": "Étagère (bin-rack cells)",
+  "zone_kind_title": "Add zone — which kind?",
+  "zone_kind_floor": "Floor zone (polygon)",
+  "zone_kind_etagere": "Étagère (bin rack, 3×3 cells)",
+  "rotate_ccw": "Rotate grid anticlockwise",
+  "rotate_cw": "Rotate grid clockwise"
 }

@@ -79,14 +79,13 @@ export function startPatchDraw(camId) {
   startDraw({
     target: cam,
     mode: "raw",                 // source-frame pixels, no pixel→world projection
-    label: "Zone — click polygon points, then Done",
+    label: "",                   // no label — the toolbar hint says what to do
     minPoints: 3,                // a polygon (finish via the Done button)
     onDone: (points) => {
       if (!points || points.length < 3) return;
       // Name is COMPULSORY and UNIQUE — ask before the zone exists, so no
       // autonamed zone ever reaches zones.yaml / the MQTT zone_state payload.
-      const name = promptZoneName(
-        userPatches().map((p) => p.name), nextDefaultName());
+      const name = promptZoneName(allZoneNames(), nextDefaultName());
       if (!name) return;                       // cancelled → no zone
       const xs = points.map((p) => p[0]);
       const ys = points.map((p) => p[1]);
@@ -107,12 +106,53 @@ export function startPatchDraw(camId) {
 // `length + 1`. A zone's identity is its immutable `id`; the label is cosmetic.
 // Reusing a freed number would silently retarget anything keyed on the name.
 function nextDefaultName() {
+  return nextZoneNumberName(allZoneNames());
+}
+
+// "Zone N" numbering and name uniqueness are SHARED between camera zones
+// (this module) and étagères (etagere.js): an operator adding "an étagère
+// as zone 3" gets the next free number across both lists, and no two zones
+// of either kind can carry the same name.
+export function allZoneNames() {
+  const mine = userPatches().map((p) => p.name);
+  const theirs = (window.__etagere?.getZones?.() || []).map((z) => z.name);
+  return [...mine, ...theirs].filter(Boolean);
+}
+
+export function nextZoneNumberName(names) {
   let max = 0;
-  for (const p of userPatches()) {
-    const m = /^Zone (\d+)$/.exec(p.name || "");
+  for (const n of names) {
+    const m = /^Zone (\d+)$/.exec(n || "");
     if (m) max = Math.max(max, parseInt(m[1], 10));
   }
   return `Zone ${max + 1}`;
+}
+
+// First step of "add zone": ask which KIND, then hand off to the right drawer.
+// Floor/camera zone → the polygon flow below; étagère → etagere.js (4 corners
+// → auto-split grid). Cancel/ESC/backdrop-click closes without drawing.
+export function chooseKindThenDraw(camId) {
+  const root = document.getElementById("zm-kind-picker");
+  if (!root) { startPatchDraw(camId); return; }
+  const close = () => {
+    root.classList.add("hidden");
+    document.removeEventListener("keydown", onKey);
+    root.removeEventListener("click", onBackdrop);
+  };
+  const onKey = (ev) => { if (ev.key === "Escape") close(); };
+  const onBackdrop = (ev) => { if (ev.target === root) close(); };
+  for (const btn of root.querySelectorAll(".zm-kind-btn")) {
+    btn.onclick = () => {
+      close();
+      if (btn.dataset.kind === "etagere") window.__etagere?.startEtagereDraw?.(camId);
+      else startPatchDraw(camId);
+    };
+  }
+  const cancel = document.getElementById("zm-kind-picker-cancel");
+  if (cancel) cancel.onclick = close;
+  document.addEventListener("keydown", onKey);
+  root.addEventListener("click", onBackdrop);
+  root.classList.remove("hidden");
 }
 
 // Delete ONE zone by id (Settings per-row delete icon) and persist. Deleting a
@@ -132,10 +172,10 @@ function addZoneFromPanel() {
   const store = window.Alpine?.store?.("bigPanel");
   if (store && store.view !== "cam_a" && store.view !== "cam_b") {
     store.select("cam_a");
-    setTimeout(() => startPatchDraw(), 150);   // let the cam view mount first
+    setTimeout(() => chooseKindThenDraw(), 150);   // let the cam view mount first
     return;
   }
-  startPatchDraw();
+  chooseKindThenDraw();
 }
 
 // Fill the three ZONE panels with the first three ROIs' cropped streams (over
@@ -281,11 +321,11 @@ function updateDrawButton() {
 
 function wire() {
   const draw = document.getElementById("btn-draw-patch");
-  if (draw) draw.onclick = () => startPatchDraw();
+  if (draw) draw.onclick = () => chooseKindThenDraw();
   load();
 }
 
-window.__zonePatch = { startPatchDraw, deletePatch };
+window.__zonePatch = { startPatchDraw, deletePatch, chooseKindThenDraw, allZoneNames, nextZoneNumberName };
 // NOTE: do NOT re-render here on "zone-patches:saved" — save() already re-rendered
 // the panels + settings list. A second render rebuilds the zone <img> (re-opening
 // its /stream/zone connection) for nothing. The event stays for OTHER listeners

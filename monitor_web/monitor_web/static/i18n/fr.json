@@ -122,5 +122,15 @@
   "floor_zone_redraw_hint_plane": "Cliquez ≥3 points de bord SUR la surface surélevée",
   "floor_zone_height_prompt": "Hauteur de la surface de la zone en mètres (0 = sol ; ex. 0.304 pour une plateforme)",
   "etagere_section": "Étagères (racks, dessinées sur la caméra)",
-  "etagere_add": "+ Dessiner une étagère (4 coins) sur la caméra"
+  "etagere_add": "+ Dessiner une étagère (4 coins) sur la caméra",
+  "etagere_model": "Modèle étagère (empty_box / filled_box, .onnx)",
+  "etagere_model_conf": "Seuil de confiance par cellule",
+  "etagere_model_save": "Appliquer le modèle étagère",
+  "etagere_model_imgsz": "Taille d'inférence fixée par l'export (px par cellule) :",
+  "group_etagere": "Étagère (cellules du rack)",
+  "zone_kind_title": "Ajouter une zone — de quel type ?",
+  "zone_kind_floor": "Zone au sol (polygone)",
+  "zone_kind_etagere": "Étagère (rack, 3×3 cellules)",
+  "rotate_ccw": "Pivoter la grille dans le sens antihoraire",
+  "rotate_cw": "Pivoter la grille dans le sens horaire"
 }

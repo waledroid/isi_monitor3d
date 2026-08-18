@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import logging
 
+import cv2
+
 from backbone.comms.schemas import EtagereCellState, EtagereStateMessage
 from backbone.core.types import Detection, Frame, FramePair
 from backbone.shared.etagere import EtagereConfig, EtagereZone
@@ -70,21 +72,43 @@ class EtagereDetector:
             out.append(z)
         return out
 
-    def _crop(self, frame: Frame, zone: EtagereZone, rect: tuple[float, float, float, float]):
+    def _crop(self, frame: Frame, zone: EtagereZone, rect: tuple[float, float, float, float],
+              angle_deg: float = 0.0):
         """Scale ``rect`` from the zone's declared ``frame_wh`` to the actual
         frame, pad by ``crop_margin`` (fraction of the scaled rect's side),
-        and return the cropped image (``None`` if the result is degenerate)."""
+        and return the cropped image (``None`` if the result is degenerate).
+
+        With ``angle_deg`` != 0 the cell is a rectangle rotated about its own
+        centre (positive = clockwise on screen); the source is warped by the
+        inverse rotation about that centre first, so the crop is the cell's
+        content UPRIGHT — the same axis-aligned framing the model was trained on.
+        """
         h, w = frame.image.shape[:2]
         sx = w / float(zone.frame_wh[0])
         sy = h / float(zone.frame_wh[1])
         x0, y0, x1, y1 = rect[0] * sx, rect[1] * sy, rect[2] * sx, rect[3] * sy
         m = self._cfg.model.crop_margin
         mx, my = (x1 - x0) * m, (y1 - y0) * m
-        cx0, cy0 = max(int(x0 - mx), 0), max(int(y0 - my), 0)
-        cx1, cy1 = min(int(x1 + mx), w), min(int(y1 + my), h)
-        if cx1 - cx0 < 4 or cy1 - cy0 < 4:
+        if abs(angle_deg) < 1e-6:
+            cx0, cy0 = max(int(x0 - mx), 0), max(int(y0 - my), 0)
+            cx1, cy1 = min(int(x1 + mx), w), min(int(y1 + my), h)
+            if cx1 - cx0 < 4 or cy1 - cy0 < 4:
+                return None
+            return frame.image[cy0:cy1, cx0:cx1]
+        # Rotated cell: warp the source so the cell is upright, then take the
+        # padded rect. cv2's positive angle is counter-clockwise on a y-down
+        # image, so a clockwise-tilted cell (angle_deg > 0) is uprighted by
+        # rotating the image by +angle_deg about the cell centre.
+        ccx, ccy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        cw, ch = round((x1 - x0) + 2 * mx), round((y1 - y0) + 2 * my)
+        if cw < 4 or ch < 4:
             return None
-        return frame.image[cy0:cy1, cx0:cx1]
+        rot = cv2.getRotationMatrix2D((ccx, ccy), float(angle_deg), 1.0)
+        # translate so the (upright) padded rect's top-left lands at (0, 0)
+        rot[0, 2] += cw / 2.0 - ccx
+        rot[1, 2] += ch / 2.0 - ccy
+        return cv2.warpAffine(frame.image, rot, (cw, ch), flags=cv2.INTER_LINEAR,
+                              borderMode=cv2.BORDER_CONSTANT, borderValue=(114, 114, 114))
 
     def _warn_once(self, zone_id: str, what: str) -> None:
         if zone_id in self._warned:
@@ -104,7 +128,7 @@ class EtagereDetector:
             frame = frames[z.camera]
             try:
                 for cell in z.cells:
-                    img = self._crop(frame, z, cell.rect)
+                    img = self._crop(frame, z, cell.rect, cell.angle_deg)
                     if img is None:
                         continue
                     key = f"{z.id}{_SEP}{cell.r}{_SEP}{cell.c}"
