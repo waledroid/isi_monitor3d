@@ -391,6 +391,22 @@
               <label class="zm-sub" data-i18n="model_pose_conf">{{ t.model_pose_conf or 'Pose confidence threshold' }}</label>
               <input id="zm-model-pose-conf" type="number" step="0.05" min="0" max="1" placeholder="0.3" />
 
+              <!-- ── ÉTAGÈRE — bin-rack cells: its OWN 2-class model (empty_box /
+                   filled_box), separate from the object model. Lives in
+                   etagere.yaml's model: block; Apply hot-restarts isistream.
+                   imgsz is fixed by the export (320) — shown, not editable. ── -->
+              <h4 class="config-subhead" data-i18n="group_etagere">{{ t.group_etagere or 'Étagère (bin-rack cells)' }}</h4>
+              <label class="zm-sub" data-i18n="etagere_model">{{ t.etagere_model or 'Étagère model (empty_box / filled_box, .onnx)' }}</label>
+              <select id="zm-etagere-model-onnx">
+                <option value="" data-i18n="model_object_placeholder">{{ t.model_object_placeholder or '— none —' }}</option>
+              </select>
+              <label class="zm-sub" data-i18n="etagere_model_conf">{{ t.etagere_model_conf or 'Cell confidence threshold' }}</label>
+              <input id="zm-etagere-model-conf" type="number" step="0.05" min="0" max="1" placeholder="0.3" />
+              <span class="layout-hint"><span data-i18n="etagere_model_imgsz">{{ t.etagere_model_imgsz or 'Inference size fixed by the export (px per cell):' }}</span>
+                <b id="zm-etagere-model-imgsz">320</b></span>
+              <button id="zm-etagere-model-save" class="glass-btn" type="button"
+                      data-i18n="etagere_model_save">{{ t.etagere_model_save or 'Apply étagère model' }}</button>
+
               <!-- ── PERFORMANCE — speed / hardware levers ── -->
               <h4 class="config-subhead" data-i18n="group_performance">{{ t.group_performance or 'Performance' }}</h4>
               <label data-i18n="detect_quality">{{ t.detect_quality or 'Detection quality (display always full)' }}</label>
@@ -460,22 +476,6 @@
                /api/etagere/state (no inference in the dashboard). -->
           <section class="config-section">
             <h3 data-i18n="etagere_section">{{ t.etagere_section or 'Étagères (bin racks, drawn on CAM)' }}</h3>
-            <!-- Étagère model: its OWN 2-class detector (empty_box / filled_box),
-                 separate from the object model above. Lives in etagere.yaml's
-                 model: block; a save hot-restarts isistream. imgsz is fixed by
-                 the export (320) — shown, not editable. -->
-            <div class="config-model" id="zm-etagere-model">
-              <label data-i18n="etagere_model">{{ t.etagere_model or 'Étagère model (empty_box / filled_box, .onnx)' }}</label>
-              <select id="zm-etagere-model-onnx">
-                <option value="" data-i18n="model_object_placeholder">{{ t.model_object_placeholder or '— none —' }}</option>
-              </select>
-              <label data-i18n="etagere_model_conf">{{ t.etagere_model_conf or 'Cell confidence threshold' }}</label>
-              <input id="zm-etagere-model-conf" type="number" step="0.05" min="0" max="1" placeholder="0.3" />
-              <span class="layout-hint"><span data-i18n="etagere_model_imgsz">{{ t.etagere_model_imgsz or 'Inference size fixed by the export (px per cell):' }}</span>
-                <b id="zm-etagere-model-imgsz">320</b></span>
-              <button id="zm-etagere-model-save" class="glass-btn" type="button"
-                      data-i18n="etagere_model_save">{{ t.etagere_model_save or 'Apply model' }}</button>
-            </div>
             <div id="zm-etagere-list" class="config-zone-list">
               <p class="layout-hint" data-i18n="etagere_empty">No étagère yet — draw one on a camera.</p>
             </div>
