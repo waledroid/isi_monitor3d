@@ -31,7 +31,10 @@ def test_get_empty_when_no_file(tmp_path):
     app, _ = _app(tmp_path)
     with TestClient(app) as c:
         r = c.get("/api/etagere")
-        assert r.status_code == 200 and r.json() == {"model": None, "zones": []}
+        body = r.json()
+        assert r.status_code == 200
+        assert body["model"] is None and body["zones"] == []
+        assert isinstance(body["available_models"], list)
 
 
 def test_autosplit_returns_nine_cells(tmp_path):
@@ -114,3 +117,29 @@ def test_state_empty_when_no_messages(tmp_path):
     app, _ = _app(tmp_path)
     with TestClient(app) as c:
         assert c.get("/api/etagere/state").json() == {"states": {}}
+
+
+def test_get_lists_available_models(tmp_path, monkeypatch):
+    """GET /api/etagere carries the trainer's ONNX candidates for the model picker."""
+    import monitor_web.api.routes_etagere as re_mod
+    monkeypatch.setattr(
+        re_mod, "list_trained_onnx",
+        lambda: [{"path": "/abs/best.onnx", "label": "runs/x/best.onnx", "mtime": 1.0}],
+    )
+    app, _ = _app(tmp_path)
+    with TestClient(app) as c:
+        body = c.get("/api/etagere").json()
+        assert body["available_models"] == [
+            {"path": "/abs/best.onnx", "label": "runs/x/best.onnx", "mtime": 1.0}]
+        assert body["model"] is None and body["zones"] == []
+
+
+def test_post_ignores_available_models_field(tmp_path):
+    """The picker echoes GET's payload back; the read-only list must not 422 the save."""
+    app, root = _app(tmp_path)
+    body = {"model": {"onnx_path": "m.onnx"}, "zones": [],
+            "available_models": [{"path": "/x", "label": "x", "mtime": 0}]}
+    with TestClient(app) as c:
+        r = c.post("/api/etagere", json=body)
+        assert r.status_code == 200, r.text
+        assert "available_models" not in yaml.safe_load((root / "etagere.yaml").read_text())

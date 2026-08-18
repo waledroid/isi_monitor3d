@@ -21,6 +21,7 @@ const DEFAULT_COLS = 3;
 const STATE_POLL_MS = 1000;
 
 let cfg = { model: null, zones: [] };
+let availableModels = [];   // [{path, label, mtime}] from GET /api/etagere
 let states = {};        // zone_id -> {name, camera_id, rows, cols, matrix, cells, ts}
 let editing = null;     // {zoneId} while the drag-adjust overlay is active
 let stopEditing = null; // teardown for the CURRENT drag-adjust session, if any
@@ -40,8 +41,12 @@ async function load() {
   } catch (e) {
     console.warn("etagere: load failed", e);
   }
+  // Read-only picker candidates ride on GET; keep them out of the saved cfg.
+  availableModels = Array.isArray(cfg.available_models) ? cfg.available_models : [];
+  delete cfg.available_models;
   cfg.zones = cfg.zones || [];
   renderSettingsList();
+  renderModelPicker();
 }
 
 async function save() {
@@ -265,6 +270,51 @@ function _esc(s) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// --- Étagère model picker (Settings) --------------------------------------
+// The étagère detector is its OWN 2-class model, separate from the object
+// model; it lives in etagere.yaml's `model:` block. The dropdown lists the
+// same trainer exports the object-model picker offers; the current path is
+// kept selectable even when it is not among the scanned candidates.
+const DEFAULT_MODEL = { class_names: ["empty_box", "filled_box"], imgsz: 320,
+  confidence_threshold: 0.3, crop_margin: 0.08, max_fps: 2.0 };
+
+function renderModelPicker() {
+  const sel = el("zm-etagere-model-onnx");
+  if (!sel) return;
+  const current = cfg.model?.onnx_path || "";
+  const seen = new Set();
+  const opts = ['<option value="">— none —</option>'];
+  for (const m of availableModels) {
+    if (!m?.path || seen.has(m.path)) continue;
+    seen.add(m.path);
+    opts.push(`<option value="${_esc(m.path)}">${_esc(m.label || m.path)}</option>`);
+  }
+  if (current && !seen.has(current)) {
+    opts.push(`<option value="${_esc(current)}">${_esc(current)} (current)</option>`);
+  }
+  sel.innerHTML = opts.join("");
+  sel.value = current;
+  const conf = el("zm-etagere-model-conf");
+  if (conf) conf.value = cfg.model?.confidence_threshold ?? "";
+  const hint = el("zm-etagere-model-imgsz");
+  if (hint) hint.textContent = String(cfg.model?.imgsz ?? DEFAULT_MODEL.imgsz);
+}
+
+async function applyModel() {
+  const path = (el("zm-etagere-model-onnx")?.value || "").trim();
+  const confRaw = el("zm-etagere-model-conf")?.value;
+  const conf = confRaw === "" || confRaw == null ? null : Number(confRaw);
+  if (!path) {
+    cfg.model = null;                       // no model ⇒ feature off (isistream skips it)
+  } else {
+    const base = cfg.model && cfg.model.onnx_path === path ? cfg.model : { ...DEFAULT_MODEL };
+    cfg.model = { ...DEFAULT_MODEL, ...base, onnx_path: path };
+    if (conf != null && !Number.isNaN(conf)) cfg.model.confidence_threshold = conf;
+  }
+  await save();                             // server validates + hot-restarts isistream
+  renderModelPicker();
+}
+
 function renderSettingsList() {
   const host = el("zm-etagere-list");
   if (!host) return;
@@ -307,6 +357,7 @@ if (typeof document !== "undefined") {
   const boot = () => {
     load();
     el("zm-etagere-add")?.addEventListener("click", () => startEtagereDraw());
+    el("zm-etagere-model-save")?.addEventListener("click", () => applyModel());
     pollStates();
     setInterval(pollStates, STATE_POLL_MS);
   };
