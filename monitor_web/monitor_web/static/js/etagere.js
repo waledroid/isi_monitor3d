@@ -12,11 +12,12 @@
 // it drives the shared #draw-toolbar's Done/Cancel buttons directly.
 import { promptZoneName, startDraw } from "/static/js/draw_mode.js";
 import { openPicker } from "/static/js/draw_target_picker.js";
-import { applyDrag, frameWhOrNull, hitTest } from "/static/js/etagere_geom.js";
+import { applyDrag, frameWhOrNull, hitTest, rotateCorners } from "/static/js/etagere_geom.js";
 
 export { applyDrag, hitTest };
 
 const DEFAULT_ROWS = 3;
+const ROTATE_STEP_DEG = 2;    // per ‹ › click
 const DEFAULT_COLS = 3;
 const STATE_POLL_MS = 1000;
 
@@ -243,9 +244,37 @@ export function startAdjust(zoneId) {
     const cancelBtn = el("draw-cancel");
     const countWrap = el("draw-count")?.parentElement;
     const undoBtn = el("draw-undo");
-    if (label) label.textContent = `${zone.name} — drag a corner or cell, then Done`;
+    if (label) label.textContent = `${zone.name} — rotate ‹ ›, drag a corner or cell, then Done`;
     if (countWrap) countWrap.style.display = "none";
     if (undoBtn) undoBtn.style.display = "none";
+    const rotCcw = el("draw-rotate-ccw");
+    const rotCw = el("draw-rotate-cw");
+    // Rotate the WHOLE grid: spin the outer corners around their centre and
+    // re-derive the 9 cells from them (server auto-split). Coarse first, then
+    // per-cell drags fine-tune — a rotate after drags re-derives the cells.
+    let rotating = false;
+    const rotateBy = async (deg) => {
+      if (rotating || !Array.isArray(zone.corners) || zone.corners.length !== 4) return;
+      rotating = true;
+      try {
+        const corners = rotateCorners(zone.corners, deg);
+        const r = await fetch("/api/etagere/autosplit", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ corners, rows: zone.rows || DEFAULT_ROWS, cols: zone.cols || DEFAULT_COLS }),
+        });
+        if (!r.ok) { window.alert("Rotate failed: " + (await r.text())); return; }
+        const cells = (await r.json()).cells;
+        if (!Array.isArray(cells) || !cells.length) return;
+        zone.corners = corners;
+        zone.cells = cells;
+      } catch (e) {
+        window.alert("Rotate failed: " + e);
+      } finally {
+        rotating = false;
+      }
+    };
+    if (rotCcw) { rotCcw.classList.remove("hidden"); rotCcw.onclick = () => rotateBy(-ROTATE_STEP_DEG); }
+    if (rotCw)  { rotCw.classList.remove("hidden");  rotCw.onclick  = () => rotateBy(ROTATE_STEP_DEG); }
     bar?.classList.remove("hidden");
 
     const teardown = () => {
@@ -258,6 +287,8 @@ export function startAdjust(zoneId) {
       bar?.classList.add("hidden");
       if (countWrap) countWrap.style.display = "";
       if (undoBtn) undoBtn.style.display = "";
+      if (rotCcw) { rotCcw.classList.add("hidden"); rotCcw.onclick = null; }
+      if (rotCw)  { rotCw.classList.add("hidden");  rotCw.onclick = null; }
       editing = null;
       stopEditing = null;
     };

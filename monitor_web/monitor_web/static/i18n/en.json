@@ -130,5 +130,7 @@
   "group_etagere": "Étagère (bin-rack cells)",
   "zone_kind_title": "Add zone — which kind?",
   "zone_kind_floor": "Floor zone (polygon)",
-  "zone_kind_etagere": "Étagère (bin rack, 3×3 cells)"
+  "zone_kind_etagere": "Étagère (bin rack, 3×3 cells)",
+  "rotate_ccw": "Rotate grid anticlockwise",
+  "rotate_cw": "Rotate grid clockwise"
 }

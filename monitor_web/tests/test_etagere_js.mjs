@@ -65,3 +65,21 @@ const cornerBeatsMove = { cells: [
 assert.deepEqual(hitTest(cornerBeatsMove, 50, 50, 8), { cellIdx: 0, handle: "br" });
 
 console.log("etagere.js helpers OK");
+
+// rotateCorners: rotates around the centroid; 90° cw maps TL→TR on screen (y down);
+// 0° is identity; ±deg round-trips.
+{
+  const { rotateCorners } = await import("../monitor_web/static/js/etagere_geom.js");
+  const sq = [[0, 0], [10, 0], [10, 10], [0, 10]];   // TL,TR,BR,BL, centre (5,5)
+  const same = rotateCorners(sq, 0);
+  assert.deepEqual(same.map((p) => p.map(Math.round)), sq);
+  const cw = rotateCorners(sq, 90).map((p) => p.map((v) => Math.round(v) + 0));   // +0 folds -0
+  assert.deepEqual(cw, [[10, 0], [10, 10], [0, 10], [0, 0]]);   // TL moved to TR's spot
+  const back = rotateCorners(rotateCorners(sq, 7), -7).map((p) => p.map((v) => Math.round(v * 1000) / 1000));
+  assert.deepEqual(back, sq);
+  // centroid preserved
+  const r = rotateCorners(sq, 33);
+  const cx = r.reduce((a, p) => a + p[0], 0) / 4, cy = r.reduce((a, p) => a + p[1], 0) / 4;
+  assert.ok(Math.abs(cx - 5) < 1e-9 && Math.abs(cy - 5) < 1e-9);
+  console.log("rotateCorners OK");
+}

@@ -721,6 +721,10 @@
   <span class="draw-hint" data-i18n="draw_hint">{{ t.draw_hint or 'Click points on the map to define the polygon.' }}</span>
   <span class="draw-count"><span id="draw-count">0</span> <span data-i18n="points_label">{{ t.points_label or 'points' }}</span></span>
   <button id="draw-undo" class="glass-btn" data-i18n="undo">{{ t.undo or 'Undo' }}</button>
+  <!-- Étagère adjust mode only: rotate the whole grid (outer corners around
+       their centre, cells re-derived) a few degrees per click. -->
+  <button id="draw-rotate-ccw" class="glass-btn draw-rotate hidden" title="{{ t.rotate_ccw or 'Rotate grid anticlockwise' }}" aria-label="Rotate anticlockwise">&lsaquo;</button>
+  <button id="draw-rotate-cw" class="glass-btn draw-rotate hidden" title="{{ t.rotate_cw or 'Rotate grid clockwise' }}" aria-label="Rotate clockwise">&rsaquo;</button>
   <button id="draw-done" class="glass-btn draw-confirm" title="{{ t.done or 'Done' }}" aria-label="Done">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
   </button>

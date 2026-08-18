@@ -47,3 +47,17 @@ export function hitTest(zone, x, y, tol = HANDLE_PX) {
   }
   return { cellIdx: -1, handle: null };
 }
+
+// Rotate the outer quad (4 [x,y] corners) around its centroid by `deg`
+// (positive = clockwise on screen, y down). Cells are re-derived from the
+// rotated corners by the server's auto-split, so this rotates the whole grid.
+export function rotateCorners(corners, deg) {
+  const cx = corners.reduce((a, p) => a + p[0], 0) / corners.length;
+  const cy = corners.reduce((a, p) => a + p[1], 0) / corners.length;
+  const rad = (deg * Math.PI) / 180;
+  const c = Math.cos(rad), s = Math.sin(rad);
+  return corners.map(([x, y]) => {
+    const dx = x - cx, dy = y - cy;
+    return [cx + dx * c - dy * s, cy + dx * s + dy * c];
+  });
+}
