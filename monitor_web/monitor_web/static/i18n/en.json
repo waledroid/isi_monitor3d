@@ -127,5 +127,8 @@
   "etagere_model_conf": "Cell confidence threshold",
   "etagere_model_save": "Apply étagère model",
   "etagere_model_imgsz": "Inference size fixed by the export (px per cell):",
-  "group_etagere": "Étagère (bin-rack cells)"
+  "group_etagere": "Étagère (bin-rack cells)",
+  "zone_kind_title": "Add zone — which kind?",
+  "zone_kind_floor": "Floor zone (polygon)",
+  "zone_kind_etagere": "Étagère (bin rack, 3×3 cells)"
 }

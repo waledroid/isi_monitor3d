@@ -629,6 +629,29 @@
   </div>
 </div>
 
+<!-- Zone KIND picker — first step of "add zone": a floor/camera zone (polygon)
+     or an étagère (bin rack: 4 corners → 3x3 cell grid). Étagères are stored
+     in etagere.yaml but share the "Zone N" numbering with camera zones. -->
+<div id="zm-kind-picker" class="zm-draw-picker hidden" role="dialog" aria-modal="true"
+     aria-labelledby="zm-kind-picker-title">
+  <div class="zm-draw-picker-panel panel">
+    <h3 id="zm-kind-picker-title" data-i18n="zone_kind_title">
+      {{ t.zone_kind_title or 'Add zone — which kind?' }}
+    </h3>
+    <div class="zm-draw-picker-buttons">
+      <button class="glass-btn zm-kind-btn" data-kind="floor"
+              data-i18n="zone_kind_floor">{{ t.zone_kind_floor or 'Floor zone (polygon)' }}</button>
+      <button class="glass-btn zm-kind-btn" data-kind="etagere"
+              data-i18n="zone_kind_etagere">{{ t.zone_kind_etagere or 'Étagère (bin rack, 3×3 cells)' }}</button>
+    </div>
+    <div class="zm-draw-picker-footer">
+      <button id="zm-kind-picker-cancel" class="glass-btn" data-i18n="cancel">
+        {{ t.cancel or 'Cancel' }}
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- S18: calibration picker — opens on btn-calibrate click. Mode is decided
      by len(configured_cameras): 1 → pallet flow, 2 → Multical (S18.B). -->
 <div id="calibration-picker" class="zm-draw-picker hidden" role="dialog" aria-modal="true"

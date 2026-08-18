@@ -10,7 +10,7 @@
 // Alpine store) rather than inventing a new cam-choice mechanism. Corner
 // drag-adjust is not a click-collect flow like startDraw's other modes, so
 // it drives the shared #draw-toolbar's Done/Cancel buttons directly.
-import { startDraw } from "/static/js/draw_mode.js";
+import { promptZoneName, startDraw } from "/static/js/draw_mode.js";
 import { openPicker } from "/static/js/draw_target_picker.js";
 import { applyDrag, frameWhOrNull, hitTest } from "/static/js/etagere_geom.js";
 
@@ -70,13 +70,20 @@ async function pollStates() {
   } catch (_) { /* keep the last snapshot on a network blip */ }
 }
 
+// Étagères share the "Zone N" numbering + uniqueness with camera zones
+// (zone_patch.js owns the helpers; fall back to our own list if it's absent).
+function allZoneNames() {
+  const zp = window.__zonePatch;
+  if (zp?.allZoneNames) return zp.allZoneNames();
+  return (cfg.zones || []).map((z) => z.name).filter(Boolean);
+}
 function nextDefaultName() {
+  const zp = window.__zonePatch;
+  const names = allZoneNames();
+  if (zp?.nextZoneNumberName) return zp.nextZoneNumberName(names);
   let max = 0;
-  for (const z of cfg.zones || []) {
-    const m = /^Étagère (\d+)$/.exec(z.name || "");
-    if (m) max = Math.max(max, parseInt(m[1], 10));
-  }
-  return `Étagère ${max + 1}`;
+  for (const n of names) { const m = /^Zone (\d+)$/.exec(n || ""); if (m) max = Math.max(max, +m[1]); }
+  return `Zone ${max + 1}`;
 }
 
 // Same convention as floor_zones.js: hide the Settings overlay so the cam
@@ -107,7 +114,7 @@ export function startEtagereDraw(camId) {
       label: "Étagère — click the rack's 4 outer corners (TL, TR, BR, BL)",
       onDone: async (points) => {
         if (!points || points.length !== 4) { reopenSettingsOnZonesTab(); return; }
-        const name = window.prompt("Étagère name", nextDefaultName());
+        const name = promptZoneName(allZoneNames(), nextDefaultName());
         if (!name) { reopenSettingsOnZonesTab(); return; }
         const img = el(`${cam}-img`);
         // Read the frame size the SAME way live_overlay.js's overlays do
