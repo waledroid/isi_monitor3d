@@ -341,7 +341,7 @@ export function startDraw({
     return;
   }
 
-  toolbar.label.textContent = label || "Zone";
+  toolbar.label.textContent = label ?? "Zone";   // "" = intentionally blank
   toolbar.count.textContent = "0";
   toolbar.bar.classList.remove("hidden");
 

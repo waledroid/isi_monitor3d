@@ -79,7 +79,7 @@ export function startPatchDraw(camId) {
   startDraw({
     target: cam,
     mode: "raw",                 // source-frame pixels, no pixel→world projection
-    label: "Zone — click polygon points, then Done",
+    label: "",                   // no label — the toolbar hint says what to do
     minPoints: 3,                // a polygon (finish via the Done button)
     onDone: (points) => {
       if (!points || points.length < 3) return;
