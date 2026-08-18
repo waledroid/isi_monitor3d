@@ -147,3 +147,16 @@ def test_class_names_must_include_decide_labels(tmp_path: Path) -> None:
             "onnx_path": "x.onnx", "class_names": ["empty_box"]}))
     # both present, in any order/superset, is fine
     EtagereModel(onnx_path="x.onnx", class_names=["filled_box", "empty_box", "extra"])
+
+
+def test_cell_angle_deg_defaults_zero_and_is_bounded(tmp_path: Path) -> None:
+    from backbone.shared.etagere import EtagereCell
+    assert EtagereCell(r=1, c=1, rect=(0, 0, 10, 10)).angle_deg == 0.0
+    assert EtagereCell(r=1, c=1, rect=(0, 0, 10, 10), angle_deg=-12.5).angle_deg == -12.5
+    with pytest.raises(ValidationError):
+        EtagereCell(r=1, c=1, rect=(0, 0, 10, 10), angle_deg=200)
+    cells = _cells9()
+    cells[4]["angle_deg"] = 7
+    cfg = load_etagere_config(_cfg(tmp_path, zones=[{
+        "id": "z", "camera": "cam_a", "frame_wh": [640, 480], "cells": cells}]))
+    assert cfg.zones[0].cells[4].angle_deg == 7.0 and cfg.zones[0].cells[0].angle_deg == 0.0

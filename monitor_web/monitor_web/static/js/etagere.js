@@ -12,7 +12,7 @@
 // it drives the shared #draw-toolbar's Done/Cancel buttons directly.
 import { promptZoneName, startDraw } from "/static/js/draw_mode.js";
 import { openPicker } from "/static/js/draw_target_picker.js";
-import { applyDrag, frameWhOrNull, hitTest, rotateCorners } from "/static/js/etagere_geom.js";
+import { applyCellDrag, applyDrag, frameWhOrNull, hitTest } from "/static/js/etagere_geom.js";
 
 export { applyDrag, hitTest };
 
@@ -229,8 +229,8 @@ export function startAdjust(zoneId) {
       if (!drag) return;
       const p = toSrc(ev);
       if (!p) return;
-      zone.cells[drag.cellIdx].rect = applyDrag(
-        zone.cells[drag.cellIdx].rect, drag.handle, p[0] - drag.last[0], p[1] - drag.last[1]);
+      zone.cells[drag.cellIdx] = applyCellDrag(
+        zone.cells[drag.cellIdx], drag.handle, p[0] - drag.last[0], p[1] - drag.last[1]);
       drag.last = p;
     };
     const up = () => { drag = null; };
@@ -249,28 +249,16 @@ export function startAdjust(zoneId) {
     if (undoBtn) undoBtn.style.display = "none";
     const rotCcw = el("draw-rotate-ccw");
     const rotCw = el("draw-rotate-cw");
-    // Rotate the WHOLE grid: spin the outer corners around their centre and
-    // re-derive the 9 cells from them (server auto-split). Coarse first, then
-    // per-cell drags fine-tune — a rotate after drags re-derives the cells.
-    let rotating = false;
-    const rotateBy = async (deg) => {
-      if (rotating || !Array.isArray(zone.corners) || zone.corners.length !== 4) return;
-      rotating = true;
-      try {
-        const corners = rotateCorners(zone.corners, deg);
-        const r = await fetch("/api/etagere/autosplit", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ corners, rows: zone.rows || DEFAULT_ROWS, cols: zone.cols || DEFAULT_COLS }),
-        });
-        if (!r.ok) { window.alert("Rotate failed: " + (await r.text())); return; }
-        const cells = (await r.json()).cells;
-        if (!Array.isArray(cells) || !cells.length) return;
-        zone.corners = corners;
-        zone.cells = cells;
-      } catch (e) {
-        window.alert("Rotate failed: " + e);
-      } finally {
-        rotating = false;
+    // Rotate EACH cell in place about its own centre by the same step, so the
+    // cells follow the bins' tilt without moving off their positions. Purely
+    // client-side (angle_deg per cell); Done persists it, isistream then
+    // warps each cell upright before cropping.
+    const rotateBy = (deg) => {
+      for (const c of zone.cells || []) {
+        let a = ((c.angle_deg || 0) + deg);
+        if (a > 180) a -= 360;
+        if (a < -180) a += 360;
+        c.angle_deg = Math.round(a * 100) / 100;
       }
     };
     if (rotCcw) { rotCcw.classList.remove("hidden"); rotCcw.onclick = () => rotateBy(-ROTATE_STEP_DEG); }

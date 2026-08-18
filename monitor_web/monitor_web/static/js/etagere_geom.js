@@ -32,20 +32,64 @@ export function frameWhOrNull(w, h) {
   return [Math.round(w), Math.round(h)];
 }
 
+// --- rotated cells -----------------------------------------------------------
+// A cell is its axis-aligned `rect` rotated by `angle_deg` about the rect's
+// centre (positive = clockwise on screen, y down). Editing works in the cell's
+// LOCAL (unrotated) frame: pointer positions/deltas are un-rotated into it,
+// then the plain axis-aligned `applyDrag`/containment logic applies.
+export function cellCentre(rect) {
+  return [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2];
+}
+
+export function rotateVec(dx, dy, deg) {
+  const rad = (deg * Math.PI) / 180;
+  const c = Math.cos(rad), s = Math.sin(rad);
+  return [dx * c - dy * s, dx * s + dy * c];
+}
+
+// Screen-space corners TL,TR,BR,BL of a (possibly rotated) cell.
+export function cellCorners(cell) {
+  const [x0, y0, x1, y1] = cell.rect;
+  const a = cell.angle_deg || 0;
+  const [cx, cy] = cellCentre(cell.rect);
+  return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => {
+    const [rx, ry] = rotateVec(x - cx, y - cy, a);
+    return [cx + rx, cy + ry];
+  });
+}
+
+// Screen point → the cell's local (unrotated) frame.
+export function toCellLocal(cell, x, y) {
+  const [cx, cy] = cellCentre(cell.rect);
+  const [lx, ly] = rotateVec(x - cx, y - cy, -(cell.angle_deg || 0));
+  return [cx + lx, cy + ly];
+}
+
 export function hitTest(zone, x, y, tol = HANDLE_PX) {
   const cells = zone.cells || [];
   for (let i = cells.length - 1; i >= 0; i--) {          // top-most first
+    const [lx, ly] = toCellLocal(cells[i], x, y);
     const [x0, y0, x1, y1] = cells[i].rect;
     const corners = { tl: [x0, y0], tr: [x1, y0], br: [x1, y1], bl: [x0, y1] };
     for (const [h, [cx, cy]] of Object.entries(corners)) {
-      if (Math.abs(cx - x) <= tol && Math.abs(cy - y) <= tol) return { cellIdx: i, handle: h };
+      if (Math.abs(cx - lx) <= tol && Math.abs(cy - ly) <= tol) return { cellIdx: i, handle: h };
     }
   }
   for (let i = cells.length - 1; i >= 0; i--) {
+    const [lx, ly] = toCellLocal(cells[i], x, y);
     const [x0, y0, x1, y1] = cells[i].rect;
-    if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return { cellIdx: i, handle: "move" };
+    if (lx >= x0 && lx <= x1 && ly >= y0 && ly <= y1) return { cellIdx: i, handle: "move" };
   }
   return { cellIdx: -1, handle: null };
+}
+
+// Apply a screen-space drag delta to a (possibly rotated) cell: "move"
+// translates the rect as-is; corner handles resize in the local frame, so a
+// rotated cell's corner follows the pointer along its own tilted axes.
+export function applyCellDrag(cell, handle, dx, dy) {
+  if (handle === "move") return { ...cell, rect: applyDrag(cell.rect, "move", dx, dy) };
+  const [ldx, ldy] = rotateVec(dx, dy, -(cell.angle_deg || 0));
+  return { ...cell, rect: applyDrag(cell.rect, handle, ldx, ldy) };
 }
 
 // Rotate the outer quad (4 [x,y] corners) around its centroid by `deg`

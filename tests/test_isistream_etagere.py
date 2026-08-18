@@ -112,10 +112,10 @@ def test_run_isolates_a_zone_whose_crop_building_raises() -> None:
     ed = EtagereDetector(_cfg_two_zones(), fake)
     orig_crop = ed._crop
 
-    def flaky_crop(frame, zone, rect):
+    def flaky_crop(frame, zone, rect, angle_deg=0.0):
         if zone.id == "et_1":
             raise ValueError("boom")
-        return orig_crop(frame, zone, rect)
+        return orig_crop(frame, zone, rect, angle_deg)
 
     ed._crop = flaky_crop
     msgs = ed.run({"cam_a": _frame()}, now=0.0)
@@ -263,3 +263,33 @@ def test_build_etagere_stage_detector_build_failure_logs_error(tmp_path, caplog,
     assert len(caplog.records) == 1
     assert caplog.records[0].levelno == logging.ERROR
     assert "detector failed to build" in caplog.records[0].message
+
+
+def test_rotated_cell_is_cropped_upright() -> None:
+    """A cell with angle_deg is warped upright before cropping: a bright bar
+    painted along the cell's tilted axis comes out horizontal in the crop."""
+    import cv2
+
+    from backbone.shared.etagere import EtagereCell
+    fake = _FakeDet({})
+    # one 1x1 "grid": a 200x60 cell centred at (320,240), tilted 20° clockwise
+    cell = EtagereCell(r=1, c=1, rect=(220, 210, 420, 270), angle_deg=20.0)
+    cfg = EtagereConfig(
+        model=EtagereModel(onnx_path="x.onnx", crop_margin=0.0),
+        zones=(EtagereZone(id="z", camera="cam_a", frame_wh=(640, 480),
+                           rows=1, cols=1, cells=(cell,)),),
+    )
+    img = np.zeros((480, 640, 3), np.uint8)
+    # bright bar along the tilted axis: draw axis-aligned then rotate the IMAGE
+    # by 20° clockwise about the cell centre (cv2 positive angle = CCW → use -20)
+    cv2.rectangle(img, (240, 232), (400, 248), (255, 255, 255), -1)
+    m = cv2.getRotationMatrix2D((320, 240), -20.0, 1.0)
+    img = cv2.warpAffine(img, m, (640, 480))
+    ed = EtagereDetector(cfg, fake)
+    ed.run({"cam_a": Frame(camera_id="cam_a", capture_ts=0.0, frame_idx=0, image=img)}, now=0.0)
+    crop = fake.pairs[0].frames["z:1:1"].image
+    h, w = crop.shape[:2]
+    assert (w, h) == (200, 60)
+    mid = crop[h // 2 - 2:h // 2 + 3, 20:-20].mean()     # along the horizontal middle
+    top = crop[2:7, 20:-20].mean()                         # top band should be dark
+    assert mid > 200 and top < 40, (mid, top)

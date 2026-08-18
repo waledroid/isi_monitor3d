@@ -24,6 +24,10 @@ class EtagereCell(BaseModel):
     r: int = Field(..., ge=1)
     c: int = Field(..., ge=1)
     rect: tuple[float, float, float, float]   # x0, y0, x1, y1 (source px)
+    # Rotation of the cell rectangle about its own centre, degrees, positive =
+    # clockwise on screen (y down). isistream warps the cell UPRIGHT by this
+    # angle before cropping, so tilted racks still yield training-like crops.
+    angle_deg: float = Field(0.0, ge=-180.0, le=180.0)
 
     @model_validator(mode="after")
     def _ordered(self) -> "EtagereCell":  # noqa: UP037
