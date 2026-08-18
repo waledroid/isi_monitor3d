@@ -5,6 +5,7 @@
 
 import { renderActiveCamPreview } from "/static/js/draw_mode.js";
 import { getGhosts, getPatches } from "/static/js/zone_patch.js";
+import { getStates, getZones, isEditing } from "/static/js/etagere.js";
 
 const OVERLAYS = [
   { camId: "cam_a", canvasId: "cam_a-overlay", imgId: "cam_a-img" },
@@ -24,6 +25,12 @@ function naturalSize(img, camId) {
   const pt = window.__passthrough;
   return (pt && pt.frameSize && pt.frameSize(camId)) || [0, 0];
 }
+// Exposed for modules that must not import this one (e.g. etagere.js, whose
+// browser-only absolute-path imports make it un-importable from live_overlay)
+// but still need the SAME "naturalWidth, or the passthrough player's decoded
+// frame size" fallback — see __displayToSource just below for the sibling
+// export convention.
+window.__naturalSize = naturalSize;
 
 // `box` is the overlay canvas's OWN layout box {w, h} — never the <img>'s.
 // The img's layout transiently collapses during view switches / expand
@@ -38,6 +45,28 @@ function sourceToDisplay(box, su, sv, natW, natH) {
   const offsetY = (dh - renderedH) / 2;
   return [su * scale + offsetX, sv * scale + offsetY];
 }
+
+// Inverse of sourceToDisplay, PLUS the natural→frame_wh rescale drawEtagere
+// applies going the other way (see its `sx`/`sy`) — so callers get back
+// coordinates in the SAME frame_wh pixel space a zone's `cells[].rect` is
+// stored in, ready to feed into etagere.js's `hitTest`/`applyDrag`.
+// `dx, dy` are canvas-local pixels (e.g. a mouse event's offsetX/offsetY).
+function displayToSourceForCam(canvas, camId, dx, dy, frameWh) {
+  const img = document.getElementById(`${camId}-img`);
+  const [natW, natH] = img ? naturalSize(img, camId) : [0, 0];
+  if (!natW || !natH) return [0, 0];
+  const box = { w: canvas.clientWidth, h: canvas.clientHeight };
+  const scale = Math.min(box.w / natW, box.h / natH);
+  const offsetX = (box.w - natW * scale) / 2;
+  const offsetY = (box.h - natH * scale) / 2;
+  const nx = (dx - offsetX) / scale;
+  const ny = (dy - offsetY) / scale;
+  const fw = (frameWh && frameWh[0]) || natW;
+  const fh = (frameWh && frameWh[1]) || natH;
+  const sx = natW / fw, sy = natH / fh;
+  return [nx / sx, ny / sy];
+}
+window.__displayToSource = displayToSourceForCam;
 
 // Pixel-space zone-patch ROIs — bold red POLYGONS (no calibration). The polygon is
 // the drawn shape (its bounding rect is what gets cropped for detection); legacy
@@ -125,6 +154,70 @@ function drawPatchGhosts(ctx, box, img, camId) {
   }
 }
 
+// Étagère (bin-rack) cell outlines + live fill state — analogous to
+// drawZonePatches but rectangular cells, colour-by-state, and (while the
+// Settings "Adjust cells" drag session for this zone is open) corner
+// handles. Coords are source px at frame_wh; rescale to natural, then map
+// to display — same convention as drawZonePatches/drawPatchGhosts above.
+function drawEtagere(ctx, box, img, camId) {
+  const zones = getZones(camId);
+  if (!zones.length) return;
+  const [natW, natH] = naturalSize(img, camId);
+  if (!natW || !natH) return;
+  const allStates = getStates();
+  ctx.lineWidth = 2;
+  ctx.font = "bold 10px monospace";
+  for (const z of zones) {
+    const fw = (z.frame_wh && z.frame_wh[0]) || natW;
+    const fh = (z.frame_wh && z.frame_wh[1]) || natH;
+    const sx = natW / fw, sy = natH / fh;
+    const st = allStates[z.id];
+    const matrix = st && st.matrix;
+    const editingThis = isEditing(z.id);
+    for (const cell of z.cells || []) {
+      const [x0, y0, x1, y1] = cell.rect;
+      const [dx0, dy0] = sourceToDisplay(box, x0 * sx, y0 * sy, natW, natH);
+      const [dx1, dy1] = sourceToDisplay(box, x1 * sx, y1 * sy, natW, natH);
+      const rx0 = Math.min(dx0, dx1), ry0 = Math.min(dy0, dy1);
+      const rw = Math.abs(dx1 - dx0), rh = Math.abs(dy1 - dy0);
+
+      let state = "unknown";
+      if (matrix && matrix[cell.r - 1] && matrix[cell.r - 1][cell.c - 1] != null) {
+        state = matrix[cell.r - 1][cell.c - 1];
+      }
+      let stroke = "#9aa0a6", fill = "rgba(154,160,166,0.25)", dash = [];
+      if (state === "filled") { stroke = "#2ea043"; fill = "rgba(46,160,67,0.25)"; }
+      else if (state === "empty") { stroke = "#9aa0a6"; fill = "rgba(154,160,166,0.25)"; }
+      else { stroke = "#f0a028"; fill = "rgba(240,160,40,0.2)"; dash = [4, 3]; }
+
+      ctx.setLineDash(dash);
+      ctx.fillStyle = fill;
+      ctx.fillRect(rx0, ry0, rw, rh);
+      ctx.strokeStyle = stroke;
+      ctx.strokeRect(rx0, ry0, rw, rh);
+      ctx.setLineDash([]);
+
+      const label = `r${cell.r}c${cell.c}`;
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(rx0 + 2, ry0 + 2, tw + 6, 13);
+      ctx.fillStyle = "#fff";
+      ctx.fillText(label, rx0 + 5, ry0 + 12);
+
+      if (editingThis) {
+        ctx.fillStyle = "#fff";
+        ctx.strokeStyle = "#111";
+        ctx.lineWidth = 1;
+        for (const [hx, hy] of [[rx0, ry0], [rx0 + rw, ry0], [rx0 + rw, ry0 + rh], [rx0, ry0 + rh]]) {
+          ctx.fillRect(hx - 3, hy - 3, 6, 6);
+          ctx.strokeRect(hx - 3, hy - 3, 6, 6);
+        }
+        ctx.lineWidth = 2;
+      }
+    }
+  }
+}
+
 function drawForCam(canvas, img, camId) {
   if (canvas.classList.contains("hidden")) return;
   // Size the backing store from the CANVAS's own CSS box (pinned to 100% of
@@ -144,6 +237,7 @@ function drawForCam(canvas, img, camId) {
   // toggle (routes_video); this canvas draws only the operator's patch layer.
   drawZonePatches(ctx, box, img, camId);         // pixel-space red ROI watch boxes
   drawPatchGhosts(ctx, box, img, camId);         // cross-camera ghost outlines (Mode 2)
+  drawEtagere(ctx, box, img, camId);             // bin-rack cells, colour-by-state
   renderActiveCamPreview(camId);                 // keep calibration dots over the live frame
 }
 

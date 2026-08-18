@@ -1,0 +1,10 @@
+# Étagère (bin-rack) zones — authored by the dashboard Settings (Étagère
+# section), consumed by isistream. Image-space per-camera cell rects.
+model:
+  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/detect/models/yolo/yolo26n_e100_320px_17-08-2026_12-10-27/weights/best.onnx
+  class_names: [empty_box, filled_box]
+  imgsz: 320
+  confidence_threshold: 0.3
+  crop_margin: 0.08
+  max_fps: 2.0
+zones: []

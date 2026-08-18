@@ -298,3 +298,20 @@ def test_fragment_buffer_prunes_stale_and_rejects_inconsistent() -> None:
     assert buf.add(FragmentMessage(fid="bbb", i=0, n=2, data="a"), now=5.0) is None
     assert buf.add(FragmentMessage(fid="bbb", i=1, n=3, data="b"), now=5.0) is None
     assert buf.add(FragmentMessage(fid="bbb", i=1, n=2, data="b"), now=5.0) is None
+
+
+def test_publish_etagere_state_arrives_as_json() -> None:
+    from backbone.comms.schemas import EtagereCellState, EtagereStateMessage
+    sock, port = _bind_receiver()
+    try:
+        sink = UdpSink(host="127.0.0.1", port=port)
+        sink.publish_etagere_state(EtagereStateMessage(
+            ts=1.0, camera_id="cam_a", zone_id="et_1", rows=1, cols=1,
+            cells=(EtagereCellState(r=1, c=1, state="empty"),), stabilized=True))
+        payload, _ = sock.recvfrom(8192)
+        msg = json.loads(payload.decode("utf-8"))
+        assert msg["type"] == "etagere_state" and msg["zone_id"] == "et_1"
+        assert msg["cells"][0]["state"] == "empty" and msg["stabilized"] is True
+        sink.close()
+    finally:
+        sock.close()

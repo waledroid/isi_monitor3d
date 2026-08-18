@@ -120,5 +120,7 @@
   "zone_base_height": "Hauteur de base (m)",
   "floor_zone_redraw": "Redessiner sur la caméra (clics décodés à la hauteur de base)",
   "floor_zone_redraw_hint_plane": "Cliquez ≥3 points de bord SUR la surface surélevée",
-  "floor_zone_height_prompt": "Hauteur de la surface de la zone en mètres (0 = sol ; ex. 0.304 pour une plateforme)"
+  "floor_zone_height_prompt": "Hauteur de la surface de la zone en mètres (0 = sol ; ex. 0.304 pour une plateforme)",
+  "etagere_section": "Étagères (racks, dessinées sur la caméra)",
+  "etagere_add": "+ Dessiner une étagère (4 coins) sur la caméra"
 }

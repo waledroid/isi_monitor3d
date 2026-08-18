@@ -454,6 +454,18 @@
               <p class="layout-hint" data-i18n="cam_zones_empty">Draw a zone on a camera view — it appears here.</p>
             </div>
           </section>
+          <!-- Étagères (bin racks): 4 outer corners drawn on a cam → server
+               auto-splits into a rows×cols grid → drag-adjust corners/cells.
+               Synced from /api/etagere; occupancy comes from the Backbone via
+               /api/etagere/state (no inference in the dashboard). -->
+          <section class="config-section">
+            <h3 data-i18n="etagere_section">{{ t.etagere_section or 'Étagères (bin racks, drawn on CAM)' }}</h3>
+            <div id="zm-etagere-list" class="config-zone-list">
+              <p class="layout-hint" data-i18n="etagere_empty">No étagère yet — draw one on a camera.</p>
+            </div>
+            <button id="zm-etagere-add" class="glass-btn config-link-add" type="button"
+                    data-i18n="etagere_add">{{ t.etagere_add or '+ Draw étagère (4 corners) on camera' }}</button>
+          </section>
           <!-- Metric FLOOR zones (zones.yaml, world metres — the Backbone's zones:
                passings, MQTT zone/ topics, subscriptions). Drawn by clicking floor
                points on EITHER camera; shown in both cam views + the map. -->

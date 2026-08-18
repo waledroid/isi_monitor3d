@@ -25,6 +25,7 @@ import paho.mqtt.client as mqtt
 from backbone.comms.schemas import (
     ConfigMessage,
     DiagnosticsMessage,
+    EtagereStateMessage,
     ImageRefMessage,
     PassingEventMessage,
     SchemaVersionError,
@@ -56,6 +57,7 @@ class NodeState:
     last_track3d_by_id: dict[int, Track3DMessage] = field(default_factory=dict)
     passings: deque = field(default_factory=deque)   # maxlen set at init
     zone_state_by_zone: dict[str, ZoneStateMessage] = field(default_factory=dict)
+    etagere_by_zone: dict[str, EtagereStateMessage] = field(default_factory=dict)
     last_diagnostics: DiagnosticsMessage | None = None
     config: ConfigMessage | None = None
     last_seen: float = 0.0   # time.time() at last update
@@ -325,6 +327,7 @@ class MqttSubscriber:
             | PassingEventMessage
             | ImageRefMessage
             | ZoneStateMessage
+            | EtagereStateMessage
             | DiagnosticsMessage
             | ConfigMessage
         ),
@@ -368,6 +371,8 @@ class MqttSubscriber:
                 # rename overwrites the same entry instead of stranding an
                 # old-name orphan; legacy id-less payloads key by name.
                 node.zone_state_by_zone[msg.zone_id or msg.zone] = msg
+            elif isinstance(msg, EtagereStateMessage):
+                node.etagere_by_zone[msg.zone_id] = msg
             elif isinstance(msg, DiagnosticsMessage):
                 node.last_diagnostics = msg
             elif isinstance(msg, ConfigMessage):
@@ -395,6 +400,7 @@ class MqttSubscriber:
                     last_track3d_by_id=dict(node.last_track3d_by_id),
                     passings=deque(node.passings),
                     zone_state_by_zone=dict(node.zone_state_by_zone),
+                    etagere_by_zone=dict(node.etagere_by_zone),
                     last_diagnostics=node.last_diagnostics,
                     config=node.config,
                     last_seen=node.last_seen,

@@ -90,6 +90,18 @@ class Publisher:
                     "sink %s failed on publish_zone_state", type(sink).__name__, exc_info=True
                 )
 
+    def publish_etagere_state(self, msg: object) -> None:
+        """Fan-out an ``EtagereStateMessage`` (MQTT publishes it retained)."""
+        if self._closed:
+            return
+        for sink in self._sinks:
+            try:
+                sink.publish_etagere_state(msg)
+            except Exception:
+                logger.warning(
+                    "sink %s failed on publish_etagere_state", type(sink).__name__, exc_info=True
+                )
+
     def publish_proximity(self, msg: object) -> None:
         """Fan-out a ``ProximityMessage`` to all sinks (MQTT retains it)."""
         if self._closed:

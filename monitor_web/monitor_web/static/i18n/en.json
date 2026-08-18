@@ -120,5 +120,7 @@
   "zone_base_height": "Base height (m)",
   "floor_zone_redraw": "Redraw on camera (clicks decode at the base height)",
   "floor_zone_redraw_hint_plane": "Click ≥3 edge points ON the raised surface",
-  "floor_zone_height_prompt": "Base height of the zone's surface in metres (0 = floor; e.g. 0.304 for a platform)"
+  "floor_zone_height_prompt": "Base height of the zone's surface in metres (0 = floor; e.g. 0.304 for a platform)",
+  "etagere_section": "Étagères (bin racks, drawn on CAM)",
+  "etagere_add": "+ Draw étagère (4 corners) on camera"
 }

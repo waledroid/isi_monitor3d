@@ -28,6 +28,7 @@ class _RecordingSink(MetadataSink):
         self.diagnostics: list[object] = []
         self.configs: list[object] = []
         self.zone_states: list[object] = []
+        self.etagere_states: list[object] = []
         self.closed = False
         self._raise_on_2d = raise_on_2d
         self._raise_on_3d = raise_on_3d
@@ -59,6 +60,9 @@ class _RecordingSink(MetadataSink):
         if self._raise_on_zone_state:
             raise RuntimeError("simulated zone-state failure")
         self.zone_states.append(msg)
+
+    def publish_etagere_state(self, msg: object) -> None:
+        self.etagere_states.append(msg)
 
     def close(self) -> None:
         self.closed = True
@@ -285,3 +289,23 @@ def test_advertise_zones_default_noop_and_raising_sink_swallowed() -> None:
     good = _RecordingSink()   # exercises the ABC's default no-op
     pub = Publisher([_BadAdvertiser(), good])
     pub.advertise_zones([("Loading Bay", "z1")])   # must not raise
+
+
+def test_fan_out_etagere_state() -> None:
+    from backbone.comms.schemas import EtagereStateMessage
+    a, b = _RecordingSink(), _RecordingSink()
+    pub = Publisher([a, b])
+    msg = EtagereStateMessage(ts=0.0, camera_id="cam_a", zone_id="z", cells=())
+    pub.publish_etagere_state(msg)
+    assert a.etagere_states == [msg] and b.etagere_states == [msg]
+
+
+def test_sink_default_publish_etagere_state_is_noop() -> None:
+    from backbone.comms.schemas import EtagereStateMessage
+    class _Bare(MetadataSink):
+        # only the abstract methods, copied from how _RecordingSink satisfies the ABC
+        def publish_track_2d(self, track): pass
+        def publish_track_3d(self, track): pass
+        def close(self): pass
+    _Bare().publish_etagere_state(
+        EtagereStateMessage(ts=0.0, camera_id="cam_a", zone_id="z", cells=()))   # must not raise

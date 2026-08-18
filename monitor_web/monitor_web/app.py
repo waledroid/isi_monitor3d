@@ -19,6 +19,7 @@ from .api import (
     routes_cameras,
     routes_config,
     routes_control,
+    routes_etagere,
     routes_gateway,
     routes_logs,
     routes_map,
@@ -197,5 +198,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(routes_ws.router)
     app.include_router(routes_ws_video.router)
     app.include_router(routes_zone_patches.router)
+    app.include_router(routes_etagere.router)
 
     return app

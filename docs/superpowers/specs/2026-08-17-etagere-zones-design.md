@@ -29,7 +29,8 @@ beyond hysteresis, whole-rack single-pass detection, dashboard-side inference.
 
 ```yaml
 model:
-  onnx_path: trainer/isidet/runs/detect/models/yolo/yolo26n_e100_320px_17-08-2026_12-10-27/weights/best.onnx
+  # absolute, or relative to the repo root (isistream has no fixed cwd)
+  onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/detect/models/yolo/yolo26n_e100_320px_17-08-2026_12-10-27/weights/best.onnx
   class_names: [empty_box, filled_box]
   imgsz: 320
   confidence_threshold: 0.3

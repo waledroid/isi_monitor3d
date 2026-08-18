@@ -27,6 +27,7 @@ from .schemas import (
     SCHEMA_VERSION,
     ConfigMessage,
     DiagnosticsMessage,
+    EtagereStateMessage,
     ImageRefMessage,
     ObservationsMessage,
     PassingEventMessage,
@@ -117,6 +118,10 @@ class UdpSink(MetadataSink):
 
     def publish_zone_state(self, msg: object) -> None:
         assert isinstance(msg, ZoneStateMessage)
+        self._send(msg.model_dump_json().encode("utf-8"))
+
+    def publish_etagere_state(self, msg: object) -> None:
+        assert isinstance(msg, EtagereStateMessage)
         self._send(msg.model_dump_json().encode("utf-8"))
 
     def publish_proximity(self, msg: object) -> None:
