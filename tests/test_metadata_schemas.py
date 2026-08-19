@@ -466,7 +466,11 @@ def test_zone_state_json_roundtrip() -> None:
     msg = _make_zone_state()
     data = json.loads(msg.model_dump_json())
     back = ZoneStateMessage.model_validate(data)
-    assert back == msg
+    # The wire is stable through a roundtrip. Full model equality no longer
+    # holds when the fixture sets occupancy values: the occupancy trio is
+    # excluded from serialisation (2026-08-19) so it comes back as defaults.
+    assert json.loads(back.model_dump_json()) == data
+    assert back.model_copy(update={"objects": msg.objects}) == msg
 
 
 def test_parse_envelope_dispatches_zone_state() -> None:
@@ -834,3 +838,25 @@ def test_zone_state_class_confidence_defaults_and_roundtrip() -> None:
     legacy = json.loads(empty.model_dump_json())
     legacy.pop("class_confidence")
     assert parse_envelope(legacy).class_confidence == {}
+
+
+def test_zone_object_occupancy_fields_off_the_wire_but_old_payloads_parse() -> None:
+    """The occupancy trio is retired from serialisation (null/0 noise; the
+    verdict lives in `decision`) yet old/retained payloads carrying the keys
+    must still parse."""
+    from backbone.comms.schemas import ZoneObject, ZoneStateMessage, parse_envelope
+
+    obj = ZoneObject(track_id=1, cls="palette", confidence=0.9, xy_m=(1.0, 2.0),
+                     occupancy_state="empty", occupancy_confidence=0.6)
+    dumped = json.loads(obj.model_dump_json())
+    assert set(dumped) == {"track_id", "cls", "confidence", "xy_m"}
+
+    msg = ZoneStateMessage(ts=0.0, zone="Z", zone_id="z1", objects=(obj,), count=1)
+    wire = json.loads(msg.model_dump_json())
+    assert "occupancy_state" not in wire["objects"][0]
+
+    old_payload = dict(wire)
+    old_payload["objects"] = [{**wire["objects"][0], "occupancy_state": "full",
+                               "occupancy_content": "carton", "occupancy_confidence": 0.8}]
+    back = parse_envelope(old_payload)
+    assert back.objects[0].occupancy_state == "full"     # accepted, just not re-emitted

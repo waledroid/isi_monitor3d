@@ -256,10 +256,14 @@ class ZoneObject(BaseModel):
     cls: str
     confidence: float = Field(..., ge=0.0, le=1.0)
     xy_m: tuple[float, float]
-    # Pallet occupancy (the empty/full KPI) — optional, mirrors Track2DMessage.
-    occupancy_state: str | None = None          # "empty" | "full" | None
-    occupancy_content: str | None = None        # "carton" | "polybag" | None
-    occupancy_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Pallet occupancy — RETIRED FROM THE WIRE 2026-08-19 (they were null/0
+    # noise on most objects; the stabilised verdict lives in `decision`).
+    # Kept as accepted-but-never-serialised fields so retained/old payloads
+    # that still carry the keys parse cleanly (extra="forbid" would otherwise
+    # reject them); `exclude=True` keeps every new dump free of them.
+    occupancy_state: str | None = Field(default=None, exclude=True)
+    occupancy_content: str | None = Field(default=None, exclude=True)
+    occupancy_confidence: float = Field(default=0.0, ge=0.0, le=1.0, exclude=True)
 
 
 class ZoneDecisionModel(BaseModel):
