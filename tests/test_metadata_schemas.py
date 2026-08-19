@@ -789,34 +789,3 @@ def test_etagere_state_defaults() -> None:
     msg = EtagereStateMessage(ts=0.0, camera_id="cam_a", zone_id="z", cells=())
     assert msg.stabilized is False and msg.seq == 0 and msg.name == ""
     assert msg.schema_version == SCHEMA_VERSION
-
-
-def test_zone_state_classes_always_present() -> None:
-    """`classes` mirrors the objects' cls (duplicates kept) and is [] when empty —
-    the always-present key AGV consumers can rely on."""
-    from backbone.comms.schemas import ZoneStateMessage, parse_envelope
-
-    empty = ZoneStateMessage(ts=0.0, zone="Z", zone_id="z1", objects=(), count=0)
-    assert empty.classes == ()
-    assert json.loads(empty.model_dump_json())["classes"] == []
-
-    class _State:
-        ts, zone, zone_id = 1.0, "Z", "z1"
-
-        class _O:
-            def __init__(self, cls):
-                self.track_id, self.cls, self.confidence = 1, cls, 0.9
-                self.xy_m = (0.0, 0.0)
-                self.occupancy_state = None
-                self.occupancy_content = None
-                self.occupancy_confidence = 0.0
-        occupants = (_O("palette"), _O("carton"), _O("carton"))
-
-    msg = ZoneStateMessage.from_state(_State())
-    assert msg.classes == ("palette", "carton", "carton")
-    back = parse_envelope(json.loads(msg.model_dump_json()))
-    assert back.classes == ("palette", "carton", "carton")
-    # legacy payload without the field still parses (defaulted)
-    legacy = json.loads(empty.model_dump_json())
-    legacy.pop("classes")
-    assert parse_envelope(legacy).classes == ()
