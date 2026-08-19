@@ -266,3 +266,13 @@ def test_zone_state_joined_by_stable_id(client):
     r = client.get("/zones")
     entry = {z["zone_id"]: z for z in r.json()["zones"]}["zp_aaa"]
     assert entry["count"] == 1 and entry["objects"] is not None
+
+
+def test_zone_entry_carries_classes(client):
+    """/zones exposes the always-present class list from the retained state."""
+    sub = client.app.state.subscriber
+    sub.update_from_message("node_a", make_config("node_a"))
+    sub.update_from_message("node_a", make_zone_state("rack_a"))
+    z = client.get("/zones").json()["zones"][0]
+    assert z["classes"] == ["palette"]
+    # legacy state without the field → [] (getattr default), never a crash

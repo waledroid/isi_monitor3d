@@ -36,6 +36,8 @@ def _zone_entry(node_id: str, area: str, zspec, state) -> dict:
         # received yet — distinct from an explicit empty list).
         "objects": [o.model_dump(mode="json") for o in state.objects] if state else None,
         "count": state.count if state else None,
+        # Always-present class summary (mirrors objects[].cls; [] = empty zone).
+        "classes": list(getattr(state, "classes", ())) if state else None,
         "state_ts": state.ts if state else None,
         # PalletStateManager verdict (additive) — None until a decision-carrying
         # Backbone publishes (mixed-version tolerance: older payloads lack it).
