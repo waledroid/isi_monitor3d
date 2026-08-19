@@ -699,14 +699,15 @@ def test_topic_zone_name_restores_legacy_segment() -> None:
         sink.publish_zone_state(
             ZoneStateMessage(ts=1.0, zone="Loading Bay", zone_id="z1", objects=(), count=0)
         )
-        # name is sanitised (space kept — only / + # are stripped) and used verbatim.
-        assert mock_instance.publish.call_args[0][0] == "isiMonitor3D/v1/node/zone/Loading Bay"
+        # name mode SLUGS the label: lowercase, spaces → underscores (2026-08-19
+        # convention — consumers subscribe to e.g. zone/zone_1 without quoting).
+        assert mock_instance.publish.call_args[0][0] == "isiMonitor3D/v1/node/zone/loading_bay"
 
         ev = PassingEvent(track_id=3, cls="palette", zone="Loading Bay",
                           zone_id="z1", direction="enter", ts=5.0)
         sink.publish_event(ev)
         assert mock_instance.publish.call_args[0][0] == (
-            "isiMonitor3D/v1/node/zone/Loading Bay/passings"
+            "isiMonitor3D/v1/node/zone/loading_bay/passings"
         )
         sink.close()
 
@@ -850,7 +851,7 @@ def test_reconcile_respects_topic_zone_name_mode() -> None:
     mock_instance.publish.reset_mock()
 
     sink._on_reconcile_message(
-        mock_instance, None, _retained_msg("isi/v1/node/zone/Loading Bay")
+        mock_instance, None, _retained_msg("isi/v1/node/zone/loading_bay")
     )
     sink._on_reconcile_message(
         mock_instance, None, _retained_msg("isi/v1/node/zone/zp_live")
@@ -858,7 +859,7 @@ def test_reconcile_respects_topic_zone_name_mode() -> None:
     sink._finish_zone_reconcile()
 
     cleared = {c[0][0] for c in mock_instance.publish.call_args_list if c[0][1] == b""}
-    # Name-keyed topic is active; the id-keyed one is a stale leftover.
+    # SLUG-keyed topic is active; the id-keyed one is a stale leftover.
     assert cleared == {"isi/v1/node/zone/zp_live"}
     sink.close()
 
@@ -914,4 +915,17 @@ def test_publish_etagere_state_custom_topic() -> None:
         sink.publish_etagere_state(_make_etagere_state())
         assert mock_instance.publish.call_args[0][0] == "p/shelf/et_1"
         assert mock_instance.publish.call_args[1]["qos"] == 2
+        sink.close()
+
+
+def test_topic_zone_name_is_slugified() -> None:
+    """topic_zone=name: 'Zone 1' → .../zone/zone_1 (lowercase, underscores)."""
+    with patch("backbone.comms.mqtt_sink.mqtt.Client") as MockClient:
+        mock_instance = MagicMock()
+        MockClient.return_value = mock_instance
+        from backbone.comms.mqtt_sink import MqttSink
+        sink = MqttSink(host="127.0.0.1", port=1883, prefix="p", topic_zone="name")
+        msg = _make_zone_state().model_copy(update={"zone": "Zone 1", "zone_id": "zp_x"})
+        sink.publish_zone_state(msg)
+        assert mock_instance.publish.call_args[0][0] == "p/zone/zone_1"
         sink.close()

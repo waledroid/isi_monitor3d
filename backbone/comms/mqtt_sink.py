@@ -270,8 +270,14 @@ class MqttSink(MetadataSink):
         Falls back to the name when ``topic_zone="id"`` but no id is present
         (a legacy payload), so a topic is always produced.
         """
-        seg = zone_id if (self._topic_zone == "id" and zone_id) else zone_name
-        return _sanitize_cls(seg)
+        if self._topic_zone != "name":
+            # id mode: the stable id; verbatim-name fallback for legacy
+            # payloads that predate zone_id (pinned behaviour).
+            return _sanitize_cls(zone_id or zone_name)
+        # Name mode: a topic-safe SLUG of the operator label — lowercase,
+        # spaces → underscores — so "Zone 1" publishes on .../zone/zone_1
+        # (consumers never need to quote spaces or guess the case).
+        return _sanitize_cls(zone_name.strip().lower().replace(" ", "_"))
 
     # ------------------------------------------------------------------
     # MetadataSink implementation
