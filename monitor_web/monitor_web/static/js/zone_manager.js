@@ -433,6 +433,8 @@ function wireUiPrefSync() {
   // Zones FPS (Zones tab): the editable zone-worker / zone-patch rate. Persisted
   // (Cam-view pose now inherits the Camera FPS, so it ignores this value.)
   const hooks = [
+    ["zm-auto-start", (e) => ({ auto_start: !!e.checked })],
+    ["zm-restart-every", (e) => ({ restart_every_min: Math.max(0, Number(e.value) || 0) })],
     ["zm-model-show-masks", (e) => ({ show_masks: !!e.checked })],
     ["zm-model-show-boxes", (e) => ({ show_boxes: !!e.checked })],
     ["zm-show-floor-zones", (e) => ({ show_floor_zones: !!e.checked })],
@@ -486,6 +488,10 @@ function fillModelSection(det, isis) {
   set("zm-enh-gamma", det.enhance_gamma ?? 1.0);
   const mg = el("zm-motion-gate");
   if (mg) mg.checked = isis.motion_gate !== false;
+  const as = el("zm-auto-start");
+  if (as) as.checked = isis.auto_start === true;
+  const re = el("zm-restart-every");
+  if (re) re.value = isis.restart_every_min ?? 0;
   const dq = el("zm-detect-quality");
   if (dq) {
     dq.value = isis.detect_substream ? "low" : "high";

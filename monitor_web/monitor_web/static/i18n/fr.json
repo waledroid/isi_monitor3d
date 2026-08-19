@@ -132,5 +132,7 @@
   "zone_kind_floor": "Zone au sol (polygone)",
   "zone_kind_etagere": "Étagère (rack, 3×3 cellules)",
   "rotate_ccw": "Pivoter la grille dans le sens antihoraire",
-  "rotate_cw": "Pivoter la grille dans le sens horaire"
+  "rotate_cw": "Pivoter la grille dans le sens horaire",
+  "auto_start": "Démarrer le système automatiquement au lancement du tableau de bord",
+  "restart_every": "Redémarrer le système toutes les N minutes pour libérer la mémoire (0 = jamais)"
 }

@@ -116,6 +116,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         bus_getter=lambda: getattr(app.state, "bus", None))
     templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 
+    # Auto-START + scheduled full restart (persisted UI settings, see
+    # system_cycler.py). Built here, started in lifespan after the reapers.
+    from .api.routes_config import _read_ui_settings
+    from .system_cycler import SystemCycler
+    _ui = _read_ui_settings(cfg)
+    cycler = SystemCycler(None,                          # app.state bound in lifespan
+                          auto_start=bool(_ui.get("auto_start", False)),
+                          restart_every_min=float(_ui.get("restart_every_min", 0) or 0))
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         # Every MJPEG stream is a SYNC generator, so Starlette pumps each one in the
@@ -136,9 +145,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         bus.start()
         zone_manager.start()      # no-op when no zones are configured
         heartbeat = asyncio.create_task(_heartbeat(cfg, supervisor))
+        cycler._app_state = _app.state          # late-bound: app.state exists now
+        cycler.start()
         try:
             yield
         finally:
+            cycler.stop()
             heartbeat.cancel()
             bus.stop()
             zone_manager.stop()   # before hub shutdown: workers release their streams
@@ -158,6 +170,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.supervisor = supervisor
     app.state.isistream = perception
     app.state.zone_manager = zone_manager
+    app.state.cycler = cycler
     app.state.templates = templates
     app.state.broadcast_queue = broadcast_queue
 

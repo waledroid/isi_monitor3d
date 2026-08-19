@@ -418,6 +418,14 @@
                 <input id="zm-motion-gate" type="checkbox" checked />
                 <span data-i18n="motion_gate">{{ t.motion_gate or 'Motion gating (skip inference on static zones)' }}</span>
               </label>
+              <!-- System lifecycle (ui-settings, auto-save): START on launch +
+                   scheduled full restart (producer + engine) to return memory. -->
+              <label class="zm-checkbox-row">
+                <input id="zm-auto-start" type="checkbox" />
+                <span data-i18n="auto_start">{{ t.auto_start or 'Auto-start the system when the dashboard launches' }}</span>
+              </label>
+              <label class="zm-sub" data-i18n="restart_every">{{ t.restart_every or 'Restart the system every N minutes to free memory (0 = never)' }}</label>
+              <input id="zm-restart-every" type="number" step="5" min="0" max="1440" placeholder="0" />
               <!-- The TensorRT toggle was retired 2026-07-22: native .engine
                    models (tools/onnx_to_engine.py) supersede the lazy TRT-EP
                    build; .onnx paths still use TRT-EP via the config default. -->

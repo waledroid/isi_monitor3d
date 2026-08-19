@@ -621,6 +621,9 @@ def get_config(request: Request) -> JSONResponse:
             "zones": zones_out,
             "detection": detection_out,
             "isistream": {
+                # system lifecycle knobs (ui-settings, dashboard-side)
+                "auto_start": bool(ui.get("auto_start", False)),
+                "restart_every_min": float(ui.get("restart_every_min", 0) or 0),
                 "motion_gate": bool((backbone_data.get("isistream") or {}).get("motion_gate", True)),
                 "detect_substream": bool(
                     (backbone_data.get("isistream") or {}).get("detect_substream", True)),
@@ -1155,6 +1158,10 @@ def post_ui_settings(payload: dict, request: Request) -> JSONResponse:
     purpose — the fsync'd write runs in the threadpool, off the event loop."""
     try:
         settings = _merge_ui_settings(request.app.state.settings, payload or {})
+        cycler = getattr(request.app.state, "cycler", None)
+        if cycler is not None and ({"auto_start", "restart_every_min"} & set(payload or {})):
+            cycler.configure(auto_start=settings.get("auto_start"),
+                             restart_every_min=settings.get("restart_every_min"))
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"write failed: {exc}") from exc
     return JSONResponse({"ok": True, "settings": settings})

@@ -10,20 +10,15 @@ import time
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from ..system_control import start_system, stop_system
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/control")
 
-# START polls the freshly-spawned subprocess until it either logs the build-OK
-# marker (truly up) or exits (boot crash). A fixed grace is wrong: heavy imports
-# (onnxruntime + CUDA) delay a config/calibration crash to ~1-3s, so a short
-# grace falsely reports "running". We wait up to _BOOT_TIMEOUT_S, returning as
-# soon as either outcome is decided.
-_BOOT_TIMEOUT_S = 10.0
-_BOOT_POLL_S = 0.2
-# Logged by backbone.runtime once the orchestrator is fully built (past calibration,
-# detection, and sink construction) and about to run — a reliable "it's up" signal.
-_READY_MARKER = "backbone built"
+# START/STOP mechanics (boot-marker polling, producer-then-engine teardown) live
+# in monitor_web/system_control.py — shared with the SystemCycler's scheduled
+# restarts so the button and the timer do exactly the same thing.
 # STARTs arriving this soon after a completed STOP are treated as queued/
 # replayed clicks, not intent — a human confirmation click lands later.
 _START_DEBOUNCE_S = 3.0
@@ -66,27 +61,11 @@ async def start(request: Request) -> JSONResponse:
                              "state": supervisor.state,
                              "reason": "just stopped — press START again to confirm",
                              "log_tail": []})
-    spawned = supervisor.start()
-    # Poll until the orchestrator declares itself built (up) or the process exits
-    # (crash), whichever comes first — don't trust an early "running" that's just
-    # the subprocess still importing.
-    if spawned:
-        for _ in range(int(_BOOT_TIMEOUT_S / _BOOT_POLL_S)):
-            await asyncio.sleep(_BOOT_POLL_S)
-            if supervisor.state != "running":
-                break   # exited → boot crash
-            if any(_READY_MARKER in line.lower() for line in supervisor.log_lines(30)):
-                break   # built OK and now running
-    state = supervisor.state
-    # Direction 1: with ingestion.mode: points the Backbone is a pure metric
-    # engine — start the in-process perception producer to feed it. Off the
-    # event loop: it builds CUDA sessions (seconds).
-    if state == "running":
-        perception = getattr(request.app.state, "isistream", None)
-        if perception is not None and perception.points_mode():
-            started = await asyncio.to_thread(perception.start)
-            logger.info("control: perception producer %s",
-                        "running" if started else "FAILED to start")
+    result = await asyncio.to_thread(start_system, request.app.state)
+    spawned, state = result["spawned"], result["state"]
+    cycler = getattr(request.app.state, "cycler", None)
+    if cycler is not None:
+        cycler.note_started()          # an operator START resets the restart clock
     log_tail = supervisor.log_lines(12) if state != "running" else []
     return JSONResponse(
         {
@@ -129,22 +108,10 @@ async def stop(request: Request) -> JSONResponse:
         except Exception:
             logger.debug("control: bus clear failed", exc_info=True)
 
-    def _teardown() -> None:
-        t0 = time.monotonic()
-        try:
-            perception = getattr(app_state, "isistream", None)
-            if perception is not None:
-                perception.stop()      # producer first — it feeds the engine
-            supervisor.stop()
-        finally:
-            app_state.stop_in_progress = False
-            # Debounce anchor: START clicks that were queued while the UI was
-            # busy replay AFTER this moment and get ignored (see start()).
-            app_state.last_stop_done = time.monotonic()
-            logger.info("control: STOP done in %.2fs (state=%s)",
-                        time.monotonic() - t0, supervisor.state)
-
-    threading.Thread(target=_teardown, daemon=True, name="stop-teardown").start()
+    # Teardown off the event loop (producer first, then engine; debounce anchor
+    # set at the end so queued START clicks replaying after it get ignored).
+    threading.Thread(target=stop_system, args=(app_state,), daemon=True,
+                     name="stop-teardown").start()
     return JSONResponse({"action": "stop", "stopped": True, "state": "stopping"})
 
 

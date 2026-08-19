@@ -132,5 +132,7 @@
   "zone_kind_floor": "Floor zone (polygon)",
   "zone_kind_etagere": "Étagère (bin rack, 3×3 cells)",
   "rotate_ccw": "Rotate grid anticlockwise",
-  "rotate_cw": "Rotate grid clockwise"
+  "rotate_cw": "Rotate grid clockwise",
+  "auto_start": "Auto-start the system when the dashboard launches",
+  "restart_every": "Restart the system every N minutes to free memory (0 = never)"
 }
