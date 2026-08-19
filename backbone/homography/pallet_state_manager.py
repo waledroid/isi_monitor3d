@@ -138,6 +138,9 @@ class ZoneDecision:
     # across cameras) — survives track merges and per-frame detection
     # flicker. Feeds the wire's top-level `classes` (the AGV's key).
     present_classes: tuple[str, ...] = ()
+    # Max detection confidence per PRESENT class (any camera), held through
+    # dropouts alongside presence — feeds the wire's `class_confidence`.
+    present_confidence: dict[str, float] = field(default_factory=dict)
 
 
 def _norm_cls(cls: str) -> str:
@@ -201,6 +204,7 @@ class PalletStateManager:
         self._exit_after = int(exit_after)
         self._hyst: dict[str, ZoneMembershipHysteresis] = {}
         self._occ_stabilizer = OccupancyStabilizer()
+        self._held_conf: dict[tuple[str, str], float] = {}   # (zid, cls) -> last seen max conf
         # Last step's post-hysteresis presence per class — the "currently
         # held" set fed into the camera-loss union, and the before/after
         # comparison that detects a palette zone's presence EXIT (to forget
@@ -249,6 +253,7 @@ class PalletStateManager:
         # frame's evidence set per class (union across cameras — OR).
         counts: dict[str, dict[str, int]] = {zid: {} for zid in zone_ids}
         evidence: dict[str, set[str]] = {}
+        frame_conf: dict[tuple[str, str], float] = {}   # (zid, cls) -> this frame's max conf
 
         for cam_dets in detections_by_camera.values():
             cam_counts: dict[str, dict[str, int]] = {zid: {} for zid in zone_ids}
@@ -266,6 +271,9 @@ class PalletStateManager:
                         zone = self._zones.by_id(zid)
                         if zone is not None and _in_zone(zone, shared_xy, self._tol):
                             cam_counts[zid][cls] = cam_counts[zid].get(cls, 0) + 1
+                            key = (zid, cls)
+                            frame_conf[key] = max(frame_conf.get(key, 0.0),
+                                                  float(det.confidence))
                     continue
                 plane_cache: dict[float, tuple[float, float] | None] = {}
                 for zid in zone_ids:
@@ -275,6 +283,9 @@ class PalletStateManager:
                     xy = self._plane_xy(det, zone, plane_cache)
                     if xy is not None and _in_zone(zone, xy, self._tol):
                         cam_counts[zid][cls] = cam_counts[zid].get(cls, 0) + 1
+                        key = (zid, cls)
+                        frame_conf[key] = max(frame_conf.get(key, 0.0),
+                                              float(det.confidence))
             for zid, cls_counts in cam_counts.items():
                 for cls, n in cls_counts.items():
                     if n > counts[zid].get(cls, 0):
@@ -306,6 +317,12 @@ class PalletStateManager:
         for zid in exited_palette:
             self._occ_stabilizer.forget(zid)
         self._present_prev = present
+        # Confidence memory rides presence: refresh from this frame's dets,
+        # keep held values through dropouts, forget once presence exits.
+        self._held_conf.update(frame_conf)
+        for key in [k for k in self._held_conf
+                    if k[0] not in present.get(k[1], set())]:
+            self._held_conf.pop(key, None)
 
         # ---- occupancy: per-camera A+B classification, bucketed into zones
         # by pallet position (each zone's OWN plane, same as presence above —
@@ -401,6 +418,11 @@ class PalletStateManager:
                 counts=dict(counts.get(zid, {})),
                 present_classes=tuple(sorted(
                     cls for cls, zset in present.items() if zid in zset)),
+                present_confidence={
+                    cls: self._held_conf[(zid, cls)]
+                    for cls, zset in present.items()
+                    if zid in zset and (zid, cls) in self._held_conf
+                },
             ))
         return decisions
 

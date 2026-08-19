@@ -820,3 +820,17 @@ def test_zone_state_classes_always_present() -> None:
     legacy = json.loads(empty.model_dump_json())
     legacy.pop("classes")
     assert parse_envelope(legacy).classes == ()
+
+
+def test_zone_state_class_confidence_defaults_and_roundtrip() -> None:
+    from backbone.comms.schemas import ZoneStateMessage, parse_envelope
+
+    empty = ZoneStateMessage(ts=0.0, zone="Z", zone_id="z1", objects=(), count=0)
+    assert empty.class_confidence == {}
+    msg = empty.model_copy(update={"classes": ("palette", "carton"),
+                                   "class_confidence": {"palette": 0.94, "carton": 0.72}})
+    back = parse_envelope(json.loads(msg.model_dump_json()))
+    assert back.class_confidence == {"palette": 0.94, "carton": 0.72}
+    legacy = json.loads(empty.model_dump_json())
+    legacy.pop("class_confidence")
+    assert parse_envelope(legacy).class_confidence == {}

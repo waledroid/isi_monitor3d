@@ -506,3 +506,22 @@ def test_present_classes_survive_split_evidence_and_track_merge():
     # a single-frame carton dropout must NOT remove it (exit_after hysteresis)
     decisions = mgr.step({"cam_a": [pallet_a], "cam_b": []})
     assert _zone_dec(decisions).present_classes == ("carton", "palette")
+
+
+def test_present_confidence_per_class_across_cameras():
+    """`present_confidence` = max detection confidence per PRESENT class (any
+    camera), held through a one-frame dropout exactly like presence itself."""
+    mgr = _manager()
+    pallet_a = _det("palette", (100, 300, 300, 360), camera_id="cam_a", conf=0.94)
+    carton_b = _det("carton", (150, 280, 250, 340), camera_id="cam_b", conf=0.72)
+    decisions = []
+    for _ in range(4):
+        decisions = mgr.step({"cam_a": [pallet_a], "cam_b": [carton_b]})
+    d = _zone_dec(decisions)
+    assert d.present_confidence["palette"] == 0.94
+    assert d.present_confidence["carton"] == 0.72
+    # carton dropout: presence holds (exit_after) and so does its confidence
+    decisions = mgr.step({"cam_a": [pallet_a], "cam_b": []})
+    d = _zone_dec(decisions)
+    assert d.present_classes == ("carton", "palette")
+    assert d.present_confidence["carton"] == 0.72

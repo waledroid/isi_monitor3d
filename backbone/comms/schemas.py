@@ -319,11 +319,15 @@ class ZoneStateMessage(BaseModel):
     zone_id: str = ""
     objects: tuple[ZoneObject, ...]
     count: int = Field(..., ge=0, description="len(objects) — consumer convenience")
-    # ALWAYS-PRESENT class summary: one entry per object (duplicates kept, so a
-    # consumer can count per class), empty tuple when the zone is empty. Added
-    # 2026-08-19 for AGV consumers that key on `cls` — additive + defaulted,
-    # no schema bump; the gateway must be rebuilt before the node emits it.
+    # ALWAYS-PRESENT class summary — THE simple consumer key (AGV): with the
+    # decision attached it carries the STABILISED per-class presence
+    # (hysteresis, cross-camera union), [] when the zone is empty; without a
+    # decision it mirrors objects[].cls. Additive + defaulted, no schema bump.
     classes: tuple[str, ...] = ()
+    # Max detection confidence per PRESENT class (any camera), held through
+    # dropouts with the presence itself; {} when the zone is empty. The
+    # companion to `classes` for consumers that want scores. Added 2026-08-19.
+    class_confidence: dict[str, float] = Field(default_factory=dict)
     # OPTIONAL PalletStateManager verdict (additive within v6, default None so
     # a payload from a pre-decision Backbone still parses — mixed-version
     # rollout: gateway rebuilds BEFORE the Backbone starts emitting it).
