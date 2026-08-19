@@ -87,21 +87,23 @@ function _renderNodes(data) {
   const header = `
     <div class="status-row comms-nodes-header">
       <span class="status-dot status-dot-green" aria-hidden="true"></span>
-      <span class="kpi-key">Online · ${aliveCount}/${sorted.length} alive</span>
+      <span class="kpi-key">${aliveCount}/${sorted.length} online</span>
     </div>`;
 
+  // Terse rows: name + dot + "fps · ms" (rounded). Details (area/mode/exact
+  // KPIs) live in the row's tooltip instead of on screen.
   const rows = sorted.map((n) => {
     const alive = n.status === "alive";
     const dotCls = alive ? "status-dot status-dot-green" : "status-dot status-dot-grey";
-    const latency = (n.latency_ms != null) ? `${n.latency_ms} ms` : "—";
-    const fps = (n.fps != null) ? `${Number(n.fps).toFixed(1)} fps` : "—";
-    const area = n.area ? `· ${_esc(n.area)}` : "";
+    const latency = (n.latency_ms != null) ? `${Math.round(n.latency_ms)} ms` : "—";
+    const fps = (n.fps != null) ? `${Number(n.fps).toFixed(0)} fps` : "—";
+    const tip = `${n.node_id} — ${n.area || ""} ${_shortMode(n.mode)} · ` +
+      `p95 ${latency} · ${alive ? "alive" : "stale"}`;
     return `
-      <div class="status-row comms-node-row">
+      <div class="status-row comms-node-row" title="${_esc(tip)}">
         <span class="comms-node-id">${_esc(n.node_id)}</span>
         <span class="${dotCls}" aria-label="${alive ? "alive" : "stale"}"></span>
-        <span class="kpi-key">${area} ${_esc(_shortMode(n.mode))}</span>
-        <span class="kpi-val comms-node-kpis">${fps} · p95 ${latency}</span>
+        <span class="kpi-val comms-node-kpis">${fps} · ${latency}</span>
       </div>`;
   }).join("");
 
