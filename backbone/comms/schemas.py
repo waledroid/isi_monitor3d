@@ -327,11 +327,15 @@ class ZoneStateMessage(BaseModel):
     # decision attached it carries the STABILISED per-class presence
     # (hysteresis, cross-camera union), [] when the zone is empty; without a
     # decision it mirrors objects[].cls. Additive + defaulted, no schema bump.
-    classes: tuple[str, ...] = ()
+    cls: tuple[str, ...] = ()
     # Max detection confidence per PRESENT class (any camera), held through
     # dropouts with the presence itself; {} when the zone is empty. The
-    # companion to `classes` for consumers that want scores. Added 2026-08-19.
-    class_confidence: dict[str, float] = Field(default_factory=dict)
+    # companion to `cls` for consumers that want scores. Added 2026-08-19.
+    cls_confidence: dict[str, float] = Field(default_factory=dict)
+    # Short-lived legacy spellings (same day, renamed on AGV request):
+    # accepted on parse so retained old payloads don't reject, never emitted.
+    classes: tuple[str, ...] = Field(default=(), exclude=True)
+    class_confidence: dict[str, float] = Field(default_factory=dict, exclude=True)
     # OPTIONAL PalletStateManager verdict (additive within v6, default None so
     # a payload from a pre-decision Backbone still parses — mixed-version
     # rollout: gateway rebuilds BEFORE the Backbone starts emitting it).
@@ -358,7 +362,7 @@ class ZoneStateMessage(BaseModel):
             zone_id=str(getattr(state, "zone_id", "")),
             objects=objects,
             count=len(objects),
-            classes=tuple(o.cls for o in objects),
+            cls=tuple(o.cls for o in objects),
         )
 
 

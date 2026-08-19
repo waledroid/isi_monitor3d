@@ -274,5 +274,6 @@ def test_zone_entry_carries_classes(client):
     sub.update_from_message("node_a", make_config("node_a"))
     sub.update_from_message("node_a", make_zone_state("rack_a"))
     z = client.get("/zones").json()["zones"][0]
-    assert z["classes"] == ["palette"]
+    assert z["cls"] == ["palette"]
+    assert z["cls_confidence"] == {}
     # legacy state without the field → [] (getattr default), never a crash

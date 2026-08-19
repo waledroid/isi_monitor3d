@@ -176,7 +176,7 @@ def make_zone_state(
         zone=zone,
         objects=tuple(objects),
         count=len(objects),
-        classes=tuple(o.cls for o in objects),
+        cls=tuple(o.cls for o in objects),
         decision=decision,
     )
 

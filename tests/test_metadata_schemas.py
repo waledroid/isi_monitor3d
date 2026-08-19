@@ -795,14 +795,16 @@ def test_etagere_state_defaults() -> None:
     assert msg.schema_version == SCHEMA_VERSION
 
 
-def test_zone_state_classes_always_present() -> None:
-    """`classes` mirrors the objects' cls (duplicates kept) and is [] when empty —
-    the always-present key AGV consumers can rely on."""
+def test_zone_state_cls_always_present() -> None:
+    """`cls` mirrors the objects' classes (duplicates kept) and is [] when
+    empty — the always-present key AGV consumers rely on. The short-lived
+    legacy spellings (`classes`/`class_confidence`) parse but never emit."""
     from backbone.comms.schemas import ZoneStateMessage, parse_envelope
 
     empty = ZoneStateMessage(ts=0.0, zone="Z", zone_id="z1", objects=(), count=0)
-    assert empty.classes == ()
-    assert json.loads(empty.model_dump_json())["classes"] == []
+    assert empty.cls == ()
+    wire = json.loads(empty.model_dump_json())
+    assert wire["cls"] == [] and "classes" not in wire and "class_confidence" not in wire
 
     class _State:
         ts, zone, zone_id = 1.0, "Z", "z1"
@@ -817,27 +819,31 @@ def test_zone_state_classes_always_present() -> None:
         occupants = (_O("palette"), _O("carton"), _O("carton"))
 
     msg = ZoneStateMessage.from_state(_State())
-    assert msg.classes == ("palette", "carton", "carton")
+    assert msg.cls == ("palette", "carton", "carton")
     back = parse_envelope(json.loads(msg.model_dump_json()))
-    assert back.classes == ("palette", "carton", "carton")
-    # legacy payload without the field still parses (defaulted)
+    assert back.cls == ("palette", "carton", "carton")
+    # payloads without the field (pre-cls) still parse (defaulted); a retained
+    # payload with the legacy spellings parses too, without re-emitting them
     legacy = json.loads(empty.model_dump_json())
-    legacy.pop("classes")
-    assert parse_envelope(legacy).classes == ()
+    legacy.pop("cls")
+    legacy["classes"] = ["palette"]
+    legacy["class_confidence"] = {"palette": 0.9}
+    parsed = parse_envelope(legacy)
+    assert parsed.cls == () and "classes" not in json.loads(parsed.model_dump_json())
 
 
-def test_zone_state_class_confidence_defaults_and_roundtrip() -> None:
+def test_zone_state_cls_confidence_defaults_and_roundtrip() -> None:
     from backbone.comms.schemas import ZoneStateMessage, parse_envelope
 
     empty = ZoneStateMessage(ts=0.0, zone="Z", zone_id="z1", objects=(), count=0)
-    assert empty.class_confidence == {}
-    msg = empty.model_copy(update={"classes": ("palette", "carton"),
-                                   "class_confidence": {"palette": 0.94, "carton": 0.72}})
+    assert empty.cls_confidence == {}
+    msg = empty.model_copy(update={"cls": ("palette", "carton"),
+                                   "cls_confidence": {"palette": 0.94, "carton": 0.72}})
     back = parse_envelope(json.loads(msg.model_dump_json()))
-    assert back.class_confidence == {"palette": 0.94, "carton": 0.72}
+    assert back.cls_confidence == {"palette": 0.94, "carton": 0.72}
     legacy = json.loads(empty.model_dump_json())
-    legacy.pop("class_confidence")
-    assert parse_envelope(legacy).class_confidence == {}
+    legacy.pop("cls_confidence")
+    assert parse_envelope(legacy).cls_confidence == {}
 
 
 def test_zone_object_occupancy_fields_off_the_wire_but_old_payloads_parse() -> None:

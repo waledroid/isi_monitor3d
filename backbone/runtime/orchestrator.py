@@ -692,8 +692,8 @@ class Orchestrator:
                     if dec is not None:
                         msg = msg.model_copy(
                             update={"decision": ZoneDecisionModel.from_decision(dec),
-                                    "classes": tuple(dec.present_classes),
-                                    "class_confidence": dict(dec.present_confidence)})
+                                    "cls": tuple(dec.present_classes),
+                                    "cls_confidence": dict(dec.present_confidence)})
                     self._publisher.publish_zone_state(msg)
             except Exception:
                 logger.warning("orchestrator: failed to publish initial zone states", exc_info=True)
@@ -1080,8 +1080,8 @@ class Orchestrator:
                     # is physically there (2026-08-19).
                     msg = msg.model_copy(
                         update={"decision": ZoneDecisionModel.from_decision(dec),
-                                "classes": tuple(dec.present_classes),
-                                "class_confidence": dict(dec.present_confidence)})
+                                "cls": tuple(dec.present_classes),
+                                "cls_confidence": dict(dec.present_confidence)})
                 self._publisher.publish_zone_state(msg)
 
         # --- person↔object proximity (safety/AGV distance on the wire) ---
