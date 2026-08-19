@@ -29,3 +29,11 @@ def test_etagere_by_id_and_404(client):
     assert client.get("/etagere/et_1").json()["zone_id"] == "et_1"
     assert client.get("/etagere/nope").status_code == 404
     assert client.get("/v1/etagere").status_code == 200
+
+
+def test_etagere_by_assigned_name(client):
+    client.app.state.subscriber.update_from_message("node_a", _msg())
+    assert client.get("/etagere/A").json()["zone_id"] == "et_1"       # exact name
+    assert client.get("/etagere/a").json()["zone_id"] == "et_1"       # case-insensitive
+    assert client.get("/etagere/et_1").json()["zone_id"] == "et_1"    # id still works
+    assert client.get("/etagere/nope").status_code == 404

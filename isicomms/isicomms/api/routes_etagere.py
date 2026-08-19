@@ -38,7 +38,18 @@ async def etagere(request: Request) -> JSONResponse:
 
 @router.get("/etagere/{zone_id}", dependencies=[Depends(require_token)])
 async def etagere_one(zone_id: str, request: Request) -> JSONResponse:
-    for e in _all(request):
+    """One étagère by its stable ``zone_id`` OR its operator-assigned name.
+
+    Ids win over names (they are immutable and collision-free); the name
+    match is case-insensitive so ``/etagere/eta_1`` and ``/etagere/Eta_1``
+    both resolve — names are operator-unique per the dashboard's rules.
+    """
+    items = _all(request)
+    for e in items:
         if e["zone_id"] == zone_id:
+            return JSONResponse(e)
+    want = zone_id.strip().lower()
+    for e in items:
+        if str(e.get("name", "")).strip().lower() == want:
             return JSONResponse(e)
     raise HTTPException(status_code=404, detail=f"unknown étagère {zone_id!r}")
