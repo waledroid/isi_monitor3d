@@ -446,3 +446,47 @@ def test_camera_loss_gate_unaffected_by_plane_aware_bucketing():
     for _ in range(30):  # cam_a goes dark — must NOT read as evidence of absence
         dec = _zone_dec(mgr.step({"cam_b": []}, reporting_cameras=("cam_b",)), "platform")
         assert dec.palette_state == "palette_empty"
+
+
+def test_cross_camera_occupancy_fallback():
+    """The live 2026-08-19 case: cam_a sees only the PALETTE (carton occluded),
+    cam_b sees only the CARTON (pallet occluded). Per-camera occupancy alone
+    says empty; the cross-camera metric fallback must join the evidence:
+    carton within the metric radius of the pallet ⇒ palette_loaded."""
+    mgr = _manager()
+    pallet_a = _det("palette", (100, 300, 300, 360), camera_id="cam_a")   # (2.0, 3.6)
+    carton_b = _det("carton", (150, 280, 250, 340), camera_id="cam_b")    # (2.0, 3.4) — 0.2 m away
+    decisions = []
+    for _ in range(4):
+        decisions = mgr.step({"cam_a": [pallet_a], "cam_b": [carton_b]})
+    d = _zone_dec(decisions)
+    assert d.palette_state == "palette_loaded"
+    assert d.content == ("carton",)
+
+
+def test_cross_camera_fallback_respects_metric_radius():
+    """A carton in the zone but FAR from the pallet (> metric_radius_m) is a
+    floor carton, not a load — the fallback must not mark loaded."""
+    mgr = _manager()
+    pallet_a = _det("palette", (100, 300, 300, 360), camera_id="cam_a")   # (2.0, 3.6)
+    carton_b = _det("carton", (350, 80, 450, 140), camera_id="cam_b")     # (4.0, 1.4) — ~2.9 m away
+    decisions = []
+    for _ in range(4):
+        decisions = mgr.step({"cam_a": [pallet_a], "cam_b": [carton_b]})
+    d = _zone_dec(decisions)
+    assert d.palette_state == "palette_empty"
+    assert d.content == ()
+
+
+def test_same_camera_full_verdict_unchanged_by_fallback():
+    """When ONE camera sees both, the per-camera A/B verdict already fires —
+    the fallback must not alter the existing (pinned) behaviour."""
+    mgr = _manager()
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a")
+    carton = _det("carton", (150, 250, 250, 330), camera_id="cam_a")  # overlapping, near
+    decisions = []
+    for _ in range(4):
+        decisions = mgr.step({"cam_a": [pallet, carton]})
+    d = _zone_dec(decisions)
+    assert d.palette_state == "palette_loaded"
+    assert d.content == ("carton",)

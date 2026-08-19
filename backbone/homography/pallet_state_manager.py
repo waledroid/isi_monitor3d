@@ -107,6 +107,7 @@ from dataclasses import dataclass, field
 
 from backbone.core.types import Detection
 from backbone.homography.pallet_occupancy import (
+    OBJECT_CLASSES,
     PALLET_CLASSES,
     OccupancyStabilizer,
     PalletOccupancy,
@@ -313,6 +314,7 @@ class PalletStateManager:
         # at Z=0 internally, unchanged (this only re-derives which ZONE a
         # verdict is bucketed into).
         frame_occ: dict[str, tuple[str, str | None]] = {}
+        pallet_pos: dict[str, list[tuple[float, float]]] = {}   # zid -> pallet xy this frame
         for cam_dets in detections_by_camera.values():
             pallets = pallets_of(cam_dets)
             results = self._occupancy.frame_states(cam_dets)
@@ -326,9 +328,42 @@ class PalletStateManager:
                         det, zone, plane_cache)
                     if xy is None or not _in_zone(zone, xy, self._tol):
                         continue
+                    pallet_pos.setdefault(zid, []).append(xy)
                     cur = frame_occ.get(zid)
                     if cur is None or (state == "full" and cur[0] != "full"):
                         frame_occ[zid] = (state, content)
+
+        # ---- CROSS-CAMERA occupancy fallback (2026-08-19). The per-camera
+        # A/B pass above is blind when the pallet and its load are each
+        # visible to only ONE camera (the load occludes the pallet from the
+        # camera that sees it, and vice versa) — the classic split-evidence
+        # case: cam_a says "palette, empty", cam_b's carton goes unused.
+        # Join the evidence in METRIC space: a content-class detection from
+        # ANY camera that lands in the zone within estimator B's own disc
+        # (metric_radius_m) of a pallet seen this frame votes "full". Same
+        # hysteresis window as every other vote — no flapping; zones whose
+        # per-camera verdict already said "full" are untouched.
+        radius = float(getattr(self._occupancy, "metric_radius_m", 0.7))
+        for cam_dets in detections_by_camera.values():
+            for det in cam_dets:
+                cls = _norm_cls(det.cls)
+                if cls not in OBJECT_CLASSES:
+                    continue
+                plane_cache = {}
+                for zid, positions in pallet_pos.items():
+                    cur = frame_occ.get(zid)
+                    if cur is not None and cur[0] == "full":
+                        continue
+                    zone = self._zones.by_id(zid)
+                    if zone is None:
+                        continue
+                    xy = (self._project(det) if self._zone_aware is None
+                          else self._plane_xy(det, zone, plane_cache))
+                    if xy is None or not _in_zone(zone, xy, self._tol):
+                        continue
+                    if any((xy[0] - px) ** 2 + (xy[1] - py) ** 2 <= radius ** 2
+                           for px, py in positions):
+                        frame_occ[zid] = ("full", cls)
 
         # ---- temporal vote of the fused occupancy, keyed by ZONE id.
         # A zone absent from `frame_occ` this step — whether from a true

@@ -144,6 +144,9 @@ class PalletOccupancy:
         self._k = float(occupancy_box_k)
         self._a_min = float(a_overlap_min)
         self._radius = float(metric_radius_m)
+        #: Public read-only mirror — PalletStateManager's cross-camera
+        #: occupancy fallback uses the SAME disc as estimator B.
+        self.metric_radius_m = self._radius
         self._band = float(drift_band_m)
         self._track_match = float(track_match_distance_m)
         self._stabilizer = OccupancyStabilizer(window=window, flip_ratio=flip_ratio)
