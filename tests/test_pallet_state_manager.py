@@ -490,3 +490,19 @@ def test_same_camera_full_verdict_unchanged_by_fallback():
     d = _zone_dec(decisions)
     assert d.palette_state == "palette_loaded"
     assert d.content == ("carton",)
+
+
+def test_present_classes_survive_split_evidence_and_track_merge():
+    """`present_classes` is the stabilised union of class evidence across
+    cameras — palette (cam_a) + carton (cam_b) both listed, steadily, even
+    though the tracker may merge them into one flapping track."""
+    mgr = _manager()
+    pallet_a = _det("palette", (100, 300, 300, 360), camera_id="cam_a")
+    carton_b = _det("carton", (150, 280, 250, 340), camera_id="cam_b")
+    decisions = []
+    for _ in range(4):
+        decisions = mgr.step({"cam_a": [pallet_a], "cam_b": [carton_b]})
+    assert _zone_dec(decisions).present_classes == ("carton", "palette")
+    # a single-frame carton dropout must NOT remove it (exit_after hysteresis)
+    decisions = mgr.step({"cam_a": [pallet_a], "cam_b": []})
+    assert _zone_dec(decisions).present_classes == ("carton", "palette")

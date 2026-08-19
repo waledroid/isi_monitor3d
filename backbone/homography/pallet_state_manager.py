@@ -134,6 +134,10 @@ class ZoneDecision:
     palette_state: str          # no_data|no_palette|palette_empty|palette_loaded
     content: tuple[str, ...] = ()      # e.g. ("carton",) when loaded
     counts: dict[str, int] = field(default_factory=dict)  # per detected class, max-across-cameras
+    # STABILISED class presence in the zone (enter/exit hysteresis, union
+    # across cameras) — survives track merges and per-frame detection
+    # flicker. Feeds the wire's top-level `classes` (the AGV's key).
+    present_classes: tuple[str, ...] = ()
 
 
 def _norm_cls(cls: str) -> str:
@@ -395,6 +399,8 @@ class PalletStateManager:
                 zone_id=zid, zone_name=self._zone_name(zid),
                 palette_state=palette_state, content=content,
                 counts=dict(counts.get(zid, {})),
+                present_classes=tuple(sorted(
+                    cls for cls, zset in present.items() if zid in zset)),
             ))
         return decisions
 

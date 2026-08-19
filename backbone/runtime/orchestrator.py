@@ -691,7 +691,8 @@ class Orchestrator:
                     dec = init_dec.get(state.zone_id)
                     if dec is not None:
                         msg = msg.model_copy(
-                            update={"decision": ZoneDecisionModel.from_decision(dec)})
+                            update={"decision": ZoneDecisionModel.from_decision(dec),
+                                    "classes": tuple(dec.present_classes)})
                     self._publisher.publish_zone_state(msg)
             except Exception:
                 logger.warning("orchestrator: failed to publish initial zone states", exc_info=True)
@@ -1073,8 +1074,12 @@ class Orchestrator:
                 msg = ZoneStateMessage.from_state(state)
                 dec = decisions.get(state.zone_id)
                 if dec is not None:
+                    # `classes` = STABILISED presence (the AGV's key): a merged
+                    # track or a one-frame dropout must not hide a class that
+                    # is physically there (2026-08-19).
                     msg = msg.model_copy(
-                        update={"decision": ZoneDecisionModel.from_decision(dec)})
+                        update={"decision": ZoneDecisionModel.from_decision(dec),
+                                "classes": tuple(dec.present_classes)})
                 self._publisher.publish_zone_state(msg)
 
         # --- person↔object proximity (safety/AGV distance on the wire) ---
