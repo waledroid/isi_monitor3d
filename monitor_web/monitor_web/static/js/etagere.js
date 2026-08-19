@@ -328,19 +328,29 @@ function renderModelPicker() {
   if (hint) hint.textContent = String(cfg.model?.imgsz ?? DEFAULT_MODEL.imgsz);
 }
 
-async function applyModel() {
-  const path = (el("zm-etagere-model-onnx")?.value || "").trim();
+// Called by the Settings modal's Save (zone_manager.js): persist the étagère
+// model picker ONLY if it differs from the saved config — a no-op save would
+// hot-restart isistream for nothing. Returns true when a write happened.
+export async function applyModelIfChanged() {
+  const sel = el("zm-etagere-model-onnx");
+  if (!sel) return false;                   // modal not rendered
+  const path = (sel.value || "").trim();
   const confRaw = el("zm-etagere-model-conf")?.value;
   const conf = confRaw === "" || confRaw == null ? null : Number(confRaw);
+  let next;
   if (!path) {
-    cfg.model = null;                       // no model ⇒ feature off (isistream skips it)
+    next = null;                            // no model ⇒ feature off (isistream skips it)
   } else {
     const base = cfg.model && cfg.model.onnx_path === path ? cfg.model : { ...DEFAULT_MODEL };
-    cfg.model = { ...DEFAULT_MODEL, ...base, onnx_path: path };
-    if (conf != null && !Number.isNaN(conf)) cfg.model.confidence_threshold = conf;
+    next = { ...DEFAULT_MODEL, ...base, onnx_path: path };
+    if (conf != null && !Number.isNaN(conf)) next.confidence_threshold = conf;
   }
+  const same = JSON.stringify(next) === JSON.stringify(cfg.model || null);
+  if (same) return false;
+  cfg.model = next;
   await save();                             // server validates + hot-restarts isistream
   renderModelPicker();
+  return true;
 }
 
 function renderSettingsList() {
@@ -385,12 +395,13 @@ if (typeof document !== "undefined") {
   const boot = () => {
     load();
     el("zm-etagere-add")?.addEventListener("click", () => startEtagereDraw());
-    el("zm-etagere-model-save")?.addEventListener("click", () => applyModel());
+
     pollStates();
     setInterval(pollStates, STATE_POLL_MS);
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
 
-  window.__etagere = { startEtagereDraw, deleteZone, getZones, getStates, startAdjust };
+  window.__etagere = { startEtagereDraw, deleteZone, getZones, getStates, startAdjust,
+                       applyModelIfChanged };
 }

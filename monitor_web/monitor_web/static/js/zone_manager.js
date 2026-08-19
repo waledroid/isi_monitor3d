@@ -618,6 +618,10 @@ function close() {
 }
 
 async function save() {
+  // Étagère model picker (Isistream ▸ Étagère) rides the same Save: persisted
+  // to etagere.yaml only when it changed (its own route hot-restarts isistream).
+  try { await window.__etagere?.applyModelIfChanged?.(); }
+  catch (e) { console.warn("etagere model save failed", e); }
   const payload = collectPayload();
   // Persist gateway fields to ui-settings (they are dashboard-side, not backbone.yaml).
   const gatewayFields = collectGatewayFields();
