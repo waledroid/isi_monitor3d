@@ -60,6 +60,11 @@ def _build_object_detector(cfg: dict, rig: CameraRig, zones: ZoneRegistry):
     det_cfg = dict(cfg.get("detection", {}))
     if not det_cfg or not det_cfg.get("plugin"):
         return None
+    # Mirror of pose_enabled: switch OFF object detection while keeping the
+    # zones + model config intact (zones stay drawn; no object model is built).
+    if not det_cfg.pop("object_enabled", True):
+        logger.info("isistream: object detection DISABLED via settings")
+        return None
     det_plugin = det_cfg.pop("plugin")
     for pose_key in ("pose_onnx_path", "pose_enabled", "pose_confidence_threshold",
                      "pose_imgsz", "pose_every_n", "person_pallet_max_distance_m",

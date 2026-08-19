@@ -404,6 +404,7 @@ function collectPose() {
   // Settings ▸ Isistream: ONE object model + global knobs for ALL zones.
   return {
     pose_enabled: el("zm-pose-enabled")?.checked ?? true,
+    object_enabled: el("zm-object-enabled")?.checked ?? true,
     pose_onnx_path: el("zm-model-pose-onnx")?.value.trim() || "",   // "" = clear
     pose_confidence_threshold: Number.isFinite(v) ? v : 0.3,
     onnx_path: el("zm-model-onnx")?.value.trim() || "",
@@ -475,6 +476,8 @@ function fillModelSection(det, isis) {
   const set = (id, v) => { const e = el(id); if (e != null) e.value = v ?? ""; };
   const poseEnabled = el("zm-pose-enabled");
   if (poseEnabled) poseEnabled.checked = det.pose_enabled !== false;
+  const objEnabled = el("zm-object-enabled");
+  if (objEnabled) objEnabled.checked = det.object_enabled !== false;
   // Global isistream object-model knobs (one model serves every zone).
   selectModelOption("zm-model-onnx", det.onnx_path || "");
   set("zm-model-zone-imgsz", det.zone_imgsz ?? 384);

@@ -95,10 +95,13 @@ class EtagereConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     model: EtagereModel | None = None
     zones: tuple[EtagereZone, ...] = ()
+    # Operator switch: turn étagère DETECTION off while keeping the zones and
+    # model configured (mirrors detection.pose_enabled / object_enabled).
+    detection_enabled: bool = True
 
     @property
     def enabled(self) -> bool:
-        return self.model is not None and len(self.zones) > 0
+        return self.detection_enabled and self.model is not None and len(self.zones) > 0
 
 
 def _resolve_model_path(cfg: EtagereConfig, yaml_path: str | Path) -> EtagereConfig:

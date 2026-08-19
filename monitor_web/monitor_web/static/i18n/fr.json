@@ -133,5 +133,7 @@
   "rotate_ccw": "Pivoter la grille dans le sens antihoraire",
   "rotate_cw": "Pivoter la grille dans le sens horaire",
   "auto_start": "Démarrer le système automatiquement au lancement du tableau de bord",
-  "restart_every": "Redémarrer le système toutes les N minutes pour libérer la mémoire (0 = jamais)"
+  "restart_every": "Redémarrer le système toutes les N minutes pour libérer la mémoire (0 = jamais)",
+  "object_enabled": "Détection d'objets (palettes / cartons — zones conservées si désactivée)",
+  "etagere_enabled": "Détection étagère (zones conservées si désactivée)"
 }

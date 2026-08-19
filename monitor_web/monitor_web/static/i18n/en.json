@@ -133,5 +133,7 @@
   "rotate_ccw": "Rotate grid anticlockwise",
   "rotate_cw": "Rotate grid clockwise",
   "auto_start": "Auto-start the system when the dashboard launches",
-  "restart_every": "Restart the system every N minutes to free memory (0 = never)"
+  "restart_every": "Restart the system every N minutes to free memory (0 = never)",
+  "object_enabled": "Object detection (pallets / cartons — zones kept when off)",
+  "etagere_enabled": "Étagère detection (zones kept when off)"
 }

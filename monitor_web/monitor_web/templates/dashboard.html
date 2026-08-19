@@ -352,6 +352,10 @@
             <div class="config-model">
               <!-- ── OBJECT DETECTION — one model, all zones, one batched call ── -->
               <h4 class="config-subhead" data-i18n="group_detection">{{ t.group_detection or 'Object detection' }}</h4>
+              <label class="zm-checkbox-row">
+                <input id="zm-object-enabled" type="checkbox" checked />
+                <span data-i18n="object_enabled">{{ t.object_enabled or 'Object detection (pallets / cartons — zones kept when off)' }}</span>
+              </label>
               <label data-i18n="model_object">{{ t.model_object or 'Object model (all zones, .onnx)' }}</label>
               <select id="zm-model-onnx">
                 <option value="" data-i18n="model_object_placeholder">{{ t.model_object_placeholder or '— none —' }}</option>
@@ -396,6 +400,10 @@
                    etagere.yaml's model: block; the modal's Save persists it (hot-restarts isistream).
                    imgsz is fixed by the export (320) — shown, not editable. ── -->
               <h4 class="config-subhead" data-i18n="group_etagere">{{ t.group_etagere or 'Étagère (bin-rack cells)' }}</h4>
+              <label class="zm-checkbox-row">
+                <input id="zm-etagere-enabled" type="checkbox" checked />
+                <span data-i18n="etagere_enabled">{{ t.etagere_enabled or 'Étagère detection (zones kept when off)' }}</span>
+              </label>
               <label class="zm-sub" data-i18n="etagere_model">{{ t.etagere_model or 'Étagère model (empty_box / filled_box, .onnx)' }}</label>
               <select id="zm-etagere-model-onnx">
                 <option value="" data-i18n="model_object_placeholder">{{ t.model_object_placeholder or '— none —' }}</option>

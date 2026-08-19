@@ -252,6 +252,10 @@ class Orchestrator:
         # trt_enabled is retired (TensorRT = native .engine paths only); pop it
         # so configs that still carry the key don't crash detector constructors.
         det_cfg.pop("trt_enabled", None)
+        # Mirror of pose_enabled: object detection can be switched OFF while
+        # the zones + model config stay intact (pose-only pipeline, as with
+        # zero zones). Popped either way — it is not a detector kwarg.
+        object_enabled = bool(det_cfg.pop("object_enabled", True))
         det_plugin = det_cfg.pop("plugin")
         # `pose_onnx_path` configures a separate person-pose model (consumed by the
         # dashboard overlay today; the S5.5 `yolo_onnx_pose` plugin later) — it is
@@ -298,7 +302,11 @@ class Orchestrator:
         zone_crop_polygon_fill = bool(det_cfg.pop("zone_crop_polygon_fill", True))
         if scope not in ("zones", "full_frame"):
             raise ValueError(f"detection.scope={scope!r}, expected 'zones' or 'full_frame'")
-        if scope == "zones" and len(self._zones) == 0:
+        if not object_enabled:
+            self._detector = None
+            logger.info("orchestrator: object detection DISABLED via settings — "
+                        "pose-only (zones kept)")
+        elif scope == "zones" and len(self._zones) == 0:
             self._detector = None
             logger.warning(
                 "orchestrator: detection.scope=zones with no zones configured — "

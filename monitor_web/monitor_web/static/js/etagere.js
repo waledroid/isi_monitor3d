@@ -324,6 +324,8 @@ function renderModelPicker() {
   sel.value = current;
   const conf = el("zm-etagere-model-conf");
   if (conf) conf.value = cfg.model?.confidence_threshold ?? "";
+  const en = el("zm-etagere-enabled");
+  if (en) en.checked = cfg.detection_enabled !== false;
   const hint = el("zm-etagere-model-imgsz");
   if (hint) hint.textContent = String(cfg.model?.imgsz ?? DEFAULT_MODEL.imgsz);
 }
@@ -334,6 +336,8 @@ function renderModelPicker() {
 export async function applyModelIfChanged() {
   const sel = el("zm-etagere-model-onnx");
   if (!sel) return false;                   // modal not rendered
+  const enabledEl = el("zm-etagere-enabled");
+  const nextEnabled = enabledEl ? !!enabledEl.checked : (cfg.detection_enabled !== false);
   const path = (sel.value || "").trim();
   const confRaw = el("zm-etagere-model-conf")?.value;
   const conf = confRaw === "" || confRaw == null ? null : Number(confRaw);
@@ -345,9 +349,11 @@ export async function applyModelIfChanged() {
     next = { ...DEFAULT_MODEL, ...base, onnx_path: path };
     if (conf != null && !Number.isNaN(conf)) next.confidence_threshold = conf;
   }
-  const same = JSON.stringify(next) === JSON.stringify(cfg.model || null);
+  const same = JSON.stringify(next) === JSON.stringify(cfg.model || null)
+    && nextEnabled === (cfg.detection_enabled !== false);
   if (same) return false;
   cfg.model = next;
+  cfg.detection_enabled = nextEnabled;
   await save();                             // server validates + hot-restarts isistream
   renderModelPicker();
   return true;

@@ -187,6 +187,8 @@ class DetectionConfig(BaseModel):
     pose_onnx_path: str | None = None
     # Person-pose detection confidence (the separate pose engine's `conf`).
     pose_confidence_threshold: float = 0.3
+    # Mirror of pose_enabled for the OBJECT model: off ⇒ pose-only, zones kept.
+    object_enabled: bool = True
     class_names: list[str] = Field(..., min_length=1)
     confidence_threshold: float = 0.25
     iou_threshold: float = 0.45
@@ -567,6 +569,7 @@ def get_config(request: Request) -> JSONResponse:
         "enhance_enabled": bool((det_raw.get("enhance") or {}).get("enabled", False)),
         "enhance_gamma": float((det_raw.get("enhance") or {}).get("gamma", 1.0)),
         "pose_enabled": bool(det_raw.get("pose_enabled", True)),
+        "object_enabled": bool(det_raw.get("object_enabled", True)),
         "pose_onnx_path": (det_raw.get("pose_onnx_path") or ui.get("pose_onnx_path")
                            or latest_pose_onnx() or ""),
         "pose_confidence_threshold": det_raw.get("pose_confidence_threshold", 0.3),
@@ -883,6 +886,7 @@ def post_config(payload: ConfigPayload, request: Request) -> JSONResponse:
         else:
             block.pop("pose_onnx_path", None)
         block["pose_enabled"] = bool(det.pose_enabled)
+        block["object_enabled"] = bool(det.object_enabled)
         block["pose_confidence_threshold"] = det.pose_confidence_threshold
         block["decode_masks"] = bool(det.decode_masks)
         backbone_data["detection"] = block
