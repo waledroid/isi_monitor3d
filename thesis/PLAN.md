@@ -7,6 +7,84 @@ Conclusions → References). **Deadline: August 31** (email to P. Mossuz + maste
 **Confidentiality notice on page 1.** Defense by Zoom, second half of September; final mark
 = mean(thesis, defense).
 
+> **Status 2026-08-16.** `thesis/MANUSCRIPT.md` and `thesis/latex/isimonitor3d.tex`
+> (PDF: 15 pages) are the canonical text. Both were (a) updated with the August
+> developments (calibration re-solve 1.176 px on 2026-08-06, plane-aware zones
+> `z_base_m`, pallet-state `decision`, crop384-trained yolo26n @320, deployed 60 px
+> reprojection gate, 882 tests) and (b) restructured stage by stage: §1.2 now carries the
+> concept/literature/architecture review (old §2.1), Methods = §2.1 overview + stage map,
+> Stages 1–5 in §2.2–2.6, Results in the same stage order (§3.1 calibration, §3.2
+> detectors, §3.3 synthetic ablation, §3.4 runtime, §3.5 bounds; tables renumbered
+> T1–T7 accordingly). House style: humanized prose, **no em dashes** (— or --) anywhere.
+> **Update 2026-08-21 (SELF-CONTAINED SYSTEMS, author's decision).** The article no longer has
+> a single Results section. Each project is now presented complete, so a reader can follow either
+> one end to end: **1** Introduction, **2** Materials and methods common to both systems (shared
+> core, Table 1 comparing the two systems stage by stage, Table 2 the merged detector table),
+> **3** System A with 3.1-3.5 methods and **3.6 Results for System A**, **4** System B with
+> 4.1-4.5 methods and **4.6 Results for System B**, **5** Discussion, **6** Conclusions. Stage
+> numbers still align across the two systems (3.4 and 4.4 are the same job), so the parallel
+> reading survives. This deviates from the UGA fixed list, which names Results as a top-level
+> section; the author accepted that, noting the word Results still appears twice in the contents.
+> Tables renumbered T1-T9 in document order (two tables had both been labelled T1). PDF is 25
+> pages. `thesis/check_refs.py` now guards this structure and passes.
+
+> **Update 2026-08-21 (MANDATED SKELETON).** The article now matches the UGA recommendations
+> exactly: the top level is Introduction, Materials and Methods, Results, Discussion,
+> Conclusions, References, and page 1 opens with the journal name (the class prints `\doctype`
+> there, previously "Research Article"). Both projects live inside Materials and Methods as
+> parallel siblings on ONE five-stage spine: 2.2.1 to 2.2.5 for System A and 2.3.1 to 2.3.5 for
+> System B, with matching stage numbers describing the same job in each system. Stage 1 for
+> System B was created from the region-of-interest and trigger-line material, so the two
+> commissioning steps sit opposite each other. Results regrouped to 3.1 detectors across both
+> systems (the four detector tables merged into one, with a mandatory note that the rows are not
+> comparable), 3.2 System A, 3.3 System B. Discussion is 4.1 to 4.4, Conclusions is 5.
+> **Honesty fix of record:** the abstract, contribution 6 and the conclusions all called System
+> B's split "held-out" while 3.1.3 states it is not independent of the training recordings; all
+> three now say validation split. Cross-reference rot is now caught by `thesis/check_refs.py`,
+> which validates every "Section x.y" against the real headings, the table and figure mentions,
+> the mandated skeleton and the no-em-dash rule; run it before every build. Page count is 24 and
+> the cut to 15 is planned in `thesis/PAGE_CUT_PLAN.md`.
+
+> **Update 2026-08-19 (SECOND SYSTEM).** The article now covers BOTH internship
+> projects and is retitled *Deployable Industrial Vision for Logistics: Metric
+> Multi-Camera Warehouse Monitoring and Real-Time Conveyor Parcel Sorting on Edge
+> Hardware*. New structure: §1 intro (both problems), **§2 common foundation** (the
+> shared core, written once so §3 and §4 never repeat it), §3 System A (the former
+> methods, stages intact), **§4 System B** (IsiDetector, from `~/logistic` main +
+> `~/logistic-fps` branch `fps`), §5 results for both (System A 5.1-5.6, System B
+> 5.7-5.11), §6 discussion incl. **§6.3 the cross-system comparison**, §7 conclusions.
+> Tables T9-T11 and figures F8-F13 are System B's; F8 (trigger pipeline) and F13
+> (line-placement study) are drawn from real data, **F9-F12 are placeholders the
+> author replaces by overwriting `thesis/figures/F<n>_<name>.pdf`** (no LaTeX edit
+> needed). Four verified references added, [35]-[38]. Evidence brief used by the
+> writers: `/home/aatanda/.claude/jobs/7c2f7304/tmp/systemB_evidence.md`.
+> HONESTY PINS for System B carried into the text: the counting study has NO labelled
+> ground truth (the "+21 %" is a configuration delta, not recall), the zero-polybag
+> result is unexplained, no PLC-side trigger latency was ever measured, no
+> post-quantization accuracy exists, no go-live date is recorded, and every throughput
+> or speedup figure in that project's docs is an unbacked estimate and is NOT quoted.
+> PDF is 24 pages; page count is deliberately unconstrained for now.
+
+> **Update 2026-08-19 (rack / étagère).** The manuscript now covers the étagère
+> (bin-rack) cell-occupancy feature merged from main on 2026-08-17: a second, non-metric
+> zone family. Where it landed: contribution 5 (§1.3); stage-map rows (§2.1); rack-cell
+> dataset + the nc=2 end-to-end decode ambiguity (§2.3); the rack subsection and new
+> **Figure F7** (§2.4, `thesis/figures/src/f7_etagere.py`); the per-cell stabilizer (§2.5);
+> `etagere_state`, the retained MQTT topic and `GET /etagere` (§2.6); a NEW results
+> subsection **§3.3** with **Table T4** (rack-cell detector: 0.994 box mAP@0.5 / 0.983
+> mAP@0.5:0.95 at epoch 75/100 on 155 val images, 137 instances) which shifted the old
+> §3.3-3.5 to §3.4-3.6 and Markdown tables T4-T7 to T5-T8; interpretation in §4.1;
+> limitation 10; conclusions and future work. Honesty pins carried into the text: the rack
+> validation split is same-recording (frame-grouped, video-stratified, originals-only), the
+> feature is currently `detection_enabled: false` in the live config, and NO on-rig accuracy,
+> fps, or latency exists for it. Test count 882 -> 927 (33 rack tests). PDF is 17 pages;
+> the 15-page cap is deliberately deferred ("reduce later", user 2026-08-19).
+
+> The per-section files in `thesis/draft/` received the August factual edits but NOT the
+> restructure; they are frozen as provenance (traceability comments) and must not be
+> re-assembled over MANUSCRIPT.md. Still not written into the article: any live Track3D
+> reprojection distribution / rate (no archived artifact; G2 remains open).
+
 **Framing (decided):** one integrated **system article** — every module covered
 proportionately, depth only where the work is ours.
 

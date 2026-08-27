@@ -83,7 +83,7 @@ def main() -> None:
 
     # ---- top row: homography chain (always on, per frame) ------------------
     Y1, H1 = 0.60, 0.17
-    ax.text(0.01, 0.885, "HOMOGRAPHY — always on, every frame, every detection", fontsize=7,
+    ax.text(0.01, 0.885, "HOMOGRAPHY: always on, every frame, every detection", fontsize=7,
             color=INK_MUTED, weight="bold")
     xs = 0.01
     w_gap = 0.018
@@ -111,7 +111,7 @@ def main() -> None:
 
     # ---- bottom row: triangulation branch (on demand) ----------------------
     Y2, H2 = 0.13, 0.17
-    ax.text(0.01, 0.415, "TRIANGULATION — on demand, only for subscribed tracks (Mode 2)",
+    ax.text(0.01, 0.415, "TRIANGULATION: on demand, only for subscribed tracks (Mode 2)",
             fontsize=7, color=INK_MUTED, weight="bold")
     xs2 = 0.115
     bots = [

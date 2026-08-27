@@ -48,10 +48,10 @@ def first(d: Path, pattern: str = "*"):
 
 def f3() -> None:
     cells = [
-        ("ChArUco — intrinsics", first(C1 / "intrinsic" / "cam_a"), first(C1 / "intrinsic" / "cam_b")),
-        ("AprilGrids — extrinsics (same instant)", C1 / "extrinsic" / "cam_a" / "cam_a_000.jpg",
+        ("ChArUco: intrinsics", first(C1 / "intrinsic" / "cam_a"), first(C1 / "intrinsic" / "cam_b")),
+        ("AprilGrids: extrinsics (same instant)", C1 / "extrinsic" / "cam_a" / "cam_a_000.jpg",
          C1 / "extrinsic" / "cam_b" / "cam_b_000.jpg"),
-        ("ChArUco — floor anchor", first(C1 / "floor" / "cam_a"), first(C1 / "floor" / "cam_b")),
+        ("ChArUco: floor anchor", first(C1 / "floor" / "cam_a"), first(C1 / "floor" / "cam_b")),
     ]
     fig, axes = plt.subplots(2, 3, figsize=(6.9, 2.9), dpi=300)
     fig.patch.set_facecolor(SURFACE)

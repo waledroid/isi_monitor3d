@@ -86,12 +86,28 @@ def main() -> None:
     ax.set_ylim(0, 1)
     ax.axis("off")
 
-    # lane headers + separators
-    label(ax, 0.125, 0.965, "OFFLINE — artifact production", fs=7, color=INK_MUTED)
-    label(ax, 0.485, 0.965, "RUNTIME NODE (one PC, one GPU)", fs=7, color=INK_MUTED)
-    label(ax, 0.865, 0.965, "DELIVERY", fs=7, color=INK_MUTED)
-    for x in (0.255, 0.735):
-        ax.plot([x, x], [0.05, 0.93], color=BOX_EDGE, lw=0.7, ls=(0, (1, 3)))
+    # lane panels — three clearly separated parts, each with its own tint
+    lanes = [
+        (0.002, 0.250, "#f6f4ef", "1 · OFFLINE ARTIFACTS"),
+        (0.262, 0.470, "#edf3fb", "2 · RUNTIME NODE (one PC, one GPU)"),
+        (0.742, 0.256, "#f0f5f0", "3 · DELIVERY"),
+    ]
+    for lx, lw_, fill, title in lanes:
+        ax.add_patch(
+            FancyBboxPatch(
+                (lx, 0.035),
+                lw_,
+                0.895,
+                boxstyle="round,pad=0.004,rounding_size=0.014",
+                facecolor=fill,
+                edgecolor=BOX_EDGE,
+                linewidth=0.8,
+            )
+        )
+        ax.text(
+            lx + lw_ / 2, 0.955, title, ha="center", va="center",
+            fontsize=7.2, color=INK, weight="bold",
+        )
 
     # ---- offline lane ------------------------------------------------------
     box(ax, 0.015, 0.66, 0.22, 0.21, "isical", "calibration studio\nChArUco + AprilGrid\n→ bundle adjustment")

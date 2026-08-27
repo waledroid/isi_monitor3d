@@ -1,7 +1,7 @@
 <!-- UGA title block. Journal confirmed 2026-07-21 (no further validation
      needed). Surname ATANDA per author. -->
 
-*Submitted to: Computers in Industry (Elsevier)*
+*Master's Thesis Article, Université Grenoble Alpes*
 
 # A Modular Real-Time Multi-Camera Vision System for Metric 3D Monitoring of Warehouse Logistics: Synthetic-Data-Assisted Detection, Dual-Method Geometric Localization, and Edge Deployment
 

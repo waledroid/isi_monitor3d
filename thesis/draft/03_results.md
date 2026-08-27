@@ -15,8 +15,9 @@ All figures in this section trace to on-disk artifacts: the measurement-campaign
 | YOLO26l-seg (`best.pt`, epoch 154/172) | 640 | 0.950 | 0.951 | **0.977** | **0.948** | 0.972 | 0.921 |
 | YOLO26n-seg (`best.pt`, epoch 89/100) | 320 | 0.915 | 0.899 | 0.962 | 0.895 | 0.953 | 0.846 |
 | RF-DETR medium-seg (best-EMA, epoch 23/41) | 432 | 0.953 | 0.933 | 0.973 | 0.938 | 0.962 | 0.906 |
+| YOLO26n-seg, zone-crop-trained (`best.pt`, epoch 198/200) † | 320 | 0.962 | 0.907 | 0.974 | 0.934 | 0.969 | 0.906 |
 
-Sources: YOLO26l row — independent re-evaluation (command recorded in the measurement archive; `isi-train` env, ultralytics 8.4.22, torch 2.10.0+cu128, RTX 5070); YOLO26n row — the run's `results.csv` at its best epoch; RF-DETR row — the run's `metrics.csv` at the selected checkpoint.
+Sources: YOLO26l row — independent re-evaluation (command recorded in the measurement archive; `isi-train` env, ultralytics 8.4.22, torch 2.10.0+cu128, RTX 5070); YOLO26n row — the run's `results.csv` at its best epoch; RF-DETR row — the run's `metrics.csv` at the selected checkpoint. † Deployed since August 2026 (Section 2.4); evaluated on the `crop384` validation split (1,033 crops derived from the same pallet3 validation images), so reported beside, not ranked against, the full-frame rows; from the run's `results.csv` (200 epochs, checkpoint by best box mAP@0.5:0.95).
 
 **Reproduction.** The headline YOLO26l-seg numbers were regenerated from the stored `best.pt` by an independent validation pass on the same 1,049 images: box mAP@0.5 reproduced exactly (0.977) and box mAP@0.5:0.95 within 0.001 of the training-time report (0.948 vs 0.947); precision/recall differ slightly (0.950/0.951 vs 0.960/0.939) because the evaluator selects a different F1-optimal confidence point per run. The re-evaluation also recorded the mask mAPs (0.972 / 0.921), which the original training report did not headline. Evaluation speed in that pass was 1.2 ms preprocess / 10.3 ms inference / 1.2 ms postprocess per image at batch 8. Raw outputs (PR curves, confusion matrices) are archived with the measurement artifacts.
 
@@ -38,16 +39,16 @@ For RF-DETR medium-seg, the trainer's COCO evaluator reports per-class box AP at
 
 ## 3.2 Calibration accuracy
 
-The deployed two-camera rig (project `c1`) was calibrated with the two-stage workflow of Section 2.3: 25 accepted ChArUco shots per camera (intrinsics), 8 synchronized pairs of the 6-board AprilGrid target (extrinsics, intrinsics fixed), and 8 flat ChArUco floor placements per camera (world anchor, RANSAC consensus plane).
+The deployed two-camera rig (project `c1`) was calibrated with the two-stage workflow of Section 2.3: 25 accepted ChArUco shots per camera (intrinsics), 8 synchronized pairs of the 6-board AprilGrid target (extrinsics, intrinsics fixed), and flat ChArUco floor placements (world anchor, RANSAC consensus plane). The extrinsic and floor stages were re-run by the operator on 2026-08-06 — camera drift confirmed on that day made the July solve misfit — with 12 floor placements across both cameras; the figures below are from that solve, which is the one deployed.
 
 **Table T3 — Deployed-rig calibration reprojection RMS (`isical/data/c1/`).**
 
 | Quantity | cam_a | cam_b | Applicable gate |
 |---|---|---|---|
 | Intrinsic-stage reprojection RMS (25 shots/cam) | 0.603 px | 0.451 px | — (feeds the fixed-K extrinsic solve) |
-| Joint extrinsic consensus reprojection RMS | 1.621 px | 1.621 px | ≤ 2.0 px (assembly gate) |
+| Joint extrinsic consensus reprojection RMS | 1.176 px | 1.176 px | ≤ 2.0 px (assembly gate) |
 
-The written calibration passed the 2.0 px assembly gate with a joint consensus RMS of 1.621 px on both cameras (`calibration_refined.json`). This bundle-adjustment residual is the quantity checked against the ≤ 2 px homography-error acceptance target at calibration time; its relation to runtime floor-projection error is discussed in Section 4. The intrinsic-stage values (`work/intrinsic_rms.json`) are the per-camera ChArUco solve residuals consumed, with intrinsics frozen, by the joint solve.
+The written calibration passed the 2.0 px assembly gate with a joint consensus RMS of 1.176 px on both cameras (768 of 768 board points retained by the outlier pass; per-point error quantiles 0.09 / 0.69 / 0.97 / 1.32 / 3.80 px for min / Q1 / median / Q3 / max). The July 2026 solve it replaced had reached 1.621 px from 8 floor placements; the operator re-solve took one session and, because it defines a new world origin, required the zone polygons to be redrawn. This bundle-adjustment residual is the quantity checked against the ≤ 2 px homography-error acceptance target at calibration time; its relation to runtime floor-projection error is discussed in Section 4. The intrinsic-stage values (`work/intrinsic_rms.json`) are the per-camera ChArUco solve residuals consumed, with intrinsics frozen, by the joint solve.
 
 ## 3.3 End-to-end runtime
 
@@ -102,7 +103,7 @@ Three observations follow from the table. First, the synthetic-only model is a f
 
 ## 3.5 Geometric verification bounds (synthetic ground truth)
 
-The geometric core's accuracy is continuously verified against synthetic ground truth by the repository's hermetic end-to-end tests (721 tests collected on 2026-07-20); these are **software verification bounds under a synthetic camera model, not field accuracy measurements** — no tape-measured ground-truth campaign has yet been run on the deployed rig (Section 4).
+The geometric core's accuracy is continuously verified against synthetic ground truth by the repository's hermetic end-to-end tests (882 tests collected on 2026-08-15); these are **software verification bounds under a synthetic camera model, not field accuracy measurements** — no tape-measured ground-truth campaign has yet been run on the deployed rig (Section 4).
 
 **Table T7 — Synthetic end-to-end accuracy bounds enforced by the test suite.**
 
@@ -111,7 +112,7 @@ The geometric core's accuracy is continuously verified against synthetic ground 
 | Homography chain (foot → `Track2D`) | zero pixel noise | ≤ 1 mm vs ground truth (asserted at 10⁻³ m) |
 | Homography chain | 2 px Gaussian noise on every detection | < 10 cm vs ground truth |
 | Triangulation (foot centroid → `Track3D`) | zero pixel noise, 2 cameras | ≤ 1 mm in X, Y, Z |
-| Reprojection gate | all triangulations | max per-view error ≤ 5 px (deployed default; 5–8 px allowed) |
+| Reprojection gate | all triangulations | max per-view error ≤ 5 px (code default; 5–8 px allowed; 60 px on the deployed rig — Section 2.5) |
 
 The bounds are assertions in `tests/test_e2e_homography_synthetic.py` and `tests/test_e2e_triangulation_synthetic.py`, exercised on every suite run; the pipeline under test is composed from the production classes (projector, fusion, gates, trackers, triangulator), not mocks.
 

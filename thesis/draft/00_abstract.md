@@ -11,7 +11,7 @@ triangulation, both sharing a common identity space.
 
 Validated on a deployed dual-camera system under full production load, isiMonitor3d
 achieved a 40.3 ms median and 78.1 ms 95th-percentile capture-to-publish latency, well
-below the 200 ms target. Calibration reached a 1.621 px bundle-adjustment residual
+below the 200 ms target. Calibration reached a 1.176 px bundle-adjustment residual
 (target ≤ 2 px), while the best detector achieved 0.977 box mAP@0.5 on the validation
 set. A controlled ablation showed that synthetic images generated from 53 real
 photographs cannot replace real training data (0.223 vs. 0.941 box mAP@0.5 on real
