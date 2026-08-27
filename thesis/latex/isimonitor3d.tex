@@ -128,7 +128,7 @@ Synthetic data has evolved from domain randomization and rendered scenes toward 
 
 Control-based generation adds further control over the structure of synthetic images. ControlNet allows pretrained diffusion models to follow spatial conditions such as depth, edges, or poses while preserving the model's generative capabilities \cite{zhang2023controlnet}. Combined with segmentation, this can provide images and corresponding masks suitable for supervised training. LoRA offers an efficient alternative to full model fine-tuning by learning small, low-rank weight updates \cite{hu2022lora}, making adaptation to specific object classes practical when only a limited number of real images are available. Recent promptable segmentation models such as SAM2 \cite{ravi2024sam2} can further automate the extraction of object masks from generated or real images.
 
-Despite these advances, the value of combining generative models, lightweight adaptation, and automatic segmentation within a complete industrial vision pipeline remains less explored. In isiMonitor3d, the isiGen pipeline combines SDXL, ControlNet, class-specific LoRA adapters, and SAM2 to generate additional training data from a small set of real photographs. Its effectiveness is evaluated experimentally in Section 3.6.2.
+Despite these advances, the value of combining generative models, lightweight adaptation, and automatic segmentation within a complete industrial vision pipeline remains less explored. In isiMonitor3d, the isiGen pipeline combines SDXL, ControlNet, class-specific LoRA adapters, and SAM2 to generate additional training data from a small set of real photographs. Its effectiveness is evaluated experimentally in Section 3.6.
 
 \subsubsection{Machine-Consumable Delivery and Edge Runtime}
 
@@ -148,9 +148,11 @@ For industrial sorting, the timing of the event is also important. A correct cla
 
 The conveyor system also targets CPU-only industrial computers, where inference efficiency is critical. Model quantization reduces computational cost by representing weights and activations with lower-precision numerical formats. The deployed model uses OpenVINO as the inference runtime and is generated from the common ONNX model used across the systems. This enables the same detection pipeline to be adapted to hardware with more limited computational resources.
 
-\section{System A: Metric Multi-Camera Warehouse Monitoring}
+\section{Materials and Methods}
 
-isiMonitor3d is organized as five stages along the data flow. Stages 1 (calibration) and 2 (model production) run once at commissioning and write \texttt{calibration.json} and the \texttt{.onnx} detectors; Stages 3 to 5 run continuously. Input is video from one or two fixed RGB cameras; output is metric, identity-stable object metadata delivered as versioned JSON over UDP and MQTT: 2D floor-plane tracks (\texttt{Track2D}) continuously, and 3D tracks (\texttt{Track3D}) on demand when stereo observations are available. The five acceptance criteria of the customer specification are design requirements here, validated in Section 2.6.
+\subsection{System A: Metric Multi-Camera Warehouse Monitoring}
+
+isiMonitor3d is organized as five stages along the data flow. Stages 1 (calibration) and 2 (model production) run once at commissioning and write \texttt{calibration.json} and the \texttt{.onnx} detectors; Stages 3 to 5 run continuously. Input is video from one or two fixed RGB cameras; output is metric, identity-stable object metadata delivered as versioned JSON over UDP and MQTT: 2D floor-plane tracks (\texttt{Track2D}) continuously, and 3D tracks (\texttt{Track3D}) on demand when stereo observations are available. The five acceptance criteria of the customer specification are design requirements here, validated in Section 3.
 
 The five modules have distinct life cycles (\figref{fig:arch}): (i) \textbf{isical}, the operator-guided calibration application that writes \texttt{calibration.json}; (ii) the offline pair \textbf{isiGen/isidet}, which generates synthetic data and trains detectors in a separate environment, exporting only ONNX; (iii) \textbf{isistream}, the perception producer (acquisition, decoding, object detection, pose); (iv) the \textbf{backbone metric engine}, owning all geometric reasoning and identity; and (v) \textbf{isicomms}, providing MQTT publication and a REST gateway for polling clients such as AGVs. Because the life cycles differ (once per deployment, offline on retraining, continuous), each module deploys, updates and restarts on its own. \tabref{tab:stagemap} summarizes the five stages.
 
@@ -163,13 +165,13 @@ The five modules have distinct life cycles (\figref{fig:arch}): (i) \textbf{isic
 
 At runtime, Stages 3 and 4 are two processes connected through a loopback interface (``Direction 1''). Perception is GPU-intensive and throughput-oriented, metric reasoning CPU-light and latency-sensitive; running both in one Python process caused contention between the interpreter lock and the inference thread pools, quantified in Section 4.1. isistream sends one \texttt{DetectionSetMessage} per camera to the backbone metric engine over a dedicated UDP loopback port (default 9010), a configuration called \emph{points mode}; the engine works on detection metadata alone and imports neither CUDA runtimes nor inference libraries.
 
-Each message carries four pieces of runtime information. The frame \texttt{capture\_ts} is the single latency reference propagated downstream; cached detections are re-emitted with the current timestamp when the motion gate of Section 2.3 suppresses inference. An explicit-empty heartbeat means silence signals a camera fault rather than an empty scene. A per-camera monotonic sequence counter makes UDP loss show up as measurable gaps. A configuration fingerprint exposes calibration, model, or zone mismatch between producer and engine.
+Each message carries four pieces of runtime information. The frame \texttt{capture\_ts} is the single latency reference propagated downstream; cached detections are re-emitted with the current timestamp when the motion gate of Section 2.4 suppresses inference. An explicit-empty heartbeat means silence signals a camera fault rather than an empty scene. A per-camera monotonic sequence counter makes UDP loss show up as measurable gaps. A configuration fingerprint exposes calibration, model, or zone mismatch between producer and engine.
 
 Decoded frames are also distributed through a decode-once shared-memory frame bus, one double-buffered seqlock segment per camera (\texttt{/dev/shm/isi3d\_frame\_<cam>}) with lock-free readers. The result is one RTSP session and one decode per camera, so every consumer sees the exact pixels the perception pipeline processed.
 
-Modules communicate only through two stable interfaces, the backbone UDP/JSON schema (Section 2.5) and the isicomms MQTT-in/REST-out interface: they share messages, not code, and evolve by extending the schema. Inside the backbone, extensibility is limited to five abstract plugin interfaces (\texttt{FrameSource}, \texttt{Detector}, \texttt{Tracker}, \texttt{Triangulator}, \texttt{MetadataSink}) that self-register through a registry, a fixed set pinned by a unit test; everything else (projection, fusion, gating, stabilization) is concrete, so substitution exists only where algorithmic or hardware diversity is real.
+Modules communicate only through two stable interfaces, the backbone UDP/JSON schema (Section 2.6) and the isicomms MQTT-in/REST-out interface: they share messages, not code, and evolve by extending the schema. Inside the backbone, extensibility is limited to five abstract plugin interfaces (\texttt{FrameSource}, \texttt{Detector}, \texttt{Tracker}, \texttt{Triangulator}, \texttt{MetadataSink}) that self-register through a registry, a fixed set pinned by a unit test; everything else (projection, fusion, gating, stabilization) is concrete, so substitution exists only where algorithmic or hardware diversity is real.
 
-\subsection{Stage 1: Site Geometry and Operator-Guided Calibration}
+\subsection{System A, Stage 1: Site Geometry and Operator-Guided Calibration}
 
 Stage 1 is performed once when a new camera rig is installed. Its purpose is to determine the geometry of each camera and save it in a single \texttt{calibration.json} file. All later stages use this same file, ensuring that the system has one consistent geometric reference.
 
@@ -196,13 +198,13 @@ Before calibration is accepted, the system checks the reprojection error. The de
 
 The resulting \texttt{calibration.json} is then used unchanged by Stage 3 to project monitoring zones into the camera views and by Stage 4 for all metric geometric measurements. This establishes the ``one calibration, two queries'' principle used throughout the system.
 
-\subsection{Stage 2: Data Preparation and Detector Models}
+\subsection{System A, Stage 2: Data Preparation and Detector Models}
 
 Stage 2 converts annotated site images into the detector models used by Stage 3. It produces ONNX models that are loaded directly by the deployed perception pipeline. Both the warehouse and rack datasets are prepared through isiGen, the shared dataset pipeline, ensuring a common process for annotation, splitting, augmentation, and dataset export.
 
 \textbf{isiGen: shared dataset pipeline.} isiGen provides the common dataset-production workflow used by both systems. It consists of ten plugin steps covering data curation, automatic object detection, SAM2 mask generation, control-map generation, captioning, LoRA training, image generation, quality filtering, and dataset export. The complete pipeline therefore supports both conventional real-image dataset preparation and synthetic-data generation.
 
-The generative path is specific to System B and was used to produce synthetic parcel images. It is described separately in Section 3.2, where its contribution is evaluated through the synthetic-data ablation. The System A detector results reported in this section were trained exclusively on real images; synthetic images were kept separate from the main training corpus.
+The generative path is specific to System B and was used to produce synthetic parcel images. It is described separately in Section 2.9, where its contribution is evaluated through the synthetic-data ablation. The System A detector results reported in this section were trained exclusively on real images; synthetic images were kept separate from the main training corpus.
 
 \textbf{Warehouse-object detector.} The first detector identifies three warehouse object classes: \texttt{palette} (pallet), \texttt{carton}, and \texttt{polybag}. The dataset contains 5{,}540 training images and 1{,}049 validation images, all captured from real sites. The models used are YOLO26-seg and RF-DETR-seg. They are fine-tuned using isidet in a separate Conda environment and exported to ONNX with opset 17, preserving the raw prediction head. This isolates training dependencies from the deployed perception stack and allows the same model artifact to be used by Stage 3. Detector performance is reported in \tabref{tab:detectors}.
 
@@ -239,9 +241,9 @@ During export, a specific decoding ambiguity was identified for the two-class ra
 
 The final ONNX models produced by Stage 2 are passed unchanged to Stage 3, where they are executed using ONNX Runtime.
 
-\subsection{Stage 3: Perception}
+\subsection{System A, Stage 3: Perception}
 
-Stage 3 is the online perception stage. It takes RTSP video from one or two fixed cameras, together with the calibration from Stage 1 and the detector models from Stage 2, and produces one \texttt{DetectionSetMessage} per camera over the UDP loopback interface. Its latency and throughput are evaluated in Section 2.6.4.
+Stage 3 is the online perception stage. It takes RTSP video from one or two fixed cameras, together with the calibration from Stage 1 and the detector models from Stage 2, and produces one \texttt{DetectionSetMessage} per camera over the UDP loopback interface. Its latency and throughput are evaluated in Section 3.4.
 
 \subsubsection{Video Capture, Runtime Loop, and Inference}
 
@@ -251,13 +253,13 @@ A paced loop processes the newest frame from each camera: zone crops from all ca
 
 \textbf{Motion gate.} Warehouse scenes are often static, so inference is skipped when nothing moves: a $32 \times 32$ grayscale comparison marks a frame as changed when more than 2\,\% of pixels differ by at least 15 levels. The test runs per zone for object detection and on the full frame for pose; inference is forced at least every 2\,s, and skipped ticks re-emit the previous detections with the new \texttt{capture\_ts}, keeping the output stream continuous.
 
-\textbf{Detection models.} Object detection uses YOLO26-seg and RF-DETR-seg models exported to ONNX and run through ONNX Runtime, so the same file serves the development machine and Jetson production hardware through interchangeable execution providers: TensorRT in the measured configuration (engines cached on disk, batch sizes bucketed at 1--32 to bound engine builds; an optional SAHI mode tiles unusually large zones), CUDA as a fallback, and an OpenVINO plugin for Intel CPUs. Person pose uses a YOLO11-pose model; the ankle midpoint of each person's 2D keypoints becomes the foot point Stage 4 consumes. Masks are polygonized and packed with boxes, foot points, and keypoints into the per-camera \texttt{DetectionSetMessage}; rack states (Section 2.3.3) travel separately; every message carries its \texttt{capture\_ts}; and no pixels leave Stage 3.
+\textbf{Detection models.} Object detection uses YOLO26-seg and RF-DETR-seg models exported to ONNX and run through ONNX Runtime, so the same file serves the development machine and Jetson production hardware through interchangeable execution providers: TensorRT in the measured configuration (engines cached on disk, batch sizes bucketed at 1--32 to bound engine builds; an optional SAHI mode tiles unusually large zones), CUDA as a fallback, and an OpenVINO plugin for Intel CPUs. Person pose uses a YOLO11-pose model; the ankle midpoint of each person's 2D keypoints becomes the foot point Stage 4 consumes. Masks are polygonized and packed with boxes, foot points, and keypoints into the per-camera \texttt{DetectionSetMessage}; rack states (Section 2.4.3) travel separately; every message carries its \texttt{capture\_ts}; and no pixels leave Stage 3.
 
 \subsubsection{Zone-Scoped Detection}
 
 Object detection is restricted to operator-defined floor regions, while pose estimation keeps the full image. Zones are polygons in metric floor coordinates, drawn on the floor map or by clicking points in a camera view (converted through the Stage 1 calibration), each with a base height $z_{\text{base}}$: 0\,m for floor zones, higher for raised surfaces. At runtime each polygon is projected into the camera image and extended vertically from $z_{\text{base}}$ to $z_{\text{base}} + 2$\,m so loaded pallets stay inside the region; zones outside a camera's field of view are ignored.
 
-All plane geometry runs through one primitive: the undistorted pixel ray intersected with the plane $Z = z_{\text{base}}$, which for $z_{\text{base}} = 0$ matches the homography exactly. It drives zone projection, in-zone membership, and the zone decisions of Stage 4, while published track positions stay raw rather than snapped to the plane. Visible crops from all cameras are letterboxed to the detector input size (384\,px by default; 320\,px in the deployed system and all experiments of Section 2.6) and run in one batched inference, with detections mapped back to full-image coordinates. Cropping magnifies distant zones, so small objects get better effective resolution than in full-frame detection.
+All plane geometry runs through one primitive: the undistorted pixel ray intersected with the plane $Z = z_{\text{base}}$, which for $z_{\text{base}} = 0$ matches the homography exactly. It drives zone projection, in-zone membership, and the zone decisions of Stage 4, while published track positions stay raw rather than snapped to the plane. Visible crops from all cameras are letterboxed to the detector input size (384\,px by default; 320\,px in the deployed system and all experiments of Section 3) and run in one batched inference, with detections mapped back to full-image coordinates. Cropping magnifies distant zones, so small objects get better effective resolution than in full-frame detection.
 
 \textbf{Zone-crop training data.} Because the detector sees letterboxed crops, the deployed YOLO26n-seg model was trained in the same format: 5{,}731 training and 1{,}033 validation crops (384\,px object-centred windows with the inference-time gray fill and enhancement), plus 89 empty-support crops and 356 photometric variants added after an early deployment detected the empty pallet support as a pallet (performance in \tabref{tab:detectors}). Overlapping zone crops can detect the same object twice, so a per-camera, per-class deduplication keeps only the highest-confidence detection; with no zones configured, the system runs pose-only.
 
@@ -286,9 +288,9 @@ The metric engine stabilizes these raw verdicts cell by cell: a held state flips
 
 
 
-\subsection{Stage 4: Decision Layer, Metric Geometry and Identity}
+\subsection{System A, Stage 4: Decision Layer, Metric Geometry and Identity}
 
-Stage 4 is the metric engine: it turns the per-camera detection messages of Stage 3 into tracks and operational states: the continuous \texttt{Track2D} stream, the on-demand \texttt{Track3D} stream, and the retained zone states. Two invariants organize it (\figref{fig:pipeline}): both geometric queries read the same \texttt{calibration.json}, and identity is created exactly once, by the 2D tracker; the 3D pipeline only adds a third coordinate to existing tracks. Runtime behaviour is evaluated in Section 2.6.4.
+Stage 4 is the metric engine: it turns the per-camera detection messages of Stage 3 into tracks and operational states: the continuous \texttt{Track2D} stream, the on-demand \texttt{Track3D} stream, and the retained zone states. Two invariants organize it (\figref{fig:pipeline}): both geometric queries read the same \texttt{calibration.json}, and identity is created exactly once, by the 2D tracker; the 3D pipeline only adds a third coordinate to existing tracks. Runtime behaviour is evaluated in Section 3.4.
 
 \begin{figure}[!htb]
     \centering
@@ -308,7 +310,7 @@ Localization always starts on the floor. For each detection only the floor-conta
 \begin{pmatrix} X \\ Y \\ 1 \end{pmatrix} \propto \mathbf{H}\,\tilde{\mathbf{p}},
 \qquad \tilde{\mathbf{p}} = \Pi^{-1}(\mathbf{u};\, \mathbf{K}, \mathbf{D}).
 \end{equation}
-When several cameras see the same object, including the two views of a twinned zone, floor positions are matched by Euclidean distance with Hungarian assignment (0.8\,m for persons and pallets, 1.6\,m for forklifts) and merged by averaging. A tighter per-class agreement gate (0.4\,m / 0.8\,m) rejects fusions whose views disagree and keeps the higher-confidence observation, the ``fail honestly'' principle applied inside the 2D path. On the deployed rig the pallet thresholds are widened to 1.0\,m and 0.8\,m to absorb the loading-platform parallax described in Section 2.3.2.
+When several cameras see the same object, including the two views of a twinned zone, floor positions are matched by Euclidean distance with Hungarian assignment (0.8\,m for persons and pallets, 1.6\,m for forklifts) and merged by averaging. A tighter per-class agreement gate (0.4\,m / 0.8\,m) rejects fusions whose views disagree and keeps the higher-confidence observation, the ``fail honestly'' principle applied inside the 2D path. On the deployed rig the pallet thresholds are widened to 1.0\,m and 0.8\,m to absorb the loading-platform parallax described in Section 2.4.2.
 
 Triangulation adds height on demand: it runs only for tracks matching declarative subscription rules (object class, minimum observing cameras, zone membership, rate limits), so its cost scales with consumer demand rather than scene complexity. For a subscribed track, the per-camera observations of the same synchronized frame are recovered and triangulated with the standard Direct Linear Transform,
 \begin{equation}
@@ -322,13 +324,13 @@ Fused observations feed a modified ByteTrack running directly in metric coordina
 
 \subsubsection{Zone and Pallet State}
 
-Pallet occupancy is estimated by a rule-based module from two cues with different failure modes, image overlap and metric floor margin, and stabilized by the same majority vote. The zone-level verdict consumed by the WMS comes from a dedicated pallet-state manager fed by detection evidence rather than the track list. A detection from any camera whose foot projection lies inside the zone polygon ($\pm 0.15$\,m) proves presence; occupancy is resolved across cameras by ``loaded wins'' and per-class counts by maximum; and the resulting state (\texttt{no\_data}, \texttt{no\_palette}, \texttt{palette\_empty}, \texttt{palette\_loaded}) enters after 2 evidence frames, leaves after 15 absent frames, and is published as a \texttt{decision} field on the retained zone state (Section 2.5). Track-level zone membership keeps its own entry/exit hysteresis (3 frames in, 15 out).
+Pallet occupancy is estimated by a rule-based module from two cues with different failure modes, image overlap and metric floor margin, and stabilized by the same majority vote. The zone-level verdict consumed by the WMS comes from a dedicated pallet-state manager fed by detection evidence rather than the track list. A detection from any camera whose foot projection lies inside the zone polygon ($\pm 0.15$\,m) proves presence; occupancy is resolved across cameras by ``loaded wins'' and per-class counts by maximum; and the resulting state (\texttt{no\_data}, \texttt{no\_palette}, \texttt{palette\_empty}, \texttt{palette\_loaded}) enters after 2 evidence frames, leaves after 15 absent frames, and is published as a \texttt{decision} field on the retained zone state (Section 2.6). Track-level zone membership keeps its own entry/exit hysteresis (3 frames in, 15 out).
 
 \texttt{Track2D}, \texttt{Track3D}, and the retained zone state leave this stage as schema-versioned JSON envelopes, which Stage 5 carries to consumers unchanged.
 
-\subsection{Stage 5: Delivery and Deployment}
+\subsection{System A, Stage 5: Delivery and Deployment}
 
-Stage 5 is the communication layer of the system. It takes the JSON messages produced by Stage 4 and delivers them to local modules, remote subscribers, and external systems such as AGV controllers. Its runtime behaviour is evaluated in Section 2.6.4.
+Stage 5 is the communication layer of the system. It takes the JSON messages produced by Stage 4 and delivers them to local modules, remote subscribers, and external systems such as AGV controllers. Its runtime behaviour is evaluated in Section 3.4.
 
 \subsubsection{Communication Interfaces}
 
@@ -350,100 +352,7 @@ In deployment, the perception producer and metric engine run as two independent 
 
 Stage 5 therefore completes the pipeline by converting the internal perception and tracking results into stable interfaces that can be consumed by monitoring software, WMS/FMS systems, AGV controllers, and other external applications.
 
-\subsection{Results for System A}
-
-This section reports the main results for System A in pipeline order: detector accuracy, rack-cell performance, calibration accuracy, and live runtime.
-
-\subsubsection{System A: Pallet Corpus}
-
-The \texttt{pallet3} corpus contains 5{,}540 training and 1{,}049 validation images for three classes: \texttt{palette} (pallet), \texttt{carton}, and \texttt{polybag}. A provenance audit confirmed that all images are real photographs. No independent test set was available; therefore, all reported accuracy is based on the validation split.
-
-The detector results are summarized in \tabref{tab:detectors}. The independently evaluated YOLO26l-seg model achieved 0.977 box mAP@0.5, 0.948 box mAP@0.5:0.95, 0.972 mask mAP@0.5, and 0.921 mask mAP@0.5:0.95, with 10.3\,ms/image inference at batch size 8; its per-class breakdown is given in \tabref{tab:t2}. RF-DETR medium-seg achieved per-class box AP values of 0.916 (\texttt{palette}), 0.905 (\texttt{carton}), and 0.971 (\texttt{polybag}).
-
-\begin{table*}[tbp]
-    \caption{YOLO26l-seg per-class validation accuracy (independent re-evaluation).}
-    \label{tab:t2}
-    \centering
-    \small
-    \setlength{\tabcolsep}{4pt}
-    \begin{tabular}{lcccccccc}
-    \toprule
-    \textbf{Class} & \textbf{Images} & \textbf{Instances} & \textbf{Box P} & \textbf{Box R} & \textbf{Box mAP@0.5} & \textbf{Box mAP@0.5:0.95} & \textbf{Mask mAP@0.5} & \textbf{Mask mAP@0.5:0.95} \\
-    \midrule
-    palette & 808 & 1{,}047 & 0.973 & 0.945 & 0.989 & 0.933 & 0.974 & 0.895 \\
-    carton & 74 & 174 & 0.909 & 0.948 & 0.960 & 0.943 & 0.960 & 0.900 \\
-    polybag & 186 & 215 & 0.967 & 0.958 & 0.983 & 0.969 & 0.980 & 0.967 \\
-    \bottomrule
-    \end{tabular}
-\end{table*}
-
-All configurations exceeded the acceptance target of mAP@0.5 $\geq 0.90$, with overall values of 0.973--0.977. The deployed 320\,px model achieved 0.974.
-
-The pallet empty/full occupancy KPI was not evaluated because no labelled dataset was available for this task.
-
-\subsubsection{System A: Rack-Cell Corpus}
-
-The rack detector classifies individual rack cells as \texttt{empty\_box} or \texttt{filled\_box}. Its validation set contains 155 original images from the recorded rack sessions. Training required 0.939\,h, while inference took 0.5\,ms per cell when batched and 4.2\,ms individually on the RTX 5070.
-
-These results characterize the evaluated rack only. Since training and validation originate from the same recording sessions, they do not demonstrate generalization to other racks, cameras, or sites.
-
-The detector was not enabled in the live production configuration because on-rig verification was still pending. Consequently, no live rack accuracy, throughput, or end-to-end latency is reported.
-
-\subsubsection{Stage 1: Calibration Accuracy}
-
-The deployed \texttt{c1} rig was recalibrated on 6 August 2026 after camera movement degraded the previous July calibration. The updated solve used 25 ChArUco images per camera, 8 synchronized AprilGrid pairs, and 12 floor placements across the two cameras.
-
-The calibration passed the acceptance gate, retaining 768/768 board points with a joint extrinsic consensus residual of 1.176\,px per camera (\tabref{tab:t3}). Reprojection-error quantiles were 0.09 / 0.69 / 0.97 / 1.32 / 3.80\,px (min / Q1 / median / Q3 / max). The previous July calibration had a residual of 1.621\,px.
-
-\begin{table}[tbp]
-    \caption{Deployed-rig calibration reprojection RMS.}
-    \label{tab:t3}
-    \centering
-    \footnotesize
-    \begin{tabular}{>{\raggedright\arraybackslash}p{0.36\columnwidth}ccp{0.2\columnwidth}}
-    \toprule
-    \textbf{Quantity} & \textbf{cam\_a} & \textbf{cam\_b} & \textbf{Applicable gate} \\
-    \midrule
-    Intrinsic-stage reprojection RMS (25 shots/cam) & 0.603\,px & 0.451\,px & none (feeds the fixed-K extrinsic solve) \\
-    Joint extrinsic consensus reprojection RMS & 1.176\,px & 1.176\,px & $\leq 2.0$\,px (assembly gate) \\
-    \bottomrule
-    \end{tabular}
-\end{table}
-
-The updated calibration therefore satisfied the $\leq 2$\,px acceptance criterion. Because the new solve defined a new world origin, the existing zone polygons had to be redrawn.
-
-\subsubsection{Stages 3--5: End-to-End Runtime}
-
-Live performance was measured for 310\,s, using 61 diagnostic heartbeats covering rolling windows of 2{,}048 published messages. The production configuration used motion gating, pose stride 1, TensorRT, zone-scoped detection, and two active cameras, with the dashboard, MQTT broker, and gateway all running (\figref{fig:dashboard}; the rack-cell view during on-rig verification in \figref{fig:racklive}).
-
-The system processed approximately 25.8\,fps aggregate ($>$18{,}000 frames), with approximately 13.4--13.8\,fps per camera. Capture-to-publish latency measured 40.3\,ms at p50, 78.1\,ms at p95, and 94.0\,ms at p99 (\figref{fig:latency}), meeting the 200\,ms acceptance limit with a 2.6$\times$ margin. Both cameras remained available throughout the measurement.
-
-
-
-An earlier configuration, before ingest downscaling, pose-input reduction, and motion gating, measured 77\,ms p50 / 126\,ms p95. These values are provided only for comparison; \figref{fig:latency} reports the final configuration.
-
-\begin{figure}[tbp]
-    \centering
-    \includegraphics[width=\columnwidth]{figures/F5_latency.pdf}
-    \caption{Live capture$\to$publish latency: per-heartbeat p50/p95/p99 over 310\,s, against the 200\,ms KPI.}
-    \label{fig:latency}
-\end{figure}
-
-\begin{figure}[!htb]
-    \centering
-    \includegraphics[width=\columnwidth]{figures/F6_dashboard.png}
-    \caption{The operator dashboard in live operation: camera view with zone polygons, a tracked person with metric proximity distances, and per-zone occupancy cards fed by the MQTT zone state.}
-    \label{fig:dashboard}
-\end{figure}
-
-\begin{figure}[!htb]
-    \centering
-    \includegraphics[width=\columnwidth]{figures/F14_rack_live.png}
-    \caption{Rack-cell detection on the dashboard: grid overlay on the camera view, per-cell detections, and the published cell matrix.}
-    \label{fig:racklive}
-\end{figure}
-
-\section{System B: Conveyor Parcel Classification and Sorter Triggering}
+\subsection{System B: Conveyor Parcel Classification and Sorter Triggering}
 
 System B monitors a single conveyor using a fixed overhead camera (\figref{fig:camsetup}). It classifies each parcel as carton or polybag and sends exactly one datagram when the parcel's leading edge crosses a predefined trigger line (\figref{fig:cartondet}). The sorter PLC uses this event to route the parcel without polling or human intervention.
 
@@ -476,19 +385,19 @@ System B reuses most of the validated components from System A, including the tr
     \label{fig:cartondet}
 \end{figure}
 
-\subsection{Stage 1: Site Geometry, Region of Interest and Trigger Line}
+\subsection{System B, Stage 1: Site Geometry, Region of Interest and Trigger Line}
 
 System B uses a simpler spatial configuration than System A because its task does not require metric localization. The camera is fixed above the conveyor, and no camera calibration is required.
 
 During commissioning, the operator defines a single region of interest (ROI) by drawing a rectangle around the conveyor on the live camera view. The ROI removes static areas outside the belt and reduces the amount of image processed by the detector. It is resized to the detector input using area interpolation, with the deployed detector operating at 320\,px.
 
-A single horizontal trigger line defines the point at which a parcel must generate an event. In the deployed configuration, the belt moves from top to bottom and the line is positioned at 71\,\% of the ROI height. This position was selected from the line-placement experiment reported in Section 3.6.3.
+A single horizontal trigger line defines the point at which a parcel must generate an event. In the deployed configuration, the belt moves from top to bottom and the line is positioned at 71\,\% of the ROI height. This position was selected from the line-placement experiment reported in Section 3.7.
 
 The system does not use the parcel centre to determine the crossing. Instead, it tracks the leading edge of the parcel. Consequently, the position of the trigger line and the definition of the leading-edge anchor must be commissioned together: moving the line changes the point at which the parcel is considered to have crossed.
 
 Thus, the complete spatial configuration consists of only one ROI, one trigger line, and the belt direction. This avoids the calibration and metric-coordinate requirements of System A and makes commissioning suitable for non-ML site operators.
 
-\subsection{Stage 2: Data Preparation and Detector Models}
+\subsection{System B, Stage 2: Data Preparation and Detector Models}
 
 System B was trained using parcel images from the customer's conveyor, complemented by synthetic data generated with the shared isiGen pipeline.
 
@@ -509,21 +418,21 @@ The generation process uses procedurally created scaffolds containing the contro
 
 RF-DETR-seg was also evaluated at 416\,px with batch size 2 and EMA enabled. However, the corresponding per-run hyperparameter files were empty, so the exact realized RF-DETR training settings cannot be fully reproduced. The two model families also use different checkpoint-selection criteria, meaning their reported rows should not be interpreted as perfectly controlled comparisons.
 
-The deployed model is YOLO26-seg nano at 320\,px, exported as an OpenVINO intermediate representation. Its accuracy and the reasons for selecting this configuration are reported in Section 3.6.1.
+The deployed model is YOLO26-seg nano at 320\,px, exported as an OpenVINO intermediate representation. Its accuracy and the reasons for selecting this configuration are reported in Section 3.5.
 
-\subsection{Stage 3: Perception}
+\subsection{System B, Stage 3: Perception}
 
 Stage 3 converts the live conveyor video into parcel detections. Acquisition uses a single RTSP camera, with TCP preferred and UDP used as a fallback. The stream has a 5\,s connection timeout, and a dropped stream is retried every second. Consequently, a temporary network interruption results in lost frames rather than requiring the complete application to restart.
 
 As in System A, a one-slot frame queue retains only the newest decoded frame. Older frames are discarded, preventing processing delays from accumulating when the detector operates below the camera frame rate.
 
-A CLAHE preprocessing stage was implemented as a potential solution to polybag glare. However, it is disabled in the deployed configuration. In the experiment reported in Section 3.6.4, enabling CLAHE repeatedly reduced the number of cartons detected on the same video and configuration. Since this was contrary to the intended effect, the measured behaviour was retained as a deployment result rather than assuming an unverified explanation.
+A CLAHE preprocessing stage was implemented as a potential solution to polybag glare. However, it is disabled in the deployed configuration. In the experiment reported in Section 3.8, enabling CLAHE repeatedly reduced the number of cartons detected on the same video and configuration. Since this was contrary to the intended effect, the measured behaviour was retained as a deployment result rather than assuming an unverified explanation.
 
 The perception layer supports several inference backends: TensorRT engines, OpenVINO representations, ONNX Runtime graphs, native RF-DETR checkpoints, and Ultralytics checkpoints. The selected backend depends on the available hardware. CPU operation supports YOLO models through OpenVINO or ONNX Runtime, while unsupported RF-DETR files are rejected by OpenVINO because of an identified 2026 toolchain issue with transformer Einsum operators.
 
 The deployed configuration is intentionally minimal: YOLO26-seg nano at a 320\,px input, OpenVINO with one inference stream, a confidence threshold of 0.7--0.75, and mask and trace decoding disabled. Only bounding boxes and class labels are required by the trigger logic, so segmentation masks are not decoded at runtime.
 
-\subsection{Stage 4: Decision Layer and Parcel Triggering}
+\subsection{System B, Stage 4: Decision Layer and Parcel Triggering}
 
 The decision layer has a different objective from System A. It does not estimate a parcel's metric position. Instead, it determines the precise moment when each parcel crosses a fixed trigger line, assigns its class, and guarantees that exactly one event is generated per parcel.
 
@@ -543,7 +452,7 @@ Each emitted event receives a monotonic sequence number, incremented only after 
 
 The resulting event contains the parcel class and trigger information and is sent once to the sorter interface. This design therefore converts continuous camera detections into a deterministic one-parcel~$\to$~one-trigger signal suitable for the PLC's timing window.
 
-\subsection{Stage 5: Delivery and Deployment}
+\subsection{System B, Stage 5: Delivery and Deployment}
 
 \textbf{UDP datagram.} Each detected crossing generates one UDP datagram of approximately 70 bytes, containing the parcel class, event sequence, tracker ID, and timestamp:
 
@@ -590,13 +499,104 @@ The stack is managed by systemd and starts automatically at boot. This was added
 
 A network lock-down utility freezes the configured network parameters and verifies the UDP path using live packet capture. It also generates a bilingual protocol sheet for the site automation engineer. Model-compression utilities, including FP16 and INT8 conversion, remain part of the office/development workflow and are not required on the deployed system.
 
-The measurements and their limitations are reported in Section 3.6, distinguishing experimentally verified performance from features that have been implemented but not quantitatively evaluated.
+The measurements and their limitations are reported in Section 3, distinguishing experimentally verified performance from features that have been implemented but not quantitatively evaluated.
 
-\subsection{Results for System B}
+\section{Results}
 
-This section evaluates System B in terms of detector performance, synthetic-data contribution, trigger-line selection, counting behaviour, deployment, and model compression.
+This section reports the measured results for both systems in pipeline order. For System A: detector accuracy, rack-cell performance, calibration accuracy, and live runtime. For System B: detector performance, the synthetic-data contribution, trigger-line selection, counting behaviour, deployed operation, and model compression.
 
-\subsubsection{System B: Parcel Corpus}
+
+\subsection{System A: Pallet Corpus}
+
+The \texttt{pallet3} corpus contains 5{,}540 training and 1{,}049 validation images for three classes: \texttt{palette} (pallet), \texttt{carton}, and \texttt{polybag}. A provenance audit confirmed that all images are real photographs. No independent test set was available; therefore, all reported accuracy is based on the validation split.
+
+The detector results are summarized in \tabref{tab:detectors}. The independently evaluated YOLO26l-seg model achieved 0.977 box mAP@0.5, 0.948 box mAP@0.5:0.95, 0.972 mask mAP@0.5, and 0.921 mask mAP@0.5:0.95, with 10.3\,ms/image inference at batch size 8; its per-class breakdown is given in \tabref{tab:t2}. RF-DETR medium-seg achieved per-class box AP values of 0.916 (\texttt{palette}), 0.905 (\texttt{carton}), and 0.971 (\texttt{polybag}).
+
+\begin{table*}[tbp]
+    \caption{YOLO26l-seg per-class validation accuracy (independent re-evaluation).}
+    \label{tab:t2}
+    \centering
+    \small
+    \setlength{\tabcolsep}{4pt}
+    \begin{tabular}{lcccccccc}
+    \toprule
+    \textbf{Class} & \textbf{Images} & \textbf{Instances} & \textbf{Box P} & \textbf{Box R} & \textbf{Box mAP@0.5} & \textbf{Box mAP@0.5:0.95} & \textbf{Mask mAP@0.5} & \textbf{Mask mAP@0.5:0.95} \\
+    \midrule
+    palette & 808 & 1{,}047 & 0.973 & 0.945 & 0.989 & 0.933 & 0.974 & 0.895 \\
+    carton & 74 & 174 & 0.909 & 0.948 & 0.960 & 0.943 & 0.960 & 0.900 \\
+    polybag & 186 & 215 & 0.967 & 0.958 & 0.983 & 0.969 & 0.980 & 0.967 \\
+    \bottomrule
+    \end{tabular}
+\end{table*}
+
+All configurations exceeded the acceptance target of mAP@0.5 $\geq 0.90$, with overall values of 0.973--0.977. The deployed 320\,px model achieved 0.974.
+
+The pallet empty/full occupancy KPI was not evaluated because no labelled dataset was available for this task.
+
+\subsection{System A: Rack-Cell Corpus}
+
+The rack detector classifies individual rack cells as \texttt{empty\_box} or \texttt{filled\_box}. Its validation set contains 155 original images from the recorded rack sessions. Training required 0.939\,h, while inference took 0.5\,ms per cell when batched and 4.2\,ms individually on the RTX 5070.
+
+These results characterize the evaluated rack only. Since training and validation originate from the same recording sessions, they do not demonstrate generalization to other racks, cameras, or sites.
+
+The detector was not enabled in the live production configuration because on-rig verification was still pending. Consequently, no live rack accuracy, throughput, or end-to-end latency is reported.
+
+\subsection{System A, Stage 1: Calibration Accuracy}
+
+The deployed \texttt{c1} rig was recalibrated on 6 August 2026 after camera movement degraded the previous July calibration. The updated solve used 25 ChArUco images per camera, 8 synchronized AprilGrid pairs, and 12 floor placements across the two cameras.
+
+The calibration passed the acceptance gate, retaining 768/768 board points with a joint extrinsic consensus residual of 1.176\,px per camera (\tabref{tab:t3}). Reprojection-error quantiles were 0.09 / 0.69 / 0.97 / 1.32 / 3.80\,px (min / Q1 / median / Q3 / max). The previous July calibration had a residual of 1.621\,px.
+
+\begin{table}[tbp]
+    \caption{Deployed-rig calibration reprojection RMS.}
+    \label{tab:t3}
+    \centering
+    \footnotesize
+    \begin{tabular}{>{\raggedright\arraybackslash}p{0.36\columnwidth}ccp{0.2\columnwidth}}
+    \toprule
+    \textbf{Quantity} & \textbf{cam\_a} & \textbf{cam\_b} & \textbf{Applicable gate} \\
+    \midrule
+    Intrinsic-stage reprojection RMS (25 shots/cam) & 0.603\,px & 0.451\,px & none (feeds the fixed-K extrinsic solve) \\
+    Joint extrinsic consensus reprojection RMS & 1.176\,px & 1.176\,px & $\leq 2.0$\,px (assembly gate) \\
+    \bottomrule
+    \end{tabular}
+\end{table}
+
+The updated calibration therefore satisfied the $\leq 2$\,px acceptance criterion. Because the new solve defined a new world origin, the existing zone polygons had to be redrawn.
+
+\subsection{System A, Stages 3--5: End-to-End Runtime}
+
+Live performance was measured for 310\,s, using 61 diagnostic heartbeats covering rolling windows of 2{,}048 published messages. The production configuration used motion gating, pose stride 1, TensorRT, zone-scoped detection, and two active cameras, with the dashboard, MQTT broker, and gateway all running (\figref{fig:dashboard}; the rack-cell view during on-rig verification in \figref{fig:racklive}).
+
+The system processed approximately 25.8\,fps aggregate ($>$18{,}000 frames), with approximately 13.4--13.8\,fps per camera. Capture-to-publish latency measured 40.3\,ms at p50, 78.1\,ms at p95, and 94.0\,ms at p99 (\figref{fig:latency}), meeting the 200\,ms acceptance limit with a 2.6$\times$ margin. Both cameras remained available throughout the measurement.
+
+
+
+An earlier configuration, before ingest downscaling, pose-input reduction, and motion gating, measured 77\,ms p50 / 126\,ms p95. These values are provided only for comparison; \figref{fig:latency} reports the final configuration.
+
+\begin{figure}[tbp]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/F5_latency.pdf}
+    \caption{Live capture$\to$publish latency: per-heartbeat p50/p95/p99 over 310\,s, against the 200\,ms KPI.}
+    \label{fig:latency}
+\end{figure}
+
+\begin{figure}[!htb]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/F6_dashboard.png}
+    \caption{The operator dashboard in live operation: camera view with zone polygons, a tracked person with metric proximity distances, and per-zone occupancy cards fed by the MQTT zone state.}
+    \label{fig:dashboard}
+\end{figure}
+
+\begin{figure}[!htb]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/F14_rack_live.png}
+    \caption{Rack-cell detection on the dashboard: grid overlay on the camera view, per-cell detections, and the published cell matrix.}
+    \label{fig:racklive}
+\end{figure}
+
+
+\subsection{System B: Parcel Corpus}
 
 Training and validation data comes from the same recording campaign sampled at 2\,fps. Therefore, the results characterize this conveyor and recording conditions rather than generalization to other sites or cameras.
 
@@ -604,7 +604,7 @@ The YOLO26-seg runs required 3.63--4.73\,h of training on the RTX 5070 (\tabref{
 
 The deployed YOLO26-seg nano at 320\,px was not the most accurate model; the 416\,px medium model achieved approximately 0.020 higher box mAP@0.5. However, the 320\,px nano model was selected because it satisfies the deployment constraint: CPU-only operation with OpenVINO, which excludes the larger models and RF-DETR.
 
-\subsubsection{Stage 2: Synthetic-Data Training Ablation}
+\subsection{System B, Stage 2: Synthetic-Data Training Ablation}
 
 The contribution of isiGen was evaluated using a polybag-only instance-segmentation ablation with three training conditions: synthetic data only, real data only, and their combination. All models used the same architecture, hyperparameters, and seeds and were evaluated on a common real test set containing 186 images and 215 polybag instances (\tabref{tab:t6}).
 
@@ -629,7 +629,7 @@ Synthetic-only training achieved approximately 0.936 box mAP@0.5 on synthetic va
 
 Combining synthetic and real data improved box mAP@0.5 by 0.021 and recall by 0.050, with a small reduction in precision. However, each condition used a single seed and the test set covered only polybag-positive images from one site. These results therefore indicate a potential benefit from synthetic augmentation but do not establish generalization.
 
-\subsubsection{Stage 1: Trigger-Line Position}
+\subsection{System B, Stage 1: Trigger-Line Position}
 
 The trigger-line position was evaluated using three 1{,}000-frame site clips, producing 35 parcel tracks and 2{,}609 detections. The leading-edge anchor was highly concentrated at a height fraction of approximately 0.70--0.72, with a median of 0.71 (\figref{fig:linefit}).
 
@@ -642,7 +642,7 @@ The centre anchor concentrated substantially earlier in the parcel's travel, at 
     \label{fig:linefit}
 \end{figure}
 
-\subsubsection{Stage 4: Counting Behaviour}
+\subsection{System B, Stage 4: Counting Behaviour}
 
 Counting behaviour was compared on one site clip under several configurations. Because the CPU pipeline could not process the original 25\,fps video deterministically, the comparison used a fixed frame-decimation procedure.
 
@@ -650,7 +650,7 @@ Tracker-rate calibration, deduplication mode, and interpolation produced identic
 
 All configurations counted zero polybags, despite operator confirmation that polybags were present. Since no labelled ground truth exists for the clip, these measurements represent configuration-to-configuration differences rather than counting accuracy. No quantitative counting accuracy is therefore claimed for the deployed pipeline.
 
-\subsubsection{Stage 5: Deployed Operation}
+\subsection{System B, Stage 5: Deployed Operation}
 
 Multi-hour sessions recorded operation at approximately 22--23\,fps with parcel events logged by class (\tabref{tab:t11}). A July 2026 event log recorded 12 crossings with sequence numbers 1--12 without gaps, while tracker IDs remained non-sequential, demonstrating the intended separation between the event counter and tracker identity.
 
@@ -678,7 +678,7 @@ A customer-side receiver also successfully logged live UDP datagrams, confirming
 
 However, no formal go-live or acceptance date is recorded. The available evidence demonstrates technical operation but does not establish formal production acceptance.
 
-\subsubsection{Stage 5: Compression Artifacts}
+\subsection{System B, Stage 5: Compression Artifacts}
 
 For the deployed nano model, the measured artifact sizes were: FP32 ONNX 10.96\,MB; FP16 5.53\,MB (50.5\,\% of FP32); INT8 OpenVINO 2.78\,MB (25.4\,\% of FP32). One FP16 conversion reproduced the FP32 model's top-five confidences within $2 \times 10^{-4}$ on a synthetic input.
 
@@ -735,11 +735,11 @@ Therefore, the reusable component is primarily the perception and delivery core,
     \toprule
     \textbf{Stage} & \textbf{System A, warehouse monitoring} & \textbf{System B, conveyor sorting} \\
     \midrule
-    1 Site geometry & printed boards and floor shots solved into $\mathbf{K}, \mathbf{D}, \mathbf{R}, \mathbf{t}$ and the derived $\mathbf{H}, \mathbf{P}$ per camera (2.1) & one operator rectangle and one counting line, drawn on the image, no camera model (3.1) \\
-    2 Data and models & three-class corpus, optional synthetic augmentation, raw-head ONNX (2.2) & two-class parcel corpus, the same export, shipped as an OpenVINO representation (3.2) \\
-    3 Perception & one or two cameras, zone-scoped batched crops, pose (2.3) & one camera, operator crop, backends restricted by the host (3.3) \\
-    4 Decision layer & \textbf{metric geometry}: floor projection, cross-camera fusion, tracking in metres, zone state (2.4) & \textbf{event timing}: leading-edge anchor, crossing latch, deduplication, gap-free sequence (3.4) \\
-    5 Delivery and deployment & schema-versioned JSON over UDP and MQTT, REST gateway for fleet controllers (2.5) & one datagram and one relay pulse per parcel, containers on the site machine (3.5) \\
+    1 Site geometry & printed boards and floor shots solved into $\mathbf{K}, \mathbf{D}, \mathbf{R}, \mathbf{t}$ and the derived $\mathbf{H}, \mathbf{P}$ per camera (2.2) & one operator rectangle and one counting line, drawn on the image, no camera model (2.8) \\
+    2 Data and models & three-class corpus, optional synthetic augmentation, raw-head ONNX (2.3) & two-class parcel corpus, the same export, shipped as an OpenVINO representation (2.9) \\
+    3 Perception & one or two cameras, zone-scoped batched crops, pose (2.4) & one camera, operator crop, backends restricted by the host (2.10) \\
+    4 Decision layer & \textbf{metric geometry}: floor projection, cross-camera fusion, tracking in metres, zone state (2.5) & \textbf{event timing}: leading-edge anchor, crossing latch, deduplication, gap-free sequence (2.11) \\
+    5 Delivery and deployment & schema-versioned JSON over UDP and MQTT, REST gateway for fleet controllers (2.6) & one datagram and one relay pulse per parcel, containers on the site machine (2.12) \\
     \bottomrule
     \end{tabular}
 \end{table}
