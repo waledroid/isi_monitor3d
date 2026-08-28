@@ -1,10 +1,103 @@
-# Étagère (bin-rack) zones — authored by the dashboard Settings (Étagère
-# section), consumed by isistream. Image-space per-camera cell rects.
 model:
   onnx_path: /home/aatanda/isi_monitor3d/trainer/isidet/runs/detect/models/yolo/yolo26n_e100_320px_17-08-2026_12-10-27/weights/best.onnx
-  class_names: [empty_box, filled_box]
+  class_names:
+  - empty_box
+  - filled_box
   imgsz: 320
   confidence_threshold: 0.3
   crop_margin: 0.08
   max_fps: 2.0
-zones: []
+  providers: null
+zones:
+- id: et_msyr0tt3
+  name: eta_1
+  camera: cam_b
+  frame_wh:
+  - 1280
+  - 720
+  corners:
+  - - 65.98175276715308
+    - 176.78253576119997
+  - - 341.14602408217746
+    - 31.91125552030854
+  - - 432.2600637436917
+    - 312.5423967427556
+  - - 198.09706439679564
+    - 427.3460683644424
+  rows: 3
+  cols: 3
+  cells:
+  - r: 1
+    c: 1
+    rect:
+    - 80.50833689740212
+    - 144.80275565200103
+    - 189.46753094208697
+    - 239.24634823558625
+    angle_deg: -26.0
+  - r: 1
+    c: 2
+    rect:
+    - 172.4087394029813
+    - 96.64350017010315
+    - 273.14070630947833
+    - 189.4597450847129
+    angle_deg: -26.0
+  - r: 1
+    c: 3
+    rect:
+    - 265.3410445488912
+    - 54.17833913353128
+    - 361.4483045927532
+    - 149.8737236335904
+    angle_deg: -26.0
+  - r: 2
+    c: 1
+    rect:
+    - 126.06513473900664
+    - 240.4277270079346
+    - 218.3094987578657
+    - 336.49866826049475
+    angle_deg: -26.0
+  - r: 2
+    c: 2
+    rect:
+    - 205.26452060802822
+    - 197.70579084327352
+    - 298.47153942327793
+    - 298.6574855869975
+    angle_deg: -26.0
+  - r: 2
+    c: 3
+    rect:
+    - 288.37487919031497
+    - 159.2567405279621
+    - 382.4561000890898
+    - 258.4926348898463
+    angle_deg: -26.0
+  - r: 3
+    c: 1
+    rect:
+    - 168.88496437801962
+    - 327.838400584155
+    - 258.727367222119
+    - 419.00914549532155
+    angle_deg: -26.0
+  - r: 3
+    c: 2
+    rect:
+    - 244.3182539495329
+    - 281.66591482172703
+    - 326.52781413929125
+    - 384.2891845908582
+    angle_deg: -26.0
+  - r: 3
+    c: 3
+    rect:
+    - 315.3344500020233
+    - 256.2599309106344
+    - 401.5838106425125
+    - 345.5832089057179
+    angle_deg: -26.0
+  max_fps: null
+detection_enabled: true

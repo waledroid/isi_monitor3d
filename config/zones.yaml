@@ -1,32 +1,16 @@
 zones:
-- id: zp_msmyz2e4
-  name: sortie_machine_2
+- id: zp_mszv4agt
+  name: Zone_1
   type: palette
   kind: palette
   severity: info
   polygon:
-  - - -1.915
-    - -1.211
-  - - -1.909
-    - -0.256
-  - - -0.831
-    - -0.241
-  - - -0.795
-    - -1.151
+  - - -2.472
+    - 1.849
+  - - -1.117
+    - 1.83
+  - - -1.144
+    - 0.526
+  - - -2.514
+    - 0.538
   derived_from: zone_patch
-- id: zp_msnao148
-  name: sortie_machine_1
-  type: palette
-  kind: palette
-  severity: info
-  polygon:
-  - - -1.861
-    - 0.169
-  - - -0.678
-    - 0.118
-  - - -0.639
-    - 1.262
-  - - -1.842
-    - 1.306
-  derived_from: zone_patch
-  z_base_m: 0.304

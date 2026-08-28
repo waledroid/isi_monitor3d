@@ -1,21 +1,6 @@
 node_id: Sortie_Machine_4
 calibration_path: /home/aatanda/isi_monitor3d/isical/data/c1/calibration_refined.json
 cameras:
-  cam_a:
-    source:
-      name: rtsp
-      url: rtsp://admin:admin@192.168.2.201:554/1
-      latency_ms: 100
-      capture_fps: 25
-      decoder: nvdec
-      output_wh:
-      - 1280
-      - 720
-    detect_source:
-      name: rtsp
-      url: rtsp://admin:admin@192.168.2.201:554/2
-      latency_ms: 100
-      decoder: nvdec
   cam_b:
     source:
       name: rtsp
@@ -30,6 +15,11 @@ cameras:
       url: rtsp://admin:admin123@192.168.2.200/cam/realmonitor?channel=1&subtype=1
       latency_ms: 100
       decoder: nvdec
+  cam_a:
+    source:
+      name: rtsp
+      url: rtsp://admin:admin@192.168.2.201:554/1
+      capture_fps: 25
 ingestion:
   frame_sync:
     max_skew_ms: 33.0
@@ -93,6 +83,7 @@ homography:
   stabilizer:
     min_frames_confirmed: 1
 metadata:
+  mqtt_topic_zone: name
   area: Zone A
   diagnostics:
     enabled: true

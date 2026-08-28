@@ -42,7 +42,7 @@ h1 b{color:var(--accent)}
 #tok{margin-left:auto;background:var(--glass);border:1px solid var(--border);
   color:var(--text);border-radius:8px;padding:6px 10px;font-size:12px;width:210px}
 #tok::placeholder{color:var(--muted)}
-.layout{display:grid;grid-template-columns:300px 1fr;gap:26px;align-items:start}
+.layout{display:grid;grid-template-columns:380px 1fr;gap:26px;align-items:start}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:26px}
 @media(max-width:1250px){.layout{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
 /* schema tree (native <details> nesting = free expand/collapse) */

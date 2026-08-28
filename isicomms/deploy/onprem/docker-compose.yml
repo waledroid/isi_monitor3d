@@ -26,6 +26,7 @@ services:
       - mosquitto_data:/mosquitto/data
     ports:
       - "${ISICOMMS_MQTT_PORT:-1883}:1883"      # MQTT plaintext (host port overridable)
+      - "${ISICOMMS_MQTT_WS_PORT:-9001}:9001"   # MQTT over WebSockets
 
   gateway:
     build:
