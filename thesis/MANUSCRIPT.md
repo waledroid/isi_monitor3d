@@ -419,7 +419,7 @@ Both systems were measured with the same tools. They share one detector core: th
 
 ## 3.1. System A: Pallet Corpus
 
-The `pallet3` corpus contains 5,540 training and 1,049 validation images for three classes: `palette` (pallet), `carton`, and `polybag`. A provenance audit confirmed that all images are real photographs. No independent test set was available; therefore, all reported accuracy is based on the validation split.
+The `pallet3` corpus contains 5,540 training and 1,049 validation images for three classes: `palette` (pallet), `carton`, and `polybag`. A provenance audit confirmed that all images are real photographs. No independent test set was available; therefore, all reported accuracy is based on the validation split, and the reported checkpoints were selected on the same splits.
 
 The detector results are summarized in Table 1. The independently evaluated YOLO26l-seg model achieved 0.977 box mAP@0.5, 0.948 box mAP@0.5:0.95, 0.972 mask mAP@0.5, and 0.921 mask mAP@0.5:0.95, with 10.3 ms/image inference at batch size 8; its per-class breakdown is given in Table 2. RF-DETR medium-seg achieved per-class box AP values of 0.916 (`palette`), 0.905 (`carton`), and 0.971 (`polybag`).
 
