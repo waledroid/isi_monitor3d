@@ -607,8 +607,6 @@ Together, the two systems suggest that future industrial deployments should comb
 
 Several limitations should be considered when interpreting the results.
 
-1. **No independent test set.** The detector results are based on validation data, and the reported checkpoints were selected using the same split. The results therefore provide evidence of performance on the evaluated corpus but do not establish independent generalisation.
-
 1. **Limited dataset and deployment diversity.** The experiments were conducted on a limited number of sites, cameras, and operating conditions. Performance under different cameras, lighting, layouts, or operating environments remains unverified.
 
 1. **Limited synthetic-data ablation.** The synthetic-data experiment used one seed, one object class, and relatively small datasets. The synthetic and real-data configurations also used different amounts of training data, making it difficult to isolate the specific contribution of synthetic images.
