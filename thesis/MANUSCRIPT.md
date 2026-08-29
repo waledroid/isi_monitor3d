@@ -102,7 +102,7 @@ The conveyor system also targets CPU-only industrial computers, where inference 
 
 # 2. Materials and Methods
 
-## 2.1. System A: Metric Multi-Camera Warehouse Monitoring
+## 2.1. SYSTEM A: METRIC MULTI-CAMERA WAREHOUSE MONITORING
 
 isiMonitor3d is organized as five stages along the data flow. Stages 1 (calibration) and 2 (model production) run once at commissioning and write `calibration.json` and the `.onnx` detectors; Stages 3 to 5 run continuously. Input is video from one or two fixed RGB cameras; output is metric, identity-stable object metadata delivered as versioned JSON over UDP and MQTT: 2D floor-plane tracks (`Track2D`) continuously, and 3D tracks (`Track3D`) on demand when stereo observations are available. The five acceptance criteria of the customer specification are design requirements here, validated in Section 3.
 
@@ -284,7 +284,7 @@ In deployment, the perception producer and metric engine run as two independent 
 
 Stage 5 therefore completes the pipeline by converting the internal perception and tracking results into stable interfaces that can be consumed by monitoring software, WMS/FMS systems, AGV controllers, and other external applications.
 
-## 2.7. System B: Conveyor Parcel Classification and Sorter Triggering
+## 2.7. SYSTEM B: CONVEYOR PARCEL CLASSIFICATION AND SORTER TRIGGERING
 
 System B monitors a single conveyor using a fixed overhead camera (Figure 6). It classifies each parcel as carton or polybag and sends exactly one datagram when the parcel's leading edge crosses a predefined trigger line (Figure 7). The sorter PLC uses this event to route the parcel without polling or human intervention.
 
