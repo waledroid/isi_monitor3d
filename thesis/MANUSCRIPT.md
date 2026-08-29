@@ -480,9 +480,9 @@ An earlier configuration, before ingest downscaling, pose-input reduction, and m
 
 ## 3.5. System B: Parcel Corpus
 
-The detectors below came from the same trainer and export path as System A's. The difference is the target. System A publishes from a GPU, while System B must run on the customer's CPU-only host, and that limit governs every model choice in this part. Training and validation data comes from the same recording campaign sampled at 2 fps. Therefore, the results characterize this conveyor and recording conditions rather than generalization to other sites or cameras.
+These detectors came from the same trainer and export path as System A's, but must run on the customer's CPU-only host, and that limit governs every model choice below. Training and validation data comes from the same recording campaign sampled at 2 fps. Therefore, the results characterize this conveyor and recording conditions rather than generalization to other sites or cameras.
 
-The YOLO26-seg runs required 3.63–4.73 h of training on the RTX 5070 (Table 1); no wall time was recorded for the RF-DETR runs. For RF-DETR, per-class AP was 0.928–0.929 for carton and 0.964–0.972 for polybag, indicating that carton was the more difficult class in these runs.
+The YOLO26-seg runs required 3.63–4.73 h of training on the RTX 5070 (Table 1); no wall time was recorded for the RF-DETR runs. For RF-DETR, per-class AP was 0.928–0.929 for carton and 0.964–0.972 for polybag, indicating that carton was the more difficult class in these runs. The same ordering appears in System A's corpus, where carton scored 0.960 against polybag's 0.983 (Table 2). The corpora, sites and models differ, so this is a consistent observation rather than a controlled comparison.
 
 The deployed YOLO26-seg nano at 320 px was not the most accurate model; the 416 px medium model achieved approximately 0.020 higher box mAP@0.5. However, the 320 px nano model was selected because it satisfies the deployment constraint: CPU-only operation with OpenVINO, which excludes the larger models and RF-DETR.
 
@@ -522,7 +522,7 @@ All configurations counted zero polybags, despite operator confirmation that pol
 
 ## 3.9. System B, Stage 5: Deployed Operation
 
-Multi-hour sessions recorded operation at approximately 22–23 fps with parcel events logged by class (Table 5). A July 2026 event log recorded 12 crossings with sequence numbers 1–12 without gaps, while tracker IDs remained non-sequential, demonstrating the intended separation between the event counter and tracker identity.
+Multi-hour sessions recorded operation at approximately 22–23 fps with parcel events logged by class (Table 5). That is one camera on a CPU-only host, against 13.4–13.8 fps per camera for System A's GPU pipeline (Section 3.4). The workloads are not comparable, since System A adds pose, zone-scoped detection and a second camera, but sizing the model to the envelope kept the CPU-only deployment in the same throughput range. A July 2026 event log recorded 12 crossings with sequence numbers 1–12 without gaps, while tracker IDs remained non-sequential, demonstrating the intended separation between the event counter and tracker identity.
 
 **Table 5.** Recorded System B sessions (session log on the site machine; the last row ran in the office on a CPU-only host).
 
@@ -591,9 +591,7 @@ Therefore, the reusable component is primarily the perception and delivery core,
 
 **Table 6.** The two systems stage by stage. The first three stages run on shared machinery; the fourth is where the two share nothing.
 
-| p{0.13\columnwidth}>{\raggedright\arraybackslash}p{0.40\columnwidth}>{\raggedright\arraybackslash}p{0.40\columnwidth}}
-    
-    **Stage** | **System A, warehouse monitoring** | **System B, conveyor sorting** |
+| **Stage** | **System A, warehouse monitoring** | **System B, conveyor sorting** |
 |---|---|---|
 | 1 Site geometry | printed boards and floor shots solved into $\mathbf{K}, \mathbf{D}, \mathbf{R}, \mathbf{t}$ and the derived $\mathbf{H}, \mathbf{P}$ per camera (2.2) | one operator rectangle and one counting line, drawn on the image, no camera model (2.8) |
 | 2 Data and models | three-class corpus, optional synthetic augmentation, raw-head ONNX (2.3) | two-class parcel corpus, the same export, shipped as an OpenVINO representation (2.9) |
