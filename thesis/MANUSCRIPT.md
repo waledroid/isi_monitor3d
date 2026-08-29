@@ -80,7 +80,7 @@ Synthetic data has evolved from domain randomization and rendered scenes toward 
 
 Control-based generation adds further control over the structure of synthetic images. ControlNet allows pretrained diffusion models to follow spatial conditions such as depth, edges, or poses while preserving the model's generative capabilities [12]. Combined with segmentation, this can provide images and corresponding masks suitable for supervised training. LoRA offers an efficient alternative to full model fine-tuning by learning small, low-rank weight updates [8], making adaptation to specific object classes practical when only a limited number of real images are available. Recent promptable segmentation models such as SAM2 [13] can further automate the extraction of object masks from generated or real images.
 
-Despite these advances, the value of combining generative models, lightweight adaptation, and automatic segmentation within a complete industrial vision pipeline remains less explored. In isiMonitor3d, the isiGen pipeline combines SDXL, ControlNet, class-specific LoRA adapters, and SAM2 to generate additional training data from a small set of real photographs. Its effectiveness is evaluated experimentally in Section 3.6.
+Despite these advances, the value of combining generative models, lightweight adaptation, and automatic segmentation within a complete industrial vision pipeline remains less explored. In isiMonitor3d, the isiGen pipeline combines SDXL, ControlNet, class-specific LoRA adapters, and SAM2 to generate additional training data from a small set of real photographs. Its effectiveness is evaluated experimentally in Section 3.7.
 
 ### 1.2.5. Machine-Consumable Delivery and Edge Runtime
 
@@ -314,7 +314,7 @@ System B uses a simpler spatial configuration than System A because its task doe
 
 During commissioning, the operator defines a single region of interest (ROI) by drawing a rectangle around the conveyor on the live camera view. The ROI removes static areas outside the belt and reduces the amount of image processed by the detector. It is resized to the detector input using area interpolation, with the deployed detector operating at 320 px.
 
-A single horizontal trigger line defines the point at which a parcel must generate an event. In the deployed configuration, the belt moves from top to bottom and the line is positioned at 71 % of the ROI height. This position was selected from the line-placement experiment reported in Section 3.7.
+A single horizontal trigger line defines the point at which a parcel must generate an event. In the deployed configuration, the belt moves from top to bottom and the line is positioned at 71 % of the ROI height. This position was selected from the line-placement experiment reported in Section 3.6.
 
 The system does not use the parcel centre to determine the crossing. Instead, it tracks the leading edge of the parcel. Consequently, the position of the trigger line and the definition of the leading-edge anchor must be commissioned together: moving the line changes the point at which the parcel is considered to have crossed.
 
@@ -415,7 +415,7 @@ The measurements and their limitations are reported in Section 3, distinguishing
 
 # 3. Results
 
-This section reports the measured results for both systems in pipeline order. For System A: detector accuracy, rack-cell performance, calibration accuracy, and live runtime. For System B: detector performance, the synthetic-data contribution, trigger-line selection, counting behaviour, deployed operation, and model compression.
+Both systems were measured with the same tools. They share one detector core: the same trainer, the same corpus format, and the same opset-17 export. What separates them is the deployment envelope. System A publishes from a GPU with TensorRT, System B from a CPU-only host with OpenVINO. That one constraint drives most of the differences below, including the model each system deploys. System A comes first: detector accuracy, rack cells, calibration, then live runtime. System B follows: detector accuracy, trigger line, synthetic data, counting, deployed operation, and compression.
 
 ## 3.1. System A: Pallet Corpus
 
@@ -451,9 +451,7 @@ The calibration passed the acceptance gate, retaining 768/768 board points with 
 
 **Table 3.** Deployed-rig calibration reprojection RMS.
 
-| p{0.36\columnwidth}ccp{0.2\columnwidth}}
-    
-    **Quantity** | **cam_a** | **cam_b** | **Applicable gate** |
+| **Quantity** | **cam_a** | **cam_b** | **Applicable gate** |
 |---|---|---|---|
 | Intrinsic-stage reprojection RMS (25 shots/cam) | 0.603 px | 0.451 px | none (feeds the fixed-K extrinsic solve) |
 | Joint extrinsic consensus reprojection RMS | 1.176 px | 1.176 px | $\leq 2.0$ px (assembly gate) |
@@ -482,13 +480,23 @@ An earlier configuration, before ingest downscaling, pose-input reduction, and m
 
 ## 3.5. System B: Parcel Corpus
 
-Training and validation data comes from the same recording campaign sampled at 2 fps. Therefore, the results characterize this conveyor and recording conditions rather than generalization to other sites or cameras.
+The detectors below came from the same trainer and export path as System A's. The difference is the target. System A publishes from a GPU, while System B must run on the customer's CPU-only host, and that limit governs every model choice in this part. Training and validation data comes from the same recording campaign sampled at 2 fps. Therefore, the results characterize this conveyor and recording conditions rather than generalization to other sites or cameras.
 
 The YOLO26-seg runs required 3.63–4.73 h of training on the RTX 5070 (Table 1); no wall time was recorded for the RF-DETR runs. For RF-DETR, per-class AP was 0.928–0.929 for carton and 0.964–0.972 for polybag, indicating that carton was the more difficult class in these runs.
 
 The deployed YOLO26-seg nano at 320 px was not the most accurate model; the 416 px medium model achieved approximately 0.020 higher box mAP@0.5. However, the 320 px nano model was selected because it satisfies the deployment constraint: CPU-only operation with OpenVINO, which excludes the larger models and RF-DETR.
 
-## 3.6. System B, Stage 2: Synthetic-Data Training Ablation
+## 3.6. System B, Stage 1: Trigger-Line Position
+
+The trigger-line position was evaluated using three 1,000-frame site clips, producing 35 parcel tracks and 2,609 detections. The leading-edge anchor was highly concentrated at a height fraction of approximately 0.70–0.72, with a median of 0.71 (Figure 14).
+
+The centre anchor concentrated substantially earlier in the parcel's travel, at approximately 0.45 of the ROI height. The evaluation therefore selected 0.71 of the ROI height as the deployed trigger position, using the leading edge as the crossing anchor.
+
+![Figure 14](figures/F13_line_study.png)
+
+**Figure 14.** Line-placement study on three site clips: anchor height distributions and straddling tracks; the deployed line sits at 0.71.
+
+## 3.7. System B, Stage 2: Synthetic-Data Training Ablation
 
 The contribution of isiGen was evaluated using a polybag-only instance-segmentation ablation with three training conditions: synthetic data only, real data only, and their combination. All models used the same architecture, hyperparameters, and seeds and were evaluated on a common real test set containing 186 images and 215 polybag instances (Table 4).
 
@@ -503,16 +511,6 @@ The contribution of isiGen was evaluated using a polybag-only instance-segmentat
 Synthetic-only training achieved approximately 0.936 box mAP@0.5 on synthetic validation data, but only 0.223 on real images, showing a substantial domain gap.
 
 Combining synthetic and real data improved box mAP@0.5 by 0.021 and recall by 0.050, with a small reduction in precision. However, each condition used a single seed and the test set covered only polybag-positive images from one site. These results therefore indicate a potential benefit from synthetic augmentation but do not establish generalization.
-
-## 3.7. System B, Stage 1: Trigger-Line Position
-
-The trigger-line position was evaluated using three 1,000-frame site clips, producing 35 parcel tracks and 2,609 detections. The leading-edge anchor was highly concentrated at a height fraction of approximately 0.70–0.72, with a median of 0.71 (Figure 14).
-
-The centre anchor concentrated substantially earlier in the parcel's travel, at approximately 0.45 of the ROI height. The evaluation therefore selected 0.71 of the ROI height as the deployed trigger position, using the leading edge as the crossing anchor.
-
-![Figure 14](figures/F13_line_study.png)
-
-**Figure 14.** Line-placement study on three site clips: anchor height distributions and straddling tracks; the deployed line sits at 0.71.
 
 ## 3.8. System B, Stage 4: Counting Behaviour
 
