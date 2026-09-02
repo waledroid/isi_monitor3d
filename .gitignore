@@ -81,3 +81,4 @@ thesis/latex/prog-*.png
 
 # blackbox telemetry (tools/blackbox_logger.py)
 /logs/
+defense_canvas/
