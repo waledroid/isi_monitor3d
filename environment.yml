@@ -57,10 +57,13 @@ dependencies:
   # `Gst.Buffer.pts`, and appsink frame pulls — the full RTSP pipeline.
   - ffmpeg
   - gstreamer>=1.22
-  - gst-plugins-base
-  - gst-plugins-good
-  - gst-plugins-bad
-  - gst-libav
+  # Plugins pinned to the same floor as gstreamer: an unpinned solve on a
+  # clean machine (2026-09-10) paired gstreamer 1.28 with gst-plugins-good
+  # 1.18 (no libgstvideo4linux2 → no v4l2src) and broke USB capture.
+  - gst-plugins-base>=1.22
+  - gst-plugins-good>=1.22
+  - gst-plugins-bad>=1.22
+  - gst-libav>=1.22
   - pygobject>=3.46
 
   # 2D/3D Kalman filtering (homography + triangulation layers).
