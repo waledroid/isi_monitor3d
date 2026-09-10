@@ -289,9 +289,21 @@ class ZoneMembershipHysteresis:
         self._in_streak: dict[tuple[int, str], int] = {}
         self._out_streak: dict[tuple[int, str], int] = {}
 
-    def update(self, track_id: int, raw: tuple[str, ...]) -> tuple[str, ...]:
-        """Fold this frame's raw membership into the debounced one."""
+    def update(self, track_id: int, raw: tuple[str, ...],
+               hold: tuple[str, ...] = ()) -> tuple[str, ...]:
+        """Fold this frame's raw membership into the debounced one.
+
+        ``hold``: zones whose exit streak must be FROZEN this frame — neither
+        advanced nor reset — because this frame carries no evidence either
+        way (a partial/degraded pair missing a configured camera). Raw
+        evidence for a held zone still resets its streak (a real sighting).
+        Before 2026-09-09 callers unioned held zones into ``raw`` instead,
+        which RESET the streak on every solo frame; with solo frames every
+        ~10 steps (free-running cameras vs the pairing skew) a vanished
+        object could never accumulate ``exit_after`` consecutive absences.
+        """
         raw_set = set(raw)
+        hold_set = set(hold)
         member = self._member.setdefault(track_id, set())
         for zid in raw_set - member:
             key = (track_id, zid)
@@ -306,6 +318,8 @@ class ZoneMembershipHysteresis:
             key = (track_id, zid)
             if zid in raw_set:
                 self._out_streak.pop(key, None)
+            elif zid in hold_set:
+                continue                      # frozen: no evidence this frame
             else:
                 self._out_streak[key] = self._out_streak.get(key, 0) + 1
                 if self._out_streak[key] >= self._exit_after:

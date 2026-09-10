@@ -525,3 +525,26 @@ def test_present_confidence_per_class_across_cameras():
     d = _zone_dec(decisions)
     assert d.present_classes == ("carton", "palette")
     assert d.present_confidence["carton"] == 0.72
+
+
+def test_sporadic_partial_frames_do_not_hold_presence_forever():
+    """Live regression 2026-09-09: a solo (partial) pair every ~10 steps is
+    routine on a 2-cam rig whose cameras free-run at different fps. Each
+    partial frame must FREEZE the exit countdown, not restart it — otherwise
+    15 consecutive full-frame absences never occur and a pallet that left
+    the zone stays on the wire indefinitely (observed: 20+ min)."""
+    mgr = _manager(camera_ids=_CAMS)
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a")
+    for _ in range(2):
+        mgr.step({"cam_a": [pallet], "cam_b": []}, reporting_cameras=_CAMS)
+    exited_at = None
+    for i in range(1, 60):
+        if i % 10 == 0:
+            dec = _zone_dec(mgr.step({"cam_a": []}, reporting_cameras=("cam_a",)))
+            assert dec.palette_state == "palette_empty" or exited_at is not None
+        else:
+            dec = _zone_dec(mgr.step({"cam_a": [], "cam_b": []}, reporting_cameras=_CAMS))
+        if dec.palette_state == "no_palette" and exited_at is None:
+            exited_at = i
+    # 15 full-frame absences + the one solo frame (step 10) that froze the count
+    assert exited_at == 16, f"presence exited at step {exited_at}"
