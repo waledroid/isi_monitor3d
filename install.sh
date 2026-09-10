@@ -143,7 +143,10 @@ run_miniforge() {
 }
 
 # ---------- stage: env ----------
-probe_env() { "$(env_py)" -c "import backbone, isistream, calibration" >/dev/null 2>&1; }
+# Probes import from a neutral cwd: from the repo root a bare "import monitor_web"
+# would resolve the source directory itself and report an uninstalled package as done.
+py_probe() { ( cd / && "$(env_py)" -c "$1" ) >/dev/null 2>&1; }
+probe_env() { py_probe "import backbone, isistream, calibration"; }
 run_env() {
   local cb; cb="$(conda_bin)" || { err "conda not found (run the miniforge stage)"; return 1; }
   if [ -d "$MINIFORGE/envs/$(env_name)" ]; then
@@ -157,12 +160,7 @@ run_env() {
 }
 
 # ---------- stage: ortswap (gpu) ----------
-probe_ortswap() {
-  "$(env_py)" - <<'PY' >/dev/null 2>&1
-import onnxruntime as ort, tensorrt
-assert "CUDAExecutionProvider" in ort.get_available_providers()
-PY
-}
+probe_ortswap() { py_probe "import onnxruntime as ort, tensorrt; assert 'CUDAExecutionProvider' in ort.get_available_providers()"; }
 run_ortswap() {
   if_dry "conda remove --force onnxruntime; pip install onnxruntime-gpu==$ORT_GPU_VERSION tensorrt-cu12==$TRT_VERSION" && return 0
   local cb; cb="$(conda_bin)" || return 1
@@ -181,7 +179,7 @@ run_multical() {
 }
 
 # ---------- stage: dashboard ----------
-probe_dashboard() { "$(env_py)" -c "import monitor_web, isicomms" >/dev/null 2>&1; }
+probe_dashboard() { py_probe "import monitor_web, isicomms"; }
 run_dashboard() {
   if [ "$VARIANT" = cpu ]; then
     if_dry "pip install --no-deps -e monitor_web -e isicomms" && return 0
