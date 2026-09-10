@@ -264,3 +264,24 @@ def test_both_cameras_degraded_recover_to_aligned_pairing() -> None:
                 fused = True
         ts += 0.070
     assert fused, "both-degraded state never recovered to aligned pairing"
+
+
+@pytest.mark.parametrize("max_skew_ms", [33.0, 60.0, 100.0])
+def test_unequal_camera_rates_never_produce_solo_pairs(max_skew_ms: float) -> None:
+    """Live regression 2026-09-09/10: two healthy cameras free-running at
+    14.6 and 13.4 fps. Aligned pairing consumed only the two paired heads,
+    so the faster camera left an older orphan in its buffer; the solo path
+    measures age from ``buf[0]`` (that orphan), aged it past
+    ``degraded_emit_after_ms`` and flipped the camera sticky-degraded while
+    its partner was streaming fine — ~15% of pairs came out solo (measured
+    on the rig), which downstream read as camera loss. Two live cameras
+    must never yield a solo pair, at any pairing tolerance."""
+    sync = FrameSynchronizer(camera_ids=["cam_a", "cam_b"], max_skew_ms=max_skew_ms,
+                             degraded_emit_after_ms=200.0)
+    frames = [("cam_a", i / 14.6) for i in range(int(60 * 14.6))]
+    frames += [("cam_b", 0.031 + i / 13.4) for i in range(int(60 * 13.4))]
+    frames.sort(key=lambda f: f[1])
+    pairs = [p for p in (sync.submit(_frame(c, ts)) for c, ts in frames) if p is not None]
+    solo = [p for p in pairs if len(p.frames) < 2]
+    assert pairs, "no pairs at all"
+    assert not solo, f"{len(solo)}/{len(pairs)} solo pairs from two live cameras"

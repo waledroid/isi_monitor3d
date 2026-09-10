@@ -278,8 +278,10 @@ class ZoneMembershipHysteresis:
     track ENTERS a zone after ``enter_after`` consecutive inside frames
     (default 3 ≈ 0.23 s — keeps sub-second ghost tracks out of the
     zone lists) and LEAVES only after ``exit_after`` consecutive
-    outside frames (~0.6 s at 13 fps with the default 8) — so a genuine
+    outside frames (~1.1 s at 13 fps with the default 15) — so a genuine
     exit still registers fast while boundary jitter cannot flap the state.
+    Frames flagged ``freeze`` (no evidence either way) are skipped by both
+    streaks, so "consecutive" counts evidence-bearing frames only.
     """
 
     def __init__(self, exit_after: int = 15, enter_after: int = 3) -> None:
@@ -290,20 +292,19 @@ class ZoneMembershipHysteresis:
         self._out_streak: dict[tuple[int, str], int] = {}
 
     def update(self, track_id: int, raw: tuple[str, ...],
-               hold: tuple[str, ...] = ()) -> tuple[str, ...]:
+               freeze: bool = False) -> tuple[str, ...]:
         """Fold this frame's raw membership into the debounced one.
 
-        ``hold``: zones whose exit streak must be FROZEN this frame — neither
-        advanced nor reset — because this frame carries no evidence either
-        way (a partial/degraded pair missing a configured camera). Raw
-        evidence for a held zone still resets its streak (a real sighting).
-        Before 2026-09-09 callers unioned held zones into ``raw`` instead,
-        which RESET the streak on every solo frame; with solo frames every
-        ~10 steps (free-running cameras vs the pairing skew) a vanished
+        ``freeze=True`` marks a frame that carries no evidence either way
+        (a partial/degraded pair missing a configured camera): zones WITHOUT
+        raw evidence keep their enter and exit streaks untouched — neither
+        advanced nor reset. Raw evidence still counts normally (a real
+        sighting enters / resets as usual). Before 2026-09-09 the caller
+        unioned held zones into ``raw`` instead, which RESET the exit streak
+        on every solo frame; with solo frames every ~10 steps a vanished
         object could never accumulate ``exit_after`` consecutive absences.
         """
         raw_set = set(raw)
-        hold_set = set(hold)
         member = self._member.setdefault(track_id, set())
         for zid in raw_set - member:
             key = (track_id, zid)
@@ -311,14 +312,15 @@ class ZoneMembershipHysteresis:
             if self._in_streak[key] >= self._enter_after:
                 member.add(zid)
                 self._in_streak.pop(key, None)
-        for key in [k for k in self._in_streak
-                    if k[0] == track_id and k[1] not in raw_set]:
-            self._in_streak.pop(key, None)
+        if not freeze:
+            for key in [k for k in self._in_streak
+                        if k[0] == track_id and k[1] not in raw_set]:
+                self._in_streak.pop(key, None)
         for zid in list(member):
             key = (track_id, zid)
             if zid in raw_set:
                 self._out_streak.pop(key, None)
-            elif zid in hold_set:
+            elif freeze:
                 continue                      # frozen: no evidence this frame
             else:
                 self._out_streak[key] = self._out_streak.get(key, 0) + 1

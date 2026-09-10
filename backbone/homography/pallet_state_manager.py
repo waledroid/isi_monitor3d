@@ -89,12 +89,17 @@ cameras that actually reported *this* frame (defaults to the keys of
 ``detections_by_camera``, so callers who never pass it see today's
 behaviour unchanged). The manager is constructed with the FULL configured
 camera set (``camera_ids``); whenever ``reporting_cameras`` is a strict
-subset of it, the frame is "partial" and each class's raw evidence is
-unioned with that class's currently-held presence before it reaches the
-hysteresis (see ``ZoneMembershipHysteresis.update``: a zid present in
-``raw`` never advances its exit streak). Fresh evidence can still ENTER a
-new zone on a partial frame (a surviving camera seeing a NEW palette is
-real evidence); only EXIT is blocked. Occupancy needs no equivalent gate:
+subset of it, the frame is "partial" and reaches each class's hysteresis
+with ``freeze=True`` (see ``ZoneMembershipHysteresis.update``): zones
+without raw evidence keep their enter/exit streaks exactly as they were —
+neither advanced nor reset. Fresh evidence can still ENTER a new zone on a
+partial frame (a surviving camera seeing a NEW palette is real evidence);
+only the no-evidence case is paused. The streak is FROZEN, never reset:
+the earlier union-into-raw approach reset it on every solo frame, and with
+solo frames recurring every ~10 steps a departed pallet never accumulated
+``exit_after`` absences (live, 2026-09-09: 20+ min of phantom presence).
+Note the gate is coverage-blind by design: during a SUSTAINED single-camera
+outage every zone stays frozen, including zones the survivor fully sees. Occupancy needs no equivalent gate:
 a zone with no detections this frame (partial OR a true single-frame
 occlusion) already falls through to ``OccupancyStabilizer.last()`` — see
 the ``zone_occ`` loop below.
@@ -205,8 +210,7 @@ class PalletStateManager:
         self._hyst: dict[str, ZoneMembershipHysteresis] = {}
         self._occ_stabilizer = OccupancyStabilizer()
         self._held_conf: dict[tuple[str, str], float] = {}   # (zid, cls) -> last seen max conf
-        # Last step's post-hysteresis presence per class — the "currently
-        # held" set fed into the camera-loss union, and the before/after
+        # Last step's post-hysteresis presence per class — the before/after
         # comparison that detects a palette zone's presence EXIT (to forget
         # its stale occupancy history; see OccupancyStabilizer.forget).
         self._present_prev: dict[str, set[str]] = {}
@@ -300,17 +304,16 @@ class PalletStateManager:
                 cls, ZoneMembershipHysteresis(exit_after=self._exit_after,
                                               enter_after=self._enter_after))
             raw_set = set(evidence.get(cls, ()))
-            # Camera loss must not read as evidence of absence: on a partial
-            # frame the zones this class already holds are passed as `hold`,
-            # which FREEZES their exit streak (neither advanced nor reset).
-            # Fresh evidence (a zone NOT already held) still enters normally —
-            # only exiting is paused on a partial view. Unioning the held
-            # zones into `raw` instead (pre-2026-09-09) reset the streak on
-            # every solo frame, so a departed pallet stayed on the wire
+            # Camera loss must not read as evidence of absence: a partial
+            # frame is passed as `freeze`, which leaves every zone WITHOUT
+            # raw evidence untouched (enter and exit streaks neither advance
+            # nor reset). Fresh evidence still enters normally — only the
+            # no-evidence case is paused on a partial view. Unioning the held
+            # zones into `raw` instead (pre-2026-09-09) reset the exit streak
+            # on every solo frame, so a departed pallet stayed on the wire
             # indefinitely once solo frames recurred every ~10 steps.
-            hold = self._present_prev.get(cls, set()) if partial else set()
             present[cls] = set(hyst.update(_PSEUDO_TRACK, tuple(sorted(raw_set)),
-                                           hold=tuple(sorted(hold))))
+                                           freeze=partial))
 
         # A palette zone's presence just EXITED (full-frame absence, never
         # blocked above) ⇒ its occupancy vote history is now about a pallet
