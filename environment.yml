@@ -74,7 +74,19 @@ dependencies:
   # is pre-linked against cuda129 so we don't need to manage the CUDA toolkit
   # separately. CPUExecutionProvider is included by default — handy for CI.
   - cuda-version=12.9
-  - onnxruntime=1.25.*=*cuda129*
+  # ONNX Runtime comes from pip (onnxruntime-gpu, see the pip section) so the
+  # env gets TensorrtExecutionProvider; the CUDA runtime libraries the conda
+  # onnxruntime build used to pull in are therefore listed explicitly, pinned
+  # to cuda-version=12.9 (same set as docker/environment.app.yml). Do NOT add
+  # a conda `onnxruntime` here: `conda env update --prune` would reinstall it
+  # over the pip wheel and break the import (seen 2026-09-10).
+  - cudnn=9.*
+  - cuda-cudart
+  - cuda-nvrtc
+  - libcublas
+  - libcufft
+  - libcurand
+  - libcusparse
   - onnx>=1.20
 
   # S13 — OpenVINO detector (`yolo_openvino`) for a future Intel CPU/iGPU edge
@@ -107,5 +119,10 @@ dependencies:
   - pip:
     - --editable .
     - paho-mqtt>=1.6,<3
+    # ONNX Runtime with CUDA + TensorRT execution providers (the live env's
+    # combination; the tensorrt wheel drags ~2.8 GB of Windows builder
+    # resources that install.sh / the guide delete afterwards).
+    - onnxruntime-gpu==1.23.2
+    - tensorrt-cu12==10.16.1.11
     # native TensorRT .engine execution (backbone/shared/trt_session.py)
     - cuda-python>=12.6,<13

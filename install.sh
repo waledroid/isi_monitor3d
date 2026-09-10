@@ -160,11 +160,18 @@ run_env() {
 }
 
 # ---------- stage: ortswap (gpu) ----------
+# environment.yml now installs onnxruntime-gpu + tensorrt through its pip
+# section, so on a clean env this stage is a no-op; it stays as the repair path
+# for envs created from an older environment.yml (conda onnxruntime present).
 probe_ortswap() { py_probe "import onnxruntime as ort, tensorrt; assert 'CUDAExecutionProvider' in ort.get_available_providers()"; }
 run_ortswap() {
   if_dry "conda remove --force onnxruntime; pip install onnxruntime-gpu==$ORT_GPU_VERSION tensorrt-cu12==$TRT_VERSION" && return 0
   local cb; cb="$(conda_bin)" || return 1
   "$cb" remove -n "$(env_name)" --force -y onnxruntime >/dev/null 2>&1 || true
+  # --force-reinstall: removing the conda onnxruntime deletes files the pip
+  # wheel shares (onnxruntime/capi/...), so a wheel that pip considers
+  # "already satisfied" can still be broken. Reinstall it unconditionally.
+  "$(env_py)" -m pip install --force-reinstall --no-deps "onnxruntime-gpu==$ORT_GPU_VERSION" || return 1
   "$(env_py)" -m pip install "onnxruntime-gpu==$ORT_GPU_VERSION" "tensorrt-cu12==$TRT_VERSION" || return 1
   rm -f "$MINIFORGE/envs/$(env_name)"/lib/python3.10/site-packages/tensorrt_libs/libnvinfer_builder_resource_win_* 2>/dev/null
   probe_ortswap

@@ -61,12 +61,11 @@ git checkout main
 
 ## Stage 2 — runtime environment
 ```bash
-conda env create -f environment.yml -n monitor3d
+conda env create -f environment.yml -n monitor3d      # includes onnxruntime-gpu + tensorrt via its pip section
 conda activate monitor3d
-conda remove -n monitor3d --force onnxruntime
-pip install onnxruntime-gpu==1.23.2 tensorrt-cu12==10.16.1.11
-rm -f ~/miniforge3/envs/monitor3d/lib/python3.10/site-packages/tensorrt_libs/libnvinfer_builder_resource_win_*
-python -c "import onnxruntime as ort; print(ort.get_available_providers())"   # CUDAExecutionProvider present
+rm -f ~/miniforge3/envs/monitor3d/lib/python3.10/site-packages/tensorrt_libs/libnvinfer_builder_resource_win_*   # 2.8 GB of Windows-only files
+python -c "import onnxruntime as ort; print(ort.get_available_providers())"   # Tensorrt + CUDA providers present
+# refresh later: conda env update -f environment.yml -n monitor3d --prune
 ```
 
 ## Stage 3 — calibration backend (Multical, isolated venv)
