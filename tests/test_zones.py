@@ -363,3 +363,57 @@ def test_membership_hysteresis_freeze_keeps_enter_streak():
     h2.update(1, ("z1",))
     h2.update(1, ("z1",))
     assert h2.update(1, ("z1",)) == ("z1",)               # needed 3 fresh
+
+
+# ---------- spatial exit margin for per-track membership (2026-09-10) ----------
+# Live: a pallet whose foot point sat ON Zone_1's east edge (edge distance
+# < 1 cm) flapped the zone's object count 0/1 every 1-3 s, republishing the
+# retained zone message each time, while the detection-based presence
+# (15 cm containment tolerance) held steady. Entering stays strict; a
+# current member only starts leaving once it is clearly outside.
+
+
+def test_zone_contains_within_margin():
+    poly = np.array([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]])
+    z = Zone(name="z", type="palette", polygon=poly, id="z1")
+    assert not z.contains((2.10, 1.0))                     # 10 cm outside: strict says no
+    assert z.contains_within((2.10, 1.0), 0.15)            # ...but within the margin
+    assert not z.contains_within((2.20, 1.0), 0.15)        # 20 cm outside: beyond it
+    assert z.contains_within((1.0, 1.0), 0.15)             # inside is always within
+
+
+def test_registry_which_ids_within():
+    poly = np.array([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]])
+    reg = ZoneRegistry([Zone(name="z", type="palette", polygon=poly, id="z1")])
+    assert reg.which_ids((2.10, 1.0)) == ()
+    assert reg.which_ids_within((2.10, 1.0), 0.15) == ("z1",)
+    assert reg.which_ids_within((2.20, 1.0), 0.15) == ()
+
+
+def test_membership_hysteresis_near_keeps_member_but_never_enters():
+    h = ZoneMembershipHysteresis(exit_after=4, enter_after=1)
+    assert h.update(1, ("z1",)) == ("z1",)                 # strict entry
+    for _ in range(20):                                    # hovering just outside
+        assert h.update(1, (), near=("z1",)) == ("z1",)    # stays a member
+    for _ in range(3):
+        assert h.update(1, ()) == ("z1",)                  # clearly outside: counting
+    assert h.update(1, ()) == ()                           # 4th: left
+    h2 = ZoneMembershipHysteresis(exit_after=4, enter_after=1)
+    for _ in range(10):
+        assert h2.update(2, (), near=("z1",)) == ()        # near alone never enters
+
+
+def test_boundary_pallet_membership_is_stable():
+    """The live case replayed: foot point jittering ±1 cm across the edge."""
+    import random
+    poly = np.array([[-2.472, 1.849], [-1.117, 1.83], [-1.144, 0.526], [-2.514, 0.538]])
+    reg = ZoneRegistry([Zone(name="Zone_1", type="palette", polygon=poly, id="zp")])
+    h = ZoneMembershipHysteresis()                         # live defaults
+    rnd = random.Random(0)
+    for _ in range(5):                                     # settles inside first
+        h.update(71, reg.which_ids((-1.15, 1.17)), near=reg.which_ids_within((-1.15, 1.17), 0.15))
+    seen = set()
+    for _ in range(300):
+        xy = (-1.131 + rnd.uniform(-0.01, 0.01), 1.17 + rnd.uniform(-0.01, 0.01))
+        seen.add(h.update(71, reg.which_ids(xy), near=reg.which_ids_within(xy, 0.15)))
+    assert seen == {("zp",)}, f"membership flapped: {seen}"
