@@ -508,3 +508,35 @@ def test_presence_floor_defaults_off():
     for _ in range(2):
         decisions = mgr.step({"cam_a": [ghost]})
     assert _zone_dec(decisions).palette_state == "palette_empty"
+
+
+# ---------- publish signature (2026-09-10) ----------
+# Live: a polybag presence entered (republished, because a track appeared
+# at the same moment) and later exited WITHOUT a republish — the zone's
+# publish trigger was (occupants, palette_state, content) and a non-pallet
+# class presence changes none of them. The retained MQTT message kept
+# saying cls=['polybag'] for an empty zone.
+
+
+def test_publish_signature_tracks_non_pallet_presence():
+    mgr = _manager()
+    bag = _det("polybag", (100, 300, 300, 360), camera_id="cam_a")
+    for _ in range(2):
+        d_in = _zone_dec(mgr.step({"cam_a": [bag]}))
+    assert d_in.present_classes == ("polybag",)
+    d_out = d_in
+    for _ in range(20):
+        d_out = _zone_dec(mgr.step({"cam_a": []}))
+    assert d_out.present_classes == ()
+    assert d_in.palette_state == d_out.palette_state == "no_palette"
+    assert d_in.publish_signature() != d_out.publish_signature()
+
+
+def test_publish_signature_ignores_flapping_counts():
+    mgr = _manager()
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a")
+    for _ in range(2):
+        one = _zone_dec(mgr.step({"cam_a": [pallet]}))
+    two = _zone_dec(mgr.step({"cam_a": [pallet, pallet]}))   # duplicate box: count 2
+    assert one.counts != two.counts
+    assert one.publish_signature() == two.publish_signature()

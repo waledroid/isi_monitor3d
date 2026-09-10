@@ -1051,8 +1051,11 @@ class Orchestrator:
                 # are NOT part of the republish TRIGGER: raw per-frame counts
                 # flap (duplicate boxes, a dropout frame) and would otherwise
                 # cause frame-rate republishes on UDP + MQTT-retained topics.
+                # The stabilised class presence IS in it (ZoneDecision
+                # .publish_signature): a polybag/carton leaving must republish
+                # even though the palette enum and occupants do not change.
                 decisions={
-                    zid: (d.palette_state, d.content)
+                    zid: d.publish_signature()
                     for zid, d in decisions.items()
                 },
             )

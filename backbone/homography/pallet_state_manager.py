@@ -139,6 +139,15 @@ class ZoneDecision:
     content: tuple[str, ...] = ()      # e.g. ("carton",) when loaded
     counts: dict[str, int] = field(default_factory=dict)  # per detected class, max-across-cameras
 
+    def publish_signature(self) -> tuple:
+        """What must change for the zone's retained state to REPUBLISH:
+        the enum, its content, and the stabilised class presence. Counts
+        stay out (raw per-frame, they flap). Before 2026-09-10 the class
+        list was missing: a polybag/carton presence exiting changed
+        neither the enum nor the occupants, so the retained MQTT message
+        kept advertising the class for an empty zone."""
+        return (self.palette_state, tuple(self.content), tuple(self.present_classes))
+
 
 def _norm_cls(cls: str) -> str:
     """Fold pallet-class synonyms (``pallet``/``palette_vide``) to ``"palette"``
