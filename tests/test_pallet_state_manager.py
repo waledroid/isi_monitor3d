@@ -489,7 +489,7 @@ def test_low_confidence_detection_never_creates_presence():
     for _ in range(20):
         dec = _zone_dec(mgr.step({"cam_a": [ghost]}))
         assert dec.palette_state == "no_palette"
-        assert dec.present_classes == ()
+        assert dec.counts == {}
 
 
 def test_confidence_at_or_above_floor_still_enters():
@@ -516,20 +516,6 @@ def test_presence_floor_defaults_off():
 # publish trigger was (occupants, palette_state, content) and a non-pallet
 # class presence changes none of them. The retained MQTT message kept
 # saying cls=['polybag'] for an empty zone.
-
-
-def test_publish_signature_tracks_non_pallet_presence():
-    mgr = _manager()
-    bag = _det("polybag", (100, 300, 300, 360), camera_id="cam_a")
-    for _ in range(2):
-        d_in = _zone_dec(mgr.step({"cam_a": [bag]}))
-    assert d_in.present_classes == ("polybag",)
-    d_out = d_in
-    for _ in range(20):
-        d_out = _zone_dec(mgr.step({"cam_a": []}))
-    assert d_out.present_classes == ()
-    assert d_in.palette_state == d_out.palette_state == "no_palette"
-    assert d_in.publish_signature() != d_out.publish_signature()
 
 
 def test_publish_signature_ignores_flapping_counts():

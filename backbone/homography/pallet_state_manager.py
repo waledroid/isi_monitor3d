@@ -146,7 +146,9 @@ class ZoneDecision:
         list was missing: a polybag/carton presence exiting changed
         neither the enum nor the occupants, so the retained MQTT message
         kept advertising the class for an empty zone."""
-        return (self.palette_state, tuple(self.content), tuple(self.present_classes))
+        # cpu branch: no stabilised class list on this wire (predates the
+        # 2026-08-19 class-presence work), so the signature is enum + content.
+        return (self.palette_state, tuple(self.content))
 
 
 def _norm_cls(cls: str) -> str:
