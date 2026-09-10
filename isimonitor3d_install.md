@@ -1,5 +1,7 @@
 # ISI Monitor 3D — install from git (GPU, branch `main`)
 
+> Automated: `./install.sh gpu` runs these stages with a progress bar, skips stages already done, and lists what still needs a person (`--dry-run` to preview, `--list` for stage ids, `--skip`/`--only`, `--systemd`). The stages below are the manual equivalent.
+
 Clean Ubuntu 22.04/24.04 or WSL2, NVIDIA GPU, two RTSP cameras.
 Ports: dashboard 8000 · gateway 8080 · MQTT 1883 · isical 8300 · loopback UDP 9010/9001.
 
