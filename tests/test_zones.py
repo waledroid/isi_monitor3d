@@ -316,3 +316,31 @@ def test_membership_hysteresis_enter_confirm_filters_ghost_tracks():
     h2.update(9, ("z1",))
     h2.update(9, ("z1",))
     assert h2.update(9, ()) == ()
+
+
+def test_membership_hysteresis_hold_freezes_exit_streak():
+    """A held zone (``hold``) on a frame with no raw evidence neither advances
+    nor resets its exit streak — the streak is frozen. Live regression
+    2026-09-09: the camera-loss gate fed held zones back in as RAW, which
+    reset the exit streak every solo frame; with solo frames every ~10 steps
+    (free-running 13.4/14.6 fps cams vs a 60 ms pairing skew) a vanished
+    pallet stayed "present" on the wire indefinitely."""
+    h = ZoneMembershipHysteresis(exit_after=4, enter_after=1)
+    assert h.update(5, ("z1",)) == ("z1",)
+    assert h.update(5, ()) == ("z1",)                     # outside #1
+    assert h.update(5, ()) == ("z1",)                     # outside #2
+    assert h.update(5, (), hold=("z1",)) == ("z1",)       # frozen: still #2
+    assert h.update(5, ()) == ("z1",)                     # outside #3
+    assert h.update(5, ()) == ()                          # outside #4: released
+
+
+def test_membership_hysteresis_hold_does_not_block_raw_evidence():
+    """Raw evidence for a held zone still resets the streak (real sighting)."""
+    h = ZoneMembershipHysteresis(exit_after=3, enter_after=1)
+    h.update(5, ("z1",))
+    h.update(5, ())
+    h.update(5, ())                                       # streak 2
+    assert h.update(5, ("z1",), hold=("z1",)) == ("z1",)  # seen: reset
+    assert h.update(5, ()) == ("z1",)
+    assert h.update(5, ()) == ("z1",)
+    assert h.update(5, ()) == ()                          # 3 fresh outside

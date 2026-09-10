@@ -28,7 +28,7 @@ ingestion:
   points:
     listen_host: 127.0.0.1
     listen_port: 9012
-    max_skew_ms: 60.0
+    max_skew_ms: 100.0
     degraded_emit_after_ms: 200.0
 detection:
   plugin: yolo_openvino_seg

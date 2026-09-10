@@ -284,14 +284,17 @@ class PalletStateManager:
                 cls, ZoneMembershipHysteresis(exit_after=self._exit_after,
                                               enter_after=self._enter_after))
             raw_set = set(evidence.get(cls, ()))
-            if partial:
-                # Camera loss must not read as evidence of absence: union in
-                # the zones this class already holds so ZoneMembershipHysteresis
-                # sees them as still-raw-present and cannot advance their exit
-                # streak. Fresh evidence (a zone NOT already held) still enters
-                # normally — only exiting is blocked on a partial view.
-                raw_set |= self._present_prev.get(cls, set())
-            present[cls] = set(hyst.update(_PSEUDO_TRACK, tuple(sorted(raw_set))))
+            # Camera loss must not read as evidence of absence: on a partial
+            # frame the zones this class already holds are passed as `hold`,
+            # which FREEZES their exit streak (neither advanced nor reset).
+            # Fresh evidence (a zone NOT already held) still enters normally —
+            # only exiting is paused on a partial view. Unioning the held
+            # zones into `raw` instead (pre-2026-09-09) reset the streak on
+            # every solo frame, so a departed pallet stayed on the wire
+            # indefinitely once solo frames recurred every ~10 steps.
+            hold = self._present_prev.get(cls, set()) if partial else set()
+            present[cls] = set(hyst.update(_PSEUDO_TRACK, tuple(sorted(raw_set)),
+                                           hold=tuple(sorted(hold))))
 
         # A palette zone's presence just EXITED (full-frame absence, never
         # blocked above) ⇒ its occupancy vote history is now about a pallet
