@@ -463,6 +463,12 @@ class Orchestrator:
         # Debounced point-in-polygon: boundary objects must not flap the zone
         # object lists / passings (see ZoneMembershipHysteresis).
         self._membership_hyst = ZoneMembershipHysteresis()
+        # Spatial exit margin for per-track zone membership: a member holds
+        # while within this distance of the polygon; entering stays strict.
+        # Keeps an object parked on a zone edge from flapping the object
+        # list / count (and the passings feed). 0 disables.
+        self._zone_exit_margin_m = float(
+            cfg.get("homography", {}).get("zone_exit_margin_m", 0.15))
         self._passings_enabled: bool = bool(
             meta_cfg.get("passings", {}).get("enabled", True)
         )
@@ -1016,7 +1022,9 @@ class Orchestrator:
             if not need_membership:
                 continue
             membership = self._membership_hyst.update(
-                track.track_id, self._zones.which_ids(track.xy_m))
+                track.track_id, self._zones.which_ids(track.xy_m),
+                near=(self._zones.which_ids_within(track.xy_m, self._zone_exit_margin_m)
+                      if self._zone_exit_margin_m > 0 else ()))
             memberships[track.track_id] = membership
             if self._passings_enabled:
                 for ev in self._transitions.update(

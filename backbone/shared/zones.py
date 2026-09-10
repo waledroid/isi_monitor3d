@@ -106,6 +106,19 @@ class Zone:
                     inside = not inside
         return inside
 
+    def contains_within(self, xy_m: tuple[float, float], tol_m: float) -> bool:
+        """Tolerant containment: ``xy_m`` inside the polygon OR within
+        ``tol_m`` of it, sampled as a 5-point cross (center ± tol on each
+        axis) — the same mechanic the detection/decision path uses. Used
+        for the EXIT side of per-track membership so an object parked on a
+        zone edge does not flap the zone's object list."""
+        x, y = xy_m
+        t = float(tol_m)
+        for dx, dy in ((0.0, 0.0), (t, 0.0), (-t, 0.0), (0.0, t), (0.0, -t)):
+            if self.contains((x + dx, y + dy)):
+                return True
+        return False
+
 
 class ZoneRegistry:
     """All zones loaded from ``zones.yaml``, indexed by name and by type."""
@@ -209,6 +222,11 @@ class ZoneRegistry:
         """
         return tuple(zid for zid, z in self._by_id.items() if z.contains(xy_m))
 
+    def which_ids_within(self, xy_m: tuple[float, float], tol_m: float) -> tuple[str, ...]:
+        """STABLE ids of zones containing ``xy_m`` or within ``tol_m`` of it
+        (see ``Zone.contains_within``)."""
+        return tuple(zid for zid, z in self._by_id.items() if z.contains_within(xy_m, tol_m))
+
 
 class ZoneAwareProjector:
     """Project a camera foot pixel onto a ZONE'S OWN base plane.
@@ -292,8 +310,16 @@ class ZoneMembershipHysteresis:
         self._out_streak: dict[tuple[int, str], int] = {}
 
     def update(self, track_id: int, raw: tuple[str, ...],
-               freeze: bool = False) -> tuple[str, ...]:
+               freeze: bool = False, near: tuple[str, ...] = ()) -> tuple[str, ...]:
         """Fold this frame's raw membership into the debounced one.
+
+        ``near``: zones the point is within the exit margin of (see
+        ``ZoneRegistry.which_ids_within``). A CURRENT member found in ``near``
+        holds exactly as if it were in ``raw`` — it only starts its exit
+        streak once clearly outside. ``near`` never enters a zone: entering
+        stays strict. Spatial hysteresis for objects parked on a zone edge
+        (live 2026-09-10: a pallet on Zone_1's edge flapped count 0/1 every
+        1-3 s and republished the retained state each time).
 
         ``freeze=True`` marks a frame that carries no evidence either way
         (a partial/degraded pair missing a configured camera): zones WITHOUT
@@ -305,6 +331,7 @@ class ZoneMembershipHysteresis:
         object could never accumulate ``exit_after`` consecutive absences.
         """
         raw_set = set(raw)
+        hold_set = raw_set | set(near)        # what keeps a current member
         member = self._member.setdefault(track_id, set())
         for zid in raw_set - member:
             key = (track_id, zid)
@@ -318,7 +345,7 @@ class ZoneMembershipHysteresis:
                 self._in_streak.pop(key, None)
         for zid in list(member):
             key = (track_id, zid)
-            if zid in raw_set:
+            if zid in hold_set:
                 self._out_streak.pop(key, None)
             elif freeze:
                 continue                      # frozen: no evidence this frame
