@@ -59,7 +59,7 @@ homography:
   # enter_after consecutive evidence frames at >= presence_conf_min. The
   # detector threshold (0.25) still feeds counts and tracks.
   pallet_state:
-    enter_after: 4
+    enter_after: 5
     presence_conf_min: 0.4
   cross_cam_fusion:
     match_distance_m:
