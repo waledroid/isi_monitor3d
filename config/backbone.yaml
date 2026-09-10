@@ -60,7 +60,7 @@ homography:
   # detector threshold (0.25) still feeds counts and tracks.
   pallet_state:
     enter_after: 5
-    presence_conf_min: 0.4
+    presence_conf_min: 0.6
   cross_cam_fusion:
     match_distance_m:
       palette_vide: 0.8
