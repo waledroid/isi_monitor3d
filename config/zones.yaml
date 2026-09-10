@@ -1,16 +1,19 @@
 zones:
-- id: zp_mszv4agt
+- id: zp_mtvb9ox8
   name: Zone_1
   type: palette
   kind: palette
   severity: info
   polygon:
-  - - -2.472
-    - 1.849
-  - - -1.117
-    - 1.83
-  - - -1.144
-    - 0.526
-  - - -2.514
-    - 0.538
+  - - -1.814
+    - 0.272
+  - - -1.805
+    - 0.269
+  - - -1.842
+    - 1.417
+  - - -0.617
+    - 1.383
+  - - -0.627
+    - 0.232
   derived_from: zone_patch
+  z_base_m: 0.304

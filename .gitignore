@@ -82,3 +82,6 @@ thesis/latex/prog-*.png
 # blackbox telemetry (tools/blackbox_logger.py)
 /logs/
 defense_canvas/
+
+# repo-cleanup holding pen (untracked/unused files parked here, safe to purge later)
+move_out/
