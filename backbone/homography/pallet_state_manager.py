@@ -183,6 +183,7 @@ class PalletStateManager:
         tol_m: float = 0.15,
         enter_after: int = 2,
         exit_after: int = 15,
+        presence_conf_min: float = 0.0,
     ) -> None:
         self._zones = zones
         self._projector = projector
@@ -197,6 +198,12 @@ class PalletStateManager:
         # that never pass it keep pre-Finding-2 behaviour.
         self._camera_ids = frozenset(camera_ids)
         self._tol = float(tol_m)
+        # Presence evidence floor: detections below this confidence never
+        # count toward a zone's class presence (the enum the AGV keys on).
+        # The detector's own threshold (0.25) still feeds counts/tracks. Live
+        # 2026-09-10: a 0.25 "palette" latched a phantom for 1.5 s; real
+        # pallets read 0.89-0.98 parked, 0.50 at worst while being placed.
+        self._presence_conf_min = float(presence_conf_min)
         self._enter_after = int(enter_after)
         self._exit_after = int(exit_after)
         self._hyst: dict[str, ZoneMembershipHysteresis] = {}
@@ -252,6 +259,8 @@ class PalletStateManager:
         for cam_dets in detections_by_camera.values():
             cam_counts: dict[str, dict[str, int]] = {zid: {} for zid in zone_ids}
             for det in cam_dets:
+                if float(det.confidence) < self._presence_conf_min:
+                    continue                    # below the presence floor
                 cls = _norm_cls(det.cls)
                 if self._zone_aware is None:
                     # No zone-aware projector: one Z=0 projection shared by

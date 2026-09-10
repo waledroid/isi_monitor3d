@@ -475,4 +475,36 @@ def test_sporadic_partial_frames_do_not_hold_presence_forever():
             assert dec.palette_state == "no_palette", (i, dec.palette_state)
     # 15 full-frame absences + the one solo frame (step 10) that froze the count
     assert exited_at == 16, f"presence exited at step {exited_at}"
->>>>>>> 4e05678 (fix(homography): freeze, don't reset, zone exit streak on partial frames; points max_skew 60→100 ms)
+
+
+# ---------- presence confidence floor (2026-09-10) ----------
+# Live: a 0.25-confidence "palette" (the detector's own floor) in an empty
+# zone latched presence for 2 frames and put a phantom pallet on the wire.
+# Real pallets read 0.89-0.98 parked, 0.50 at worst while being placed.
+
+
+def test_low_confidence_detection_never_creates_presence():
+    mgr = _manager(presence_conf_min=0.4)
+    ghost = _det("palette", (100, 300, 300, 360), camera_id="cam_a", conf=0.25)
+    for _ in range(20):
+        dec = _zone_dec(mgr.step({"cam_a": [ghost]}))
+        assert dec.palette_state == "no_palette"
+        assert dec.present_classes == ()
+
+
+def test_confidence_at_or_above_floor_still_enters():
+    mgr = _manager(presence_conf_min=0.4)
+    pallet = _det("palette", (100, 300, 300, 360), camera_id="cam_a", conf=0.5)
+    decisions = []
+    for _ in range(2):  # default enter_after=2
+        decisions = mgr.step({"cam_a": [pallet]})
+    assert _zone_dec(decisions).palette_state == "palette_empty"
+
+
+def test_presence_floor_defaults_off():
+    """Back-compat: no floor unless configured — 0.25 enters as before."""
+    mgr = _manager()
+    ghost = _det("palette", (100, 300, 300, 360), camera_id="cam_a", conf=0.25)
+    for _ in range(2):
+        decisions = mgr.step({"cam_a": [ghost]})
+    assert _zone_dec(decisions).palette_state == "palette_empty"

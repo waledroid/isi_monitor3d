@@ -82,6 +82,12 @@ detection:
 #   device: AUTO                        # AUTO | CPU | GPU (Intel iGPU)
 
 homography:
+  # Zone communication enum (palette_state / classes): entering needs
+  # enter_after consecutive evidence frames at >= presence_conf_min. The
+  # detector threshold (0.25) still feeds counts and tracks.
+  pallet_state:
+    enter_after: 4
+    presence_conf_min: 0.4
   cross_cam_fusion:
     match_distance_m:
       person: 0.8
