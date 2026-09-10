@@ -1773,6 +1773,7 @@ button.btn-stop:hover {
 .layout-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
 .layout-row label { font-size: 12px; color: #9aa5b1; flex-shrink: 0; }
 .layout-hint { font-size: 11px; color: #9aa5b1; margin: 4px 0; }
+.layout-hint-warn { color: #f5ab35; }
 
 /* Element counter pill */
 .layout-count {

@@ -458,6 +458,9 @@
             <p class="layout-hint" data-i18n="floor_zones_hint">
               {{ t.floor_zones_hint or 'Drawn on one camera, visible in both + on the map. The Backbone applies them on next START (max 6).' }}
             </p>
+            <p class="layout-hint layout-hint-warn" data-i18n="floor_zones_platform_warn">
+              {{ t.floor_zones_platform_warn or 'Warning: set Base height to 0.304 if the pallets sit on a platform support on the floor. Leave 0 for pallets directly on the floor.' }}
+            </p>
             <div id="zm-floor-zones" class="config-zone-list"></div>
             <button id="zm-floor-zone-add" class="glass-btn config-link-add" type="button"
                     data-i18n="floor_zone_add">{{ t.floor_zone_add or '+ Draw floor zone on camera' }}</button>
