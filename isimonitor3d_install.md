@@ -71,7 +71,7 @@ nano config/backbone.yaml
 ```
 Set: `node_id` (unique per PC) · `cameras` RTSP URLs · `calibration_path` (absolute, from stage 8) ·
 `detection.onnx_path` / `pose_onnx_path` (absolute `.engine` paths) · `ingestion.mode: points` ·
-`ingestion.points.max_skew_ms: 100` · `homography.pallet_state: {enter_after: 5, presence_conf_min: 0.6}` ·
+`ingestion.points.max_skew_ms: 100` · `homography.pallet_state: {enter_after: 5, presence_conf_min: 0.7}` ·
 `metadata.sinks`: udp `127.0.0.1:9001` + mqtt `127.0.0.1:1883` prefix `isiMonitor3D/v1/<node_id>`.
 ```bash
 cp config/danger_zones_object.yaml.example config/danger_zones_object.yaml   # optional proximity rings
