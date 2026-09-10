@@ -58,9 +58,9 @@ link_lines:
 model_xml_path: /home/aatanda/isi_monitor3d_cpu/models/pallet_seg_openvino/model.xml
 show_nodes: false
 show_masks: true
-show_boxes: true
+show_boxes: false
 gateway_url: ''
 gateway_token: ''
 video_passthrough: false
 show_floor_zones: false
-show_zone_fill: false
+show_zone_fill: true
