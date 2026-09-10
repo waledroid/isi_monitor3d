@@ -58,6 +58,12 @@ detection:
     enabled: true
     gamma: 0.88
 homography:
+  # Zone communication enum (palette_state / classes): entering needs
+  # enter_after consecutive evidence frames at >= presence_conf_min. The
+  # detector threshold (0.25) still feeds counts and tracks.
+  pallet_state:
+    enter_after: 4
+    presence_conf_min: 0.4
   cross_cam_fusion:
     match_distance_m:
       palette_vide: 0.8
