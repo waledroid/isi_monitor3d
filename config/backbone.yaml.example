@@ -29,6 +29,20 @@ cameras:
   #     fps: 30
 
 ingestion:
+  # points (the deployed default): a separate isistream producer owns capture +
+  # detection and publishes per-camera detection sets to the loopback ingest
+  # port below. frames: the single-process rollback (Backbone owns the pixels).
+  mode: points
+  points:
+    listen_host: 127.0.0.1
+    listen_port: 9010
+    # Pairing tolerance between the two cameras' capture timestamps. Must be
+    # at least one frame period: free-running cameras (e.g. 14.6 / 13.4 fps,
+    # ~70 ms) drift against each other, and a tolerance below the period
+    # makes the synchronizer drop into solo emission every ~10 steps (read
+    # downstream as camera loss). 100 ms pairs any camera at >= 10 fps.
+    max_skew_ms: 100.0
+    degraded_emit_after_ms: 200.0
   frame_sync:
     max_skew_ms: 33.0
     max_age_ms: 1000.0

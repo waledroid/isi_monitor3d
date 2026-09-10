@@ -462,11 +462,17 @@ def test_sporadic_partial_frames_do_not_hold_presence_forever():
     for i in range(1, 60):
         if i % 10 == 0:
             dec = _zone_dec(mgr.step({"cam_a": []}, reporting_cameras=("cam_a",)))
-            assert dec.palette_state == "palette_empty" or exited_at is not None
         else:
             dec = _zone_dec(mgr.step({"cam_a": [], "cam_b": []}, reporting_cameras=_CAMS))
-        if dec.palette_state == "no_palette" and exited_at is None:
-            exited_at = i
+        if exited_at is None:
+            if dec.palette_state == "no_palette":
+                exited_at = i
+            else:
+                assert dec.palette_state == "palette_empty", (i, dec.palette_state)
+        else:
+            # once gone, it stays gone — solo frames at 20/30/40/50 must not
+            # resurrect it (a hold/_present_prev leak would)
+            assert dec.palette_state == "no_palette", (i, dec.palette_state)
     # 15 full-frame absences + the one solo frame (step 10) that froze the count
     assert exited_at == 16, f"presence exited at step {exited_at}"
 >>>>>>> 4e05678 (fix(homography): freeze, don't reset, zone exit streak on partial frames; points max_skew 60→100 ms)

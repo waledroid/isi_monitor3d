@@ -134,11 +134,16 @@ class FrameSynchronizer:
             frame_idx=self._pair_counter,
             frames=heads,
         )
-        for cid, f in heads.items():
-            try:
-                self._buffers[cid].remove(f)
-            except ValueError:
-                pass
+        # Consume EVERY buffered frame, not just the two heads. Alignment
+        # always pairs the newest frame per camera, so anything older can
+        # never be paired — and left behind, the faster camera's orphan sat
+        # at ``buf[0]``, aged past ``degraded_emit_after_s`` in
+        # ``_try_emit_solo`` and flipped that camera sticky-degraded while
+        # its partner was streaming fine (live 2026-09-09: ~15% solo pairs
+        # from two healthy cameras at 14.6 / 13.4 fps, read downstream as
+        # camera loss). Two live cameras must never emit a solo pair.
+        for buf in self._buffers.values():
+            buf.clear()
         # An aligned pair means the partner is back — leave degraded mode.
         for cid in self._camera_ids:
             self._degraded[cid] = False

@@ -190,7 +190,7 @@ class Orchestrator:
         if self._ingest_mode == "points":
             points_cfg = dict(ing_cfg.get("points", {}))
             sync_cfg = {
-                "max_skew_ms": float(points_cfg.get("max_skew_ms", 60.0)),
+                "max_skew_ms": float(points_cfg.get("max_skew_ms", 100.0)),
                 "degraded_emit_after_ms": float(
                     points_cfg.get("degraded_emit_after_ms", 200.0)),
             }
