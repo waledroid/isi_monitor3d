@@ -39,7 +39,7 @@ nano config/backbone.yaml
 ```
 Set: `node_id` (unique, keep a `_cpu` suffix if a GPU node shares the broker) · `cameras.cam_a` RTSP URL (`source` + `detect_source`) ·
 `ingestion.mode: points`, `listen_port: 9012`, `max_skew_ms: 100` · `metadata.sinks`: udp `127.0.0.1:9003` + mqtt `127.0.0.1:1883` ·
-`homography.pallet_state: {enter_after: 5, presence_conf_min: 0.6}` · `detection.plugin: yolo_openvino_seg`, `device: CPU`, `zone_imgsz: 320`.
+`homography.pallet_state: {enter_after: 5, presence_conf_min: 0.7}` · `detection.plugin: yolo_openvino_seg`, `device: CPU`, `zone_imgsz: 320`.
 
 ## Stage 4 — comms stack (gateway + Mosquitto)
 ```bash
