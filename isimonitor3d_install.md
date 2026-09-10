@@ -1,9 +1,45 @@
 # ISI Monitor 3D — install from git (GPU, branch `main`)
 
-> Automated: `./install.sh gpu` runs these stages with a progress bar, skips stages already done, and lists what still needs a person (`--dry-run` to preview, `--list` for stage ids, `--skip`/`--only`, `--systemd`). The stages below are the manual equivalent.
 
 Clean Ubuntu 22.04/24.04 or WSL2, NVIDIA GPU, two RTSP cameras.
 Ports: dashboard 8000 · gateway 8080 · MQTT 1883 · isical 8300 · loopback UDP 9010/9001.
+
+## Quick path: `./install.sh gpu`
+
+```bash
+sudo apt install -y git curl
+git clone https://github.com/IsitecVision/isi_monitor3d.git
+cd isi_monitor3d && git checkout main
+./install.sh gpu
+```
+
+One line per stage with a progress bar, then a summary:
+
+```
+[#########---------------------]  3/12 Conda env monitor3d
+   ✔ done
+...
+Summary
+  prereq     DONE       Host prerequisites
+  models     NEEDS YOU  Model weights
+  verify     DONE       Test suite
+```
+
+- **DONE** — the stage's check passed (just done, or already there).
+- **NEEDS YOU** — a person must act (copy models, camera URLs, calibration, zones); the lines above say what is missing.
+- **FAILED** — the other stages still run; exit code 1.
+
+Fix the NEEDS YOU items and run the same command again: done stages are skipped, so it resumes where it stopped. Flags:
+
+```bash
+./install.sh gpu --dry-run       # show what each stage would do, change nothing
+./install.sh gpu --list          # stage ids
+./install.sh gpu --only comms    # run one stage
+./install.sh gpu --skip comms    # skip one (e.g. broker on another machine)
+./install.sh gpu --systemd       # also install the two service units (sudo)
+```
+
+Then open a new shell, run `3d` from the repo folder, press START. The stages below are the manual equivalent.
 
 ## Stage 0 — host prerequisites
 ```bash

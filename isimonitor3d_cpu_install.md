@@ -1,10 +1,46 @@
 # ISI Monitor 3D CPU — install from git (branch `cpu`)
 
-> Automated: `./install.sh cpu` runs these stages with a progress bar, skips stages already done, and lists what still needs a person (`--dry-run` to preview, `--list` for stage ids, `--skip`/`--only`, `--systemd`). The stages below are the manual equivalent.
 
 Clean Ubuntu 22.04/24.04 or WSL2, no GPU, one RTSP camera. OpenVINO on CPU.
 Ports: dashboard **8200** · gateway 8080 · MQTT 1883 · loopback UDP 9012/9003.
 Ignore `CLAUDE.md`, `docker/README.md`, `monitor_web/README.md`, `config/backbone.yaml.example` on this branch (GPU-line leftovers).
+
+## Quick path: `./install.sh cpu`
+
+```bash
+sudo apt install -y git curl
+git clone https://github.com/IsitecVision/isi_monitor3d.git isi_monitor3d_cpu
+cd isi_monitor3d_cpu && git checkout cpu
+./install.sh cpu
+```
+
+One line per stage with a progress bar, then a summary:
+
+```
+[#########---------------------]  3/10 Conda env monitor3d-cpu
+   ✔ done
+...
+Summary
+  prereq     DONE       Host prerequisites
+  config     NEEDS YOU  Site configuration
+  verify     DONE       Test suite
+```
+
+- **DONE** — the stage's check passed (just done, or already there).
+- **NEEDS YOU** — a person must act (camera URL, calibration, zones); the lines above say what is missing.
+- **FAILED** — the other stages still run; exit code 1.
+
+Fix the NEEDS YOU items and run the same command again: done stages are skipped, so it resumes where it stopped. Flags:
+
+```bash
+./install.sh cpu --dry-run       # show what each stage would do, change nothing
+./install.sh cpu --list          # stage ids
+./install.sh cpu --only comms    # run one stage
+./install.sh cpu --skip comms    # skip one (e.g. broker already on a GPU node)
+./install.sh cpu --systemd       # also install the two service units (sudo)
+```
+
+Then open a new shell, run `3d_cpu`, press START. The stages below are the manual equivalent.
 
 ## Stage 0 — host prerequisites
 ```bash
