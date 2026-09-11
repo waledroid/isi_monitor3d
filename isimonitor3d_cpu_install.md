@@ -38,6 +38,7 @@ Fix the NEEDS YOU items and run the same command again: done stages are skipped,
 ./install.sh cpu --only comms    # run one stage
 ./install.sh cpu --skip comms    # skip one (e.g. broker already on a GPU node)
 ./install.sh cpu --systemd       # also install the two service units (sudo)
+./install.sh cpu --env mysite    # use (or create) the conda env "mysite" instead of monitor3d-cpu; alias + units follow it
 ```
 
 Then open a new shell, run `3d_cpu`, press START. The stages below are the manual equivalent.

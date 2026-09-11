@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # install.sh — stage-by-stage installer for ISI Monitor 3D.
 #
-#   ./install.sh [gpu|cpu] [--dry-run] [--skip STAGE]... [--only STAGE] [--systemd] [--list]
+#   ./install.sh [gpu|cpu] [--env NAME] [--dry-run] [--skip STAGE]... [--only STAGE] [--systemd] [--list]
 #
 # gpu = branch main (two cameras, ONNX Runtime CUDA + TensorRT engines)
 # cpu = branch cpu  (one camera, OpenVINO on CPU)
 # The variant defaults to the checked-out branch (cpu → cpu, anything else → gpu).
-# ENV_NAME=<name> overrides the conda env name (default monitor3d / monitor3d-cpu).
+# --env NAME (or ENV_NAME=NAME) picks the conda env: an existing env of that name
+# is updated in place and used, a missing one is created. Default monitor3d / monitor3d-cpu.
 #
 # Every stage has a PROBE that inspects the real machine (env importable,
 # engines present, broker answering, alias in .bashrc ...). A stage whose
@@ -88,12 +89,12 @@ select_stages() {
   VARIANT="$1"
   if [ "$VARIANT" = cpu ]; then
     STAGE_IDS=(prereq miniforge env dashboard paths models comms config alias verify)
-    STAGE_TITLES=("Host prerequisites" "Miniforge (conda)" "Conda env monitor3d-cpu" "Dashboard + gateway packages"
+    STAGE_TITLES=("Host prerequisites" "Miniforge (conda)" "Conda env $(env_name)" "Dashboard + gateway packages"
                   "Absolute paths in backbone.yaml" "OpenVINO models" "Comms stack (gateway + Mosquitto)"
                   "Site configuration" "Shell alias 3d_cpu" "Test suite")
   else
     STAGE_IDS=(prereq miniforge env ortswap multical dashboard models engines comms config alias verify)
-    STAGE_TITLES=("Host prerequisites" "Miniforge (conda)" "Conda env monitor3d" "ONNX Runtime GPU + TensorRT"
+    STAGE_TITLES=("Host prerequisites" "Miniforge (conda)" "Conda env $(env_name)" "ONNX Runtime GPU + TensorRT"
                   "Multical calibration venv" "Dashboard + gateway packages" "Model weights" "TensorRT engines"
                   "Comms stack (gateway + Mosquitto)" "Site configuration" "Shell alias 3d" "Test suite")
   fi
@@ -147,13 +148,16 @@ run_miniforge() {
 # would resolve the source directory itself and report an uninstalled package as done.
 py_probe() { ( cd / && "$(env_py)" -c "$1" ) >/dev/null 2>&1; }
 probe_env() { py_probe "import backbone, isistream, calibration"; }
-run_env() {
-  local cb; cb="$(conda_bin)" || { err "conda not found (run the miniforge stage)"; return 1; }
+run_env() {                            # existing env of that name → update in place; missing → create
   if [ -d "$MINIFORGE/envs/$(env_name)" ]; then
     if_dry "conda env update -f environment.yml -n $(env_name) --prune" && return 0
+  else
+    if_dry "conda env create -f environment.yml -n $(env_name) (conda comes from the miniforge stage)" && return 0
+  fi
+  local cb; cb="$(conda_bin)" || { err "conda not found (run the miniforge stage)"; return 1; }
+  if [ -d "$MINIFORGE/envs/$(env_name)" ]; then
     "$cb" env update -f "$REPO/environment.yml" -n "$(env_name)" --prune || return 1
   else
-    if_dry "conda env create -f environment.yml -n $(env_name)" && return 0
     "$cb" env create -f "$REPO/environment.yml" -n "$(env_name)" || return 1
   fi
   probe_env
@@ -306,11 +310,19 @@ probe_config() { [ -z "$(config_problems)" ]; }
 run_config() { local l; while IFS= read -r l; do [ -n "$l" ] && err "$l"; done < <(config_problems); info "edit config/backbone.yaml (or use the dashboard Settings), then re-run"; return 2; }
 
 # ---------- stage: alias ----------
-probe_alias() { grep -q "^alias $(alias_name)=" "$HOME/.bashrc" 2>/dev/null; }
+probe_alias() { grep -qxF "$(alias_line)" "$HOME/.bashrc" 2>/dev/null; }   # exact line: env name included
 run_alias() {
   probe_alias && return 0                # idempotent: never append twice
-  if_dry "append to ~/.bashrc: $(alias_line)" && return 0
-  printf '\n# ISI Monitor 3D launcher (install.sh)\n%s\n' "$(alias_line)" >> "$HOME/.bashrc"
+  if grep -q "^alias $(alias_name)=" "$HOME/.bashrc" 2>/dev/null; then
+    if_dry "replace the $(alias_name) alias in ~/.bashrc with: $(alias_line)" && return 0
+    local tmp; tmp="$(mktemp)" || return 1
+    awk -v name="$(alias_name)" -v line="$(alias_line)" \
+      'index($0, "alias " name "=") == 1 { print line; next } { print }' "$HOME/.bashrc" > "$tmp" \
+      && cat "$tmp" > "$HOME/.bashrc"; rm -f "$tmp"
+  else
+    if_dry "append to ~/.bashrc: $(alias_line)" && return 0
+    printf '\n# ISI Monitor 3D launcher (install.sh)\n%s\n' "$(alias_line)" >> "$HOME/.bashrc"
+  fi
   probe_alias
 }
 
@@ -323,7 +335,10 @@ run_verify() {
 }
 
 # ---------- stage: systemd (opt-in) ----------
-probe_systemd() { [ -e /etc/systemd/system/isi-backbone.service ] && [ -e /etc/systemd/system/isistream.service ]; }
+probe_systemd() {                      # done only when both units run THIS env's python
+  grep -qF "ExecStart=$(env_py) " /etc/systemd/system/isi-backbone.service 2>/dev/null &&
+  grep -qF "ExecStart=$(env_py) " /etc/systemd/system/isistream.service 2>/dev/null
+}
 run_systemd() {
   if_dry "write /etc/systemd/system/isi-backbone.service + isistream.service (sudo) and enable them" && return 0
   local py; py="$(env_py)"; local envline=""
@@ -371,6 +386,7 @@ main() {
       --dry-run) DRY=1 ;;
       --skip) shift; SKIP_LIST+=("$1") ;;
       --only) shift; ONLY_STAGE=$1 ;;
+      --env) shift; ENV_NAME=$1 ;;
       --systemd) WANT_SYSTEMD=1 ;;
       --list) LIST_ONLY=1 ;;
       -h|--help) usage; return 0 ;;
@@ -385,7 +401,7 @@ main() {
     local i; for i in "${!STAGE_IDS[@]}"; do printf '  %-10s %s\n' "${STAGE_IDS[$i]}" "${STAGE_TITLES[$i]}"; done; return 0
   fi
 
-  say "${C_HEAD}ISI Monitor 3D installer — variant: $VARIANT — repo: $REPO${C_RESET}"
+  say "${C_HEAD}ISI Monitor 3D installer — variant: $VARIANT — env: $(env_name) — repo: $REPO${C_RESET}"
   [ "$DRY" = 1 ] && say "${C_DIM}dry run: nothing will be changed${C_RESET}"
   local total=${#STAGE_IDS[@]} i id title status note rc
   local -a RESULTS=() NOTES=()

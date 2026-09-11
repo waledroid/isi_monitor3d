@@ -35,6 +35,7 @@ python -m monitor_web                                      # operator UI on :800
 ```
 
 Refresh the env after `environment.yml` edits: `conda env update -f environment.yml -n monitor3d --prune`.
+Stage-by-stage installer: `./install.sh gpu` (or `cpu`); add `--env NAME` to use or create a differently named env (see `isimonitor3d_install.md`).
 Pip-only fallback: `pip install -e ".[dev,geometry,schemas]"`.
 
 ## MQTT fabric + gateway (deployment)
