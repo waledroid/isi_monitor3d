@@ -40,6 +40,7 @@ Fix the NEEDS YOU items and run the same command again: done stages are skipped,
 ./install.sh cpu --systemd       # also install the two service units (sudo)
 ./install.sh cpu --env mysite    # use (or create) the conda env "mysite" instead of monitor3d-cpu; alias + units follow it
 ```
+The `3d_cpu` alias only runs from inside the repo (`cd` there first); elsewhere it prints a reminder.
 
 Then open a new shell, run `3d_cpu`, press START. The stages below are the manual equivalent.
 
@@ -65,7 +66,7 @@ ls models/pallet_seg_openvino models/yolo11n_pose_openvino config/mode1/calibrat
 conda env create -f environment.yml -n monitor3d-cpu
 conda activate monitor3d-cpu
 pip install --no-deps -e monitor_web -e isicomms
-echo "alias 3d_cpu='cd ~/isi_monitor3d_cpu && conda activate monitor3d-cpu && MONITOR_WEB_PORT=8200 python -m monitor_web'" >> ~/.bashrc && source ~/.bashrc
+echo "alias 3d_cpu='conda activate monitor3d-cpu && MONITOR_WEB_PORT=8200 python -m monitor_web'" >> ~/.bashrc && source ~/.bashrc
 ```
 Never install onnxruntime, torch, ultralytics or Multical into this env.
 

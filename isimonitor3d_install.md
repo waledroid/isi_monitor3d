@@ -39,6 +39,7 @@ Fix the NEEDS YOU items and run the same command again: done stages are skipped,
 ./install.sh gpu --systemd       # also install the two service units (sudo)
 ./install.sh gpu --env mysite    # use (or create) the conda env "mysite" instead of monitor3d; alias + units follow it
 ```
+The `3d` alias only runs from inside the repo (`cd` there first); elsewhere it prints a reminder.
 
 Then open a new shell, run `3d` from the repo folder, press START. The stages below are the manual equivalent.
 
