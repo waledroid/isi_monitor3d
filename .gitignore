@@ -69,19 +69,8 @@ config/*.yaml.bak
 models/.trt_cache/
 config/local_backups/
 
-# thesis: heavy measurement byproducts stay out of git (the .md/.csv/log artifacts are tracked)
-remove/thesis/measurements/G6_ablation/arm_*/
-remove/thesis/measurements/G6_ablation/test_real/
-remove/thesis/measurements/G6_ablation/runs/*/weights/
-# latex build renders (page-preview PNGs); the PDF and sources are tracked
-remove/thesis/latex/p*.png
-remove/thesis/latex/bg-*.png
-remove/thesis/latex/intro-*.png
-remove/thesis/latex/prog-*.png
-
 # blackbox telemetry (tools/blackbox_logger.py)
 /logs/
-remove/defense_canvas/
 
 # repo-cleanup holding pen (untracked/unused files parked here, safe to purge later)
 move_out/
