@@ -41,7 +41,14 @@ Swagger at `/docs`.
 ## Commands
 
 ```bash
-# environment (conda — the primary path)
+# installer (stage-by-stage, resumable; installs Miniforge itself on a clean PC)
+./install.sh gpu                                  # main branch; `cpu` on the cpu branch
+./install.sh gpu --env mysite                     # use (or create) conda env "mysite" instead of monitor3d / monitor3d-cpu;
+                                                  #   the 3d alias + systemd units follow the name; ENV_NAME=mysite also works
+./install.sh gpu --dry-run | --list | --only STAGE | --skip STAGE | --systemd
+# (the `3d` / `3d_cpu` alias runs only from inside the repo — cd there first)
+
+# environment by hand (conda — the primary path)
 conda env create -f environment.yml -n monitor3d
 conda activate monitor3d                          # always do this before anything below
 conda env update -f environment.yml -n monitor3d --prune   # refresh after env edits
