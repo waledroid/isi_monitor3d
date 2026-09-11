@@ -67,9 +67,9 @@ conda_bin() {
   else return 1; fi
 }
 alias_name() { [ "$VARIANT" = cpu ] && echo 3d_cpu || echo 3d; }
-alias_line() {
+alias_line() {                         # works only from inside the repo: no cd baked in
   local port=""; [ "$VARIANT" = cpu ] && port="MONITOR_WEB_PORT=8200 "
-  echo "alias $(alias_name)='cd $REPO && conda activate $(env_name) && ${port}python -m monitor_web'"
+  echo "alias $(alias_name)='{ [ -d monitor_web ] && [ -f config/backbone.yaml ]; } || { echo \"$(alias_name): run it from the repo (cd $REPO)\"; false; } && conda activate $(env_name) && ${port}python -m monitor_web'"
 }
 yaml_get() {                          # yaml_get 'expr' → python expression on the loaded backbone.yaml
   "$(env_py)" - "$REPO/config/backbone.yaml" "$1" <<'PY' 2>/dev/null
